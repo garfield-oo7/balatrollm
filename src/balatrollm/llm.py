@@ -91,15 +91,28 @@ CHAT_ONLY_PARAMS: frozenset[str] = frozenset(
 ################################################################################
 
 
+def to_responses_text_part(part: dict[str, Any]) -> dict[str, Any]:
+    """Convert a Chat Completions text part to a Responses input_text part.
+
+    A `cache_control` marker becomes an explicit prompt cache breakpoint.
+    OpenAI's implicit caching only places a breakpoint at the end of the
+    prompt, so without it a prompt whose tail changes on every call (the
+    game state) never reuses the static prefix (the strategy).
+    """
+    result: dict[str, Any] = {"type": "input_text", "text": part["text"]}
+    if "cache_control" in part:
+        result["prompt_cache_breakpoint"] = {"mode": "explicit"}
+    return result
+
+
 def to_responses_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Convert Chat Completions messages to Responses API input items."""
     items: list[dict[str, Any]] = []
     for message in messages:
         content = message.get("content", "")
         if isinstance(content, list):
-            # Drop provider-specific keys (e.g. cache_control) from text parts
             content = [
-                {"type": "input_text", "text": part["text"]}
+                to_responses_text_part(part)
                 for part in content
                 if part.get("type") == "text"
             ]

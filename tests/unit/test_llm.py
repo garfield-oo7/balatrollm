@@ -488,8 +488,8 @@ class TestLLMClientProperties:
 class TestToResponsesInput:
     """Tests for Chat Completions messages -> Responses input conversion."""
 
-    def test_text_parts_converted_and_cache_control_dropped(self) -> None:
-        """Text parts become input_text without provider-specific keys."""
+    def test_text_parts_converted_and_cache_control_mapped(self) -> None:
+        """Text parts become input_text; cache_control becomes a breakpoint."""
         messages = [
             {
                 "role": "user",
@@ -503,7 +503,11 @@ class TestToResponsesInput:
             {
                 "role": "user",
                 "content": [
-                    {"type": "input_text", "text": "S"},
+                    {
+                        "type": "input_text",
+                        "text": "S",
+                        "prompt_cache_breakpoint": {"mode": "explicit"},
+                    },
                     {"type": "input_text", "text": "G"},
                 ],
             }
