@@ -19,6 +19,8 @@ from itertools import combinations
 from math import comb
 from typing import Any
 
+from . import knowledge
+
 ################################################################################
 # Static game data
 ################################################################################
@@ -233,7 +235,7 @@ CONSUMABLE_TARGETS = {
 # White Stake base chips per ante (Small = 1x, Big = 1.5x, Boss = 2x).
 ANTE_BASE = {1: 300, 2: 800, 3: 2000, 4: 5000, 5: 11000, 6: 20000, 7: 35000, 8: 50000}
 # Money to keep after shopping, by ante (see research/03-economy-shop-tags.md).
-MONEY_FLOOR = {1: 0, 2: 5, 3: 15, 4: 25, 5: 25, 6: 25, 7: 10, 8: 0}
+MONEY_FLOOR = {1: 0, 2: 0, 3: 15, 4: 25, 5: 25, 6: 25, 7: 10, 8: 0}
 
 ################################################################################
 # Small helpers
@@ -470,7 +472,7 @@ def _joker_effect(
     if key == "j_half":
         return (0, 20, 1) if ctx["n_played"] <= 3 else (0, 0, 1)
     if key == "j_misprint":
-        return 0, 11.5, 1  # random 0..23, use the average
+        return 0, 0, 1  # random 0..23: floor estimate counts 0
     if key == "j_gros_michel":
         return 0, 15, 1
     if key == "j_cavendish":
@@ -531,8 +533,9 @@ def estimate_play(
 
     Approximates Balatro's scoring order: hand base -> scoring cards left to
     right (with per-card jokers and retriggers) -> held cards -> jokers left to
-    right. Probabilistic effects use expected values. Unknown jokers are listed
-    in ``unknown`` so the caller knows the estimate is a floor.
+    right. This is a FLOOR estimate: random effects (Misprint, Lucky cards,
+    Bloodstone) count as zero and unknown jokers are skipped and listed in
+    ``unknown``.
     """
     keys = _joker_keys(G)
     keyset = set(keys)
@@ -588,8 +591,7 @@ def estimate_play(
                 chips += 30
             elif c["enh"] == "MULT":
                 mult += 4
-            elif c["enh"] == "LUCKY":
-                mult += 4  # 1 in 5 for +20
+            # LUCKY (1 in 5 for +20 Mult) counts 0 in the floor estimate
             elif c["enh"] == "GLASS":
                 mult *= 2
             if c["ed"] == "FOIL":
@@ -625,8 +627,7 @@ def estimate_play(
                     mult += 7
                 elif k == "j_rough_gem" and suit_match(c, "D"):
                     money += 1
-                elif k == "j_bloodstone" and suit_match(c, "H"):
-                    mult *= 1.25  # 1 in 2 for x1.5
+                # Bloodstone (1 in 2 for x1.5) counts x1 in the floor estimate
                 elif k == "j_triboulet" and c["rank"] in ("K", "Q"):
                     mult *= 2
                 elif k == "j_photograph" and is_face(c) and not first_face_done:
@@ -993,6 +994,507 @@ def pct(value: float) -> str:
 
 
 ################################################################################
+# Main hand plan, play suggestions, consumable targets, status
+################################################################################
+
+STRONG_DRAW = 0.5  # discard toward a MAIN_HAND draw that completes this often
+WIN_MARGIN = 1.10  # a play is marked WINS only if its floor estimate >= 110% of NEED
+PAIR_FAMILY = {"Pair", "Two Pair", "Three of a Kind", "Full House", "Four of a Kind"}
+
+
+def _owned_joker_infos(G: dict[str, Any]) -> list[dict[str, Any]]:
+    out = []
+    for j in _area_cards(G, "jokers"):
+        info = knowledge.joker_info(j.get("label"))
+        if info:
+            out.append({**info, "key": j.get("key", "")})
+    return out
+
+
+def main_suit(G: dict[str, Any]) -> str:
+    """Suit the deck (hand + remaining deck) holds most of; joker suit wins ties."""
+    counts: Counter[str] = Counter()
+    for area in ("hand", "cards"):
+        for c in _area_cards(G, area):
+            n = _norm(c)
+            if n["suit"]:
+                counts[n["suit"]] += 1
+    for key, suit in SUIT_MULT_JOKERS.items():
+        if key in set(_joker_keys(G)):
+            counts[suit] += 3
+    if not counts:
+        return "H"
+    return max("HDCS", key=lambda s: (counts[s], -"HDCS".index(s)))
+
+
+def main_hand_plan(G: dict[str, Any]) -> dict[str, Any]:
+    """Deterministic MAIN_HAND: Flush by default, Two Pair family when jokers say so."""
+    infos = _owned_joker_infos(G)
+    keys = set(_joker_keys(G))
+    ante = int(G.get("ante_num") or 1)
+    pair_jokers = sum(1 for i in infos if i["family"] == "pair")
+    flush_jokers = sum(1 for i in infos if i["family"] == "flush")
+    if keys & {"j_tribe", "j_smeared", "j_four_fingers"}:
+        hand, reason = "Flush", "you own a Flush engine joker"
+    elif "j_duo" in keys:
+        hand, reason = "Two Pair", "you own The Duo (works on any hand with a Pair)"
+    elif ante >= 3 and pair_jokers >= 2 and flush_jokers == 0:
+        hand, reason = "Two Pair", "you own 2+ pair jokers and no flush jokers"
+    else:
+        hand, reason = "Flush", "default plan"
+    return {
+        "hand": hand,
+        "family": knowledge.HAND_FAMILY.get(hand, "flush"),
+        "suit": main_suit(G) if hand == "Flush" else None,
+        "reason": reason,
+    }
+
+
+def _pad_allowed(G: dict[str, Any]) -> bool:
+    keys = set(_joker_keys(G))
+    return "j_half" not in keys and _active_boss(G) != "The Tooth"
+
+
+def _filler(
+    hand: list[dict[str, Any]],
+    play: list[int],
+    plan: dict[str, Any],
+    count: int,
+) -> list[int]:
+    """Lowest-value cards outside ``play`` to add as filler (never MAIN suit cards)."""
+    suit = plan.get("suit")
+    pool = [
+        i
+        for i, c in enumerate(hand)
+        if i not in play
+        and not c["hidden"]
+        and c["enh"] not in ("STEEL", "GOLD")
+        and c["seal"] != "BLUE"
+        and not (suit and (c["suit"] == suit or c["enh"] == "WILD"))
+    ]
+    pool.sort(key=lambda i: CHIP_VALUE.get(hand[i]["rank"] or "", 0))
+    return pool[:count]
+
+
+def suggested_discard(
+    G: dict[str, Any], plan: dict[str, Any], protect: Iterable[int] = ()
+) -> list[int]:
+    """Up to 5 indices to discard toward MAIN_HAND, never touching ``protect``."""
+    hand = [_norm(c) for c in _area_cards(G, "hand")]
+    limit = int((G.get("hand") or {}).get("highlighted_limit", 5) or 5)
+    protect = set(protect)
+    keyset = set(_joker_keys(G))
+    groups = _suit_groups("j_smeared" in keyset)
+    if plan["hand"] == "Flush":
+        suit_counts = Counter(
+            groups[c["suit"]] for c in hand if c["suit"] and not c["hidden"]
+        )
+        target = groups.get(plan.get("suit") or "H", "H")
+        if suit_counts:
+            best = max(suit_counts.values())
+            # chase the main suit unless another suit is clearly ahead in hand
+            if suit_counts.get(target, 0) + 1 < best:
+                target = max(suit_counts, key=lambda g: suit_counts[g])
+        keep = {
+            i
+            for i, c in enumerate(hand)
+            if c["enh"] == "WILD" or (c["suit"] and groups[c["suit"]] == target)
+        }
+    else:
+        rc = Counter(c["rank"] for c in hand if c["rank"] and not c["hidden"])
+        keep = {i for i, c in enumerate(hand) if c["rank"] and rc[c["rank"]] >= 2}
+    keep |= protect
+    keep |= {i for i, c in enumerate(hand) if c["stone"] and plan["hand"] != "Flush"}
+    return _discard_choice(hand, keep, limit)
+
+
+def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
+    """Everything the PLAY phase needs: plays with WINS flags, discard, suggestion."""
+    plan = main_hand_plan(G)
+    analysis_ = analyze_hand(G, top=top)
+    progress = blind_progress(G) or {"remaining": 0, "per_hand": 0, "hands_left": 0}
+    remaining = progress["remaining"]
+    per_hand = progress["per_hand"]
+    discards = int((G.get("round") or {}).get("discards_left", 0))
+    hand_raw = _area_cards(G, "hand")
+    hand = [_norm(c) for c in hand_raw]
+    boss = _active_boss(G)
+
+    plays = []
+    for p in analysis_["plays"]:
+        wins = p["score"] >= WIN_MARGIN * remaining and not p["blocked"]
+        plays.append({**p, "wins": wins, "reaches_pace": p["score"] >= per_hand})
+    winners = [p for p in plays if p["wins"]]
+    protect = set(winners[0]["cards"]) if winners else set()
+    discard = suggested_discard(G, plan, protect)
+    # A strong draw toward MAIN_HAND beats spending a hand on a weak play.
+    strong_draw = next(
+        (
+            d
+            for d in analysis_["draws"]
+            if d["kind"] == plan["hand"] and d["chance"] >= STRONG_DRAW and d["discard"]
+        ),
+        None,
+    )
+    if strong_draw and not winners:
+        discard = strong_draw["discard"]
+
+    action: dict[str, Any]
+    if winners:
+        best = max(winners, key=lambda p: p["score"])
+        action = {"tool": "play", "cards": best["cards"], "why": f"{best['hand']} WINS"}
+    elif discards > 0 and discard and strong_draw:
+        action = {
+            "tool": "discard",
+            "cards": discard,
+            "why": f"{strong_draw['kind']} draw completes {round(strong_draw['chance'] * 100)}% of the time",
+        }
+    elif discards > 0 and discard and not any(p["reaches_pace"] for p in plays):
+        action = {
+            "tool": "discard",
+            "cards": discard,
+            "why": "no play reaches PER_HAND; dig toward MAIN_HAND",
+        }
+    elif plays:
+        best = plays[0]
+        cards = list(best["cards"])
+        need = 0
+        if boss == "The Psychic":
+            need = 5 - len(cards)
+        elif _pad_allowed(G) and len(cards) < 5:
+            need = 5 - len(cards)
+        if need > 0:
+            cards = sorted(cards + _filler(hand, cards, plan, need))
+        action = {"tool": "play", "cards": cards, "why": f"best play ({best['hand']})"}
+    else:
+        action = {"tool": "discard", "cards": discard, "why": "no visible play"}
+    return {
+        "plan": plan,
+        "progress": progress,
+        "plays": plays,
+        "draws": analysis_["draws"],
+        "discard": discard,
+        "action": action,
+        "strong_draw": strong_draw,
+        "hand_suits": analysis_["hand_suits"],
+        "deck_size": analysis_["deck_size"],
+        "deck_suits": analysis_["deck_suits"],
+    }
+
+
+def suggest_targets(G: dict[str, Any], consumable: dict[str, Any]) -> list[int]:
+    """Suggested hand indices for a targeted Tarot/Spectral (may be empty)."""
+    key = consumable.get("key", "")
+    bounds = CONSUMABLE_TARGETS.get(key)
+    if not bounds:
+        return []
+    lo, hi = bounds
+    hand = [_norm(c) for c in _area_cards(G, "hand")]
+    plan = main_hand_plan(G)
+    suit = plan.get("suit")
+    visible = [i for i, c in enumerate(hand) if not c["hidden"] and not c["stone"]]
+    on_suit = [i for i in visible if suit and hand[i]["suit"] == suit]
+    off_suit = [i for i in visible if i not in on_suit]
+
+    def by_chips(idx: list[int], reverse: bool) -> list[int]:
+        return sorted(
+            idx, key=lambda i: CHIP_VALUE.get(hand[i]["rank"] or "", 0), reverse=reverse
+        )
+
+    suit_tarot = {"c_star": "D", "c_moon": "C", "c_sun": "H", "c_world": "S"}
+    if key in suit_tarot:
+        if plan["hand"] != "Flush" or suit_tarot[key] != suit:
+            return []
+        return sorted(by_chips(off_suit, False)[:hi])
+    if key in (
+        "c_empress",
+        "c_heirophant",
+        "c_justice",
+        "c_magician",
+        "c_talisman",
+        "c_deja_vu",
+        "c_aura",
+        "c_cryptid",
+        "c_lovers",
+        "c_strength",
+    ):
+        if key == "c_lovers":
+            return (
+                sorted(by_chips(off_suit, True)[:1]) if plan["hand"] == "Flush" else []
+            )
+        pool = on_suit if plan["hand"] == "Flush" and on_suit else visible
+        unenhanced = [i for i in pool if not hand[i]["enh"]] or pool
+        return sorted(by_chips(unenhanced, True)[:hi])
+    if key in ("c_chariot", "c_devil", "c_trance"):
+        return sorted(by_chips(off_suit or visible, True)[:1])
+    if key in ("c_hanged_man", "c_medium"):
+        junk = [i for i in off_suit if not hand[i]["enh"] and not hand[i]["seal"]]
+        return sorted(by_chips(junk, False)[: (1 if key == "c_medium" else hi)])
+    if key == "c_death":
+        if len(visible) < 2:
+            return []
+        best = max(
+            visible,
+            key=lambda i: (
+                hand[i]["enh"] is not None,
+                i in on_suit,
+                CHIP_VALUE.get(hand[i]["rank"] or "", 0),
+            ),
+        )
+        junk = [i for i in (off_suit or visible) if i != best]
+        if not junk:
+            return []
+        worst = min(junk, key=lambda i: CHIP_VALUE.get(hand[i]["rank"] or "", 0))
+        return sorted([worst, best])  # the LEFT (lower) one becomes the RIGHT one
+    return sorted(by_chips(visible, False)[:lo])
+
+
+def _play_scores(history: list[dict[str, Any]] | None) -> list[int]:
+    if not history:
+        return []
+    return [
+        int(h["score"])
+        for h in history
+        if h.get("method") == "play"
+        and isinstance(h.get("score"), int | float)
+        and h["score"] > 0
+    ]
+
+
+def boss_impact(
+    G: dict[str, Any], plan: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Upcoming/active boss with filled effect text, counter and MAIN_HAND impact."""
+    boss = (G.get("blinds") or {}).get("boss") or {}
+    name = str(boss.get("name") or "")
+    effect = str(boss.get("effect") or "")
+    if "#1#" in effect:
+        filler = (main_hand(G) or "your most played hand") if name == "The Ox" else "1"
+        effect = effect.replace("#1#", filler)
+    plan = plan or main_hand_plan(G)
+    impact = ""
+    if name in knowledge.SUIT_BOSSES and plan["hand"] == "Flush":
+        bsuit = knowledge.SUIT_BOSSES[name]
+        if bsuit == plan.get("suit"):
+            impact = (
+                f"AFFECTS MAIN_HAND: your Flush suit ({SUIT_NAME[bsuit]}) gives 0 chips. "
+                "Prepare: +Mult/xMult jokers not tied to suit, or play Pairs/Two Pair from other suits."
+            )
+    elif name == "The Plant":
+        faces = sum(
+            1
+            for c in _area_cards(G, "cards") + _area_cards(G, "hand")
+            if (_norm(c)["rank"] or "") in FACE_RANKS
+        )
+        if faces >= 14 or "j_pareidolia" in set(_joker_keys(G)):
+            impact = "AFFECTS YOU: many face cards (or Pareidolia) will give 0."
+    elif name in ("The Wall", "Violet Vessel"):
+        impact = "Score check: buy raw score (xMult/+Mult joker, MAIN_HAND planet) before it."
+    elif name == "Verdant Leaf":
+        impact = "Keep a cheap joker you can sell at the start of the round."
+    return {
+        "name": name,
+        "effect": effect,
+        "score": boss.get("score") or 0,
+        "counter": knowledge.boss_counter(name),
+        "impact": impact,
+    }
+
+
+def run_status(
+    G: dict[str, Any],
+    rounds: list[dict[str, Any]] | None = None,
+    history: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """The STATUS block: CAPS facts the rulebook references verbatim."""
+    plan = main_hand_plan(G)
+    ante = int(G.get("ante_num") or 1)
+    money = int(G.get("money") or 0)
+    jokers = G.get("jokers") or {}
+    count = int(jokers.get("count", 0))
+    limit = int(jokers.get("limit", 5))
+    infos = _owned_joker_infos(G)
+    xmult = sum(
+        1
+        for i in infos
+        if i["category"] == "XMULT"
+        and i["key"] not in ("j_loyalty_card", "j_stencil", "j_flower_pot")
+        and (i["family"] in (None, plan["family"]))
+    )
+    floor = money_floor(G)
+
+    # Power check: hands needed for the next blind at the recent scoring pace.
+    scores = _play_scores(history)[-3:]
+    nxt = next_blind(G) or current_blind(G) or {}
+    nxt_target = int(nxt.get("score") or 0)
+    hands_needed = None
+    status = "UNKNOWN"
+    if scores and nxt_target:
+        avg = sum(scores) / len(scores)
+        hands_needed = -(-nxt_target // max(int(avg), 1))
+        status = "ON TRACK" if hands_needed <= 3 else "TOO WEAK"
+    elif rounds:
+        status = "ON TRACK" if int(rounds[-1].get("hands_left", 0)) >= 1 else "TOO WEAK"
+    effective_floor = 0 if status == "TOO WEAK" else floor
+
+    want_jokers = {1: 2, 2: 3, 3: 5}.get(ante, 5)
+    if ante <= 3:
+        milestone = (
+            f"Ante {ante} goal: {want_jokers} scoring jokers"
+            + (", and look for your first XMULT joker" if ante == 3 else "")
+            + f". You have {count}."
+        )
+    elif ante <= 5:
+        milestone = f"Ante {ante} goal: at least 1 XMULT joker now, 2 by Ante 6. You have {xmult}."
+    else:
+        milestone = f"Ante {ante} goal: 2+ XMULT jokers and MAIN_HAND level 5+. You have {xmult} XMULT."
+    if count < limit and ante <= 3:
+        priority = "fill empty joker slots with scoring jokers"
+    elif ante >= 3 and xmult < (1 if ante <= 5 else 2):
+        priority = "buy an [XMULT] joker (sell your weakest joker if slots are full)"
+    else:
+        priority = "level MAIN_HAND with planets and upgrade your weakest joker"
+    return {
+        "ante": ante,
+        "money": money,
+        "main_hand": plan["hand"],
+        "main_suit": SUIT_NAME.get(plan.get("suit") or "", ""),
+        "main_reason": plan["reason"],
+        "floor": floor,
+        "effective_floor": effective_floor,
+        "spendable": max(money - effective_floor, 0),
+        "interest": interest(money),
+        "jokers": count,
+        "joker_limit": limit,
+        "slots_free": max(limit - count, 0),
+        "xmult_owned": xmult,
+        "status": status,
+        "hands_needed": hands_needed,
+        "recent_scores": scores,
+        "next_target": nxt_target,
+        "milestone": milestone,
+        "priority": priority,
+        "observatory": any(
+            "observatory" in str(k).lower() for k in (G.get("used_vouchers") or {})
+        ),
+    }
+
+
+def joker_order(G: dict[str, Any]) -> list[int] | None:
+    """Ideal joker order (+Chips, +Mult, scaling, xMult, Polychrome right), or None.
+
+    Blueprint is placed just left of the strongest xMult joker; Brainstorm's
+    target (the best xMult) goes first. Returns None if already ordered.
+    """
+    jokers = _area_cards(G, "jokers")
+    if len(jokers) < 2:
+        return None
+    rank_of = {
+        "CHIPS": 0,
+        "KEEP-DISCARDS": 0,
+        "ECON": 1,
+        "UTIL": 1,
+        "TRAP": 1,
+        "MULT": 2,
+        "SCALE": 3,
+        "XMULT": 5,
+    }
+
+    def weight(j: dict[str, Any]) -> float:
+        info = knowledge.joker_info(j.get("label")) or {}
+        w = float(rank_of.get(info.get("category", "UTIL"), 1))
+        effect = str((j.get("value") or {}).get("effect", ""))
+        m = CURRENTLY.search(effect)
+        if m and m.group(1) in ("X", "x", "×"):
+            w = 5
+        if (j.get("modifier") or {}).get("edition") == "POLYCHROME":
+            w += 0.5
+        return w
+
+    keys = [j.get("key", "") for j in jokers]
+    if "j_ceremonial" in keys:  # order matters destructively, leave it to the player
+        return None
+    order = sorted(range(len(jokers)), key=lambda i: (weight(jokers[i]), i))
+    if "j_blueprint" in keys:
+        bp = keys.index("j_blueprint")
+        order.remove(bp)
+        xs = [i for i in order if weight(jokers[i]) >= 5]
+        target = xs[-1] if xs else order[-1]
+        order.insert(order.index(target), bp)
+    if "j_brainstorm" in keys:
+        bs = keys.index("j_brainstorm")
+        xs = [i for i in order if i != bs and weight(jokers[i]) >= 5]
+        if xs:
+            order.remove(xs[-1])
+            order.insert(0, xs[-1])
+    return None if order == list(range(len(jokers))) else order
+
+
+def validate_action(
+    G: dict[str, Any], method: str, params: dict[str, Any]
+) -> str | None:
+    """Return an error message for illegal or strictly bad actions, else None."""
+    jokers = G.get("jokers") or {}
+    full = int(jokers.get("count", 0)) >= int(jokers.get("limit", 5))
+    cards = params.get("cards")
+    if method in ("play", "discard") and isinstance(cards, list):
+        if not cards:
+            return "Select at least 1 card."
+        limit = int((G.get("hand") or {}).get("highlighted_limit", 5) or 5)
+        if len(cards) > limit:
+            return f"You selected {len(cards)} cards; the maximum is {limit}."
+        if len(set(cards)) != len(cards):
+            return "Each card index may appear only once."
+        if method == "discard":
+            advice = play_advice(G)
+            winners = [p for p in advice["plays"] if p["wins"]]
+            if winners and set(cards) & set(winners[0]["cards"]):
+                return (
+                    f"Discard refused: cards {winners[0]['cards']} already make a "
+                    f"{winners[0]['hand']} that WINS the blind. Play it instead."
+                )
+    if method == "buy" and "pack" in params and full:
+        packs = _area_cards(G, "packs")
+        try:
+            label = str(packs[int(params["pack"])].get("label", ""))
+        except (IndexError, TypeError, ValueError):
+            label = ""
+        if "buffoon" in label.lower():
+            return (
+                "Buffoon Pack refused: your joker slots are full (sell a joker first)."
+            )
+    if method == "pack":
+        if params.get("skip") and params.get("card") is not None:
+            return "Use either `card` or `skip`, not both."
+        if params.get("card") is not None:
+            pack = _area_cards(G, "pack")
+            try:
+                chosen = pack[int(params["card"])]
+            except (IndexError, TypeError, ValueError):
+                return None
+            key = chosen.get("key", "")
+            if (
+                chosen.get("set") == "JOKER"
+                or key in ("c_judgement", "c_soul", "c_wraith")
+            ) and full:
+                return "Your joker slots are full: this card would be wasted. Skip the pack or pick another card."
+            if key == "c_death" and len(params.get("targets") or []) != 2:
+                return "Death needs exactly 2 targets: [junk card, card to copy]."
+    if method == "use":
+        cons = _area_cards(G, "consumables")
+        try:
+            chosen = cons[int(params.get("consumable", -1))]
+        except (IndexError, TypeError, ValueError):
+            return None
+        key = chosen.get("key", "")
+        if key in ("c_judgement", "c_soul", "c_wraith") and full:
+            return "Your joker slots are full: sell a joker before using this card."
+        if key == "c_death" and len(params.get("cards") or []) != 2:
+            return "Death needs exactly 2 cards: [junk card, card to copy]."
+    return None
+
+
+################################################################################
 # Action outcomes (memory)
 ################################################################################
 
@@ -1116,6 +1618,16 @@ TEMPLATE_GLOBALS = {
     "consumable_targets": consumable_targets,
     "current_blind": current_blind,
     "next_blind": next_blind,
+    "play_advice": play_advice,
+    "main_hand_plan": main_hand_plan,
+    "run_status": run_status,
+    "boss_impact": boss_impact,
+    "suggest_targets": suggest_targets,
+    "joker_order": joker_order,
+    "joker_tag": knowledge.joker_tag,
+    "consumable_tag": knowledge.consumable_tag,
+    "voucher_tag": knowledge.voucher_tag,
+    "boss_counter": knowledge.boss_counter,
     "ANTE_BASE": ANTE_BASE,
 }
 TEMPLATE_FILTERS = {
