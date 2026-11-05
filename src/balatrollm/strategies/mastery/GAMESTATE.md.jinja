@@ -64,7 +64,7 @@
 {%- if A.draws %}
 ## Draws worth chasing (chance to complete with one discard)
 {% for d in A.draws -%}
-- {{ d.text }}: discard {{ d.discard }} -> {{ d.chance | pct }}
+- {{ d.text }}: discard {{ d.discard }} -> {{ d.chance | pct }}{% if d.if_complete %}, if it hits scores {{ d.if_complete | fmt_num }}{% endif %}{% if d.one_shot %} = ONE-SHOT (wins the blind in one hand){% endif %}
 {% endfor %}
 {%- endif %}
 - Suggested discard: {{ A.discard }}{% if A.discard %} = {% for i in A.discard %}{{ G.hand.cards[i] | card_name }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}

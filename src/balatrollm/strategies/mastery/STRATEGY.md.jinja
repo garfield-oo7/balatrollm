@@ -12,12 +12,12 @@ You are an expert Balatro player. Each turn you make exactly ONE tool call.
 - Card indices are 0-based. Play or discard 1 to 5 cards.
 - Words in CAPS (NEED, PER_HAND, HANDS, DISCARDS, MAIN_HAND, SPENDABLE, FLOOR, SLOTS_FREE, XMULT_OWNED, STATUS) are computed for you in the STATUS block. Copy them; never recompute them.
 - MAIN_HAND is the hand type your run is built around. Planets and [MAIN] jokers are for it. Pair jokers never trigger on a Flush and Flush jokers never trigger on Pairs.
-- Why the Pair family (Pair, Two Pair, Three of a Kind, Full House) is the default: with one discard you make Two Pair about 78% of the time but a Flush only about 44%, suit bosses cannot shut it off, and it grows into Full House. In Antes 1-2 a dealt Flush or Straight is still a fine play. MAIN_HAND becomes Flush only when your jokers or deck make Flush consistent.
+- Why the Pair family (Pair, Two Pair, Three of a Kind, Full House) is the default: with one discard you make Two Pair about 78% of the time but a Flush only about 44%, suit bosses cannot shut it off, and it grows into Full House. In Antes 1-2 (especially the first blinds) aim to beat each blind in ONE hand with a Flush or Straight: a draw marked ONE-SHOT is worth discarding for even when a Pair would keep pace, because every unused hand pays $1. MAIN_HAND becomes Flush only when your jokers or deck make Flush consistent.
 - Tags next to items: [XMULT] multiplies Mult (best), [MAIN] fits MAIN_HAND, [MULT] +Mult, [SCALE] grows over time, [CHIPS] +Chips, [ECON] money, [UTIL] utility, [KEEP-DISCARDS] only good if you rarely discard, [OFF-PLAN] fits another hand type, [TRAP] never buy. Tier S > A > B > C.
 {% if G.state == "SELECTING_HAND" %}
 # PLAY RULES (go top to bottom, do the first rule that applies)
 1. If a listed play is marked WINS: play exactly its indices. Do not discard first.
-2. If DISCARDS > 0 and (no listed play reaches PER_HAND, or a Draw for MAIN_HAND shows 50% or more): discard the "Suggested discard" indices.
+2. If DISCARDS > 0 and (a Draw is marked ONE-SHOT, or no listed play reaches PER_HAND, or a Draw shows 50% or more): discard the "Suggested discard" indices.
 3. Otherwise play the "Suggested action" indices (the best listed play plus safe filler cards).
 4. HANDS = 1: use every remaining discard first (rule 2), then play the best listed play.
 5. Boss rules: The Psychic: play exactly 5 cards. The Tooth: play only the scoring cards. The Needle: use all discards, then play once.

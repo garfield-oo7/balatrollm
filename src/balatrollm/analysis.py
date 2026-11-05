@@ -747,6 +747,51 @@ def _discard_choice(
     return sorted(candidates[:limit])
 
 
+def _synthetic_card(suit: str, rank: str) -> dict[str, Any]:
+    return {
+        "key": f"{suit}_{rank}",
+        "set": "DEFAULT",
+        "value": {"suit": suit, "rank": rank},
+        "modifier": {},
+        "state": {},
+    }
+
+
+def _projected_score(
+    G: dict[str, Any], hand_raw: list[dict[str, Any]], draw: dict[str, Any]
+) -> int:
+    """Typical score of a draw once it completes: the kept cards plus the
+    median completing card left in the deck (or the missing rank)."""
+    hand = [_norm(c) for c in hand_raw]
+    keep = sorted(
+        draw["keep"],
+        key=lambda i: -CHIP_VALUE.get(hand[i]["rank"] or "", 0),
+    )
+    keyset = set(_joker_keys(G))
+    if draw["kind"] == "Flush":
+        need = 4 if "j_four_fingers" in keyset else 5
+        played = [hand_raw[i] for i in keep[:need]]
+        suit = draw.get("suit") or hand[keep[0]]["suit"] or "H"
+        outs = sorted(
+            (
+                c["rank"]
+                for c in (_norm(x) for x in _area_cards(G, "cards"))
+                if c["suit"] == suit and c["rank"]
+            ),
+            key=lambda r: CHIP_VALUE[r],
+        )
+        median = outs[len(outs) // 2] if outs else "2"
+        while len(played) < need:
+            played.append(_synthetic_card(suit, median))
+    else:
+        played = [hand_raw[i] for i in keep]
+        suits = Counter(hand[i]["suit"] for i in keep)
+        filler_suit = min("HDCS", key=lambda x: suits.get(x, 0))
+        played.append(_synthetic_card(filler_suit, draw.get("missing") or "2"))
+    est = estimate_play(G, played, [])
+    return int(est["score"]) if est["hand"] == draw["kind"] else 0
+
+
 def analyze_hand(G: dict[str, Any], top: int = 6) -> dict[str, Any]:
     """Enumerate the best play per hand type and the best draws.
 
@@ -802,6 +847,7 @@ def analyze_hand(G: dict[str, Any], top: int = 6) -> dict[str, Any]:
             draws.append(
                 {
                     "kind": "Flush",
+                    "suit": suit,
                     "text": f"Flush draw in {SUIT_NAME[suit]}: {have_total}/{need_flush} in hand, "
                     f"{outs} {SUIT_NAME[suit]} left in deck",
                     "keep": keep,
@@ -836,12 +882,15 @@ def analyze_hand(G: dict[str, Any], top: int = 6) -> dict[str, Any]:
             draws.append(
                 {
                     "kind": "Straight",
+                    "missing": min(missing, key=lambda r: CHIP_VALUE[r]),
                     "text": f"Straight draw: need a {need_txt} ({outs} left in deck)",
                     "keep": sorted(keep),
                     "discard": _discard_choice(hand, keep, n),
                     "chance": p,
                 }
             )
+    for d in draws:
+        d["if_complete"] = _projected_score(G, hand_raw, d)
     draws.sort(key=lambda d: -d["chance"])
     return {
         "plays": plays,
@@ -998,6 +1047,9 @@ def pct(value: float) -> str:
 ################################################################################
 
 STRONG_DRAW = 0.5  # discard toward a MAIN_HAND draw that completes this often
+# Antes 1-2: chase a Flush/Straight that would beat the WHOLE blind in one hand
+# (saves hands, each worth $1) at this chance with 2+ discards left.
+ONE_SHOT_DRAW = 0.30
 WIN_MARGIN = 1.10  # a play is marked WINS only if its floor estimate >= 110% of NEED
 PAIR_FAMILY = {"Pair", "Two Pair", "Three of a Kind", "Full House", "Four of a Kind"}
 
@@ -1155,17 +1207,42 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
     hand = [_norm(c) for c in hand_raw]
     boss = _active_boss(G)
 
+    # Estimates are exact without jokers, so the safety margin only applies
+    # once jokers (or effects the estimator skips) are involved.
+    exact = not _joker_keys(G)
     plays = []
     for p in analysis_["plays"]:
-        wins = p["score"] >= WIN_MARGIN * remaining and not p["blocked"]
+        margin = 1.0 if exact and not p["unknown"] else WIN_MARGIN
+        wins = p["score"] >= margin * remaining and not p["blocked"]
         plays.append({**p, "wins": wins, "reaches_pace": p["score"] >= per_hand})
     winners = [p for p in plays if p["wins"]]
     protect = set(winners[0]["cards"]) if winners else set()
     discard = suggested_discard(G, plan, protect)
     # Only draws the plan allows are shown (Flush/Straight only in the OPEN antes
     # or when MAIN_HAND is that hand); a strong one beats spending a weak hand.
-    draws = [d for d in analysis_["draws"] if d["kind"] in plan["draw_kinds"]]
-    strong_draw = next(
+    ante = int(G.get("ante_num") or 1)
+    margin = 1.0 if exact else WIN_MARGIN
+    draws = []
+    for d in analysis_["draws"]:
+        if d["kind"] not in plan["draw_kinds"]:
+            continue
+        one_shot = (
+            ante <= OPEN_ANTES
+            and remaining > 0
+            and d.get("if_complete", 0) >= margin * remaining
+        )
+        draws.append({**d, "one_shot": one_shot})
+    one_shot_need = ONE_SHOT_DRAW if discards >= 2 else STRONG_DRAW
+    one_shot_draw = max(
+        (
+            d
+            for d in draws
+            if d["one_shot"] and d["chance"] >= one_shot_need and d["discard"]
+        ),
+        key=lambda d: (round(d["chance"], 2), d["if_complete"]),
+        default=None,
+    )
+    strong_draw = one_shot_draw or next(
         (d for d in draws if d["chance"] >= STRONG_DRAW and d["discard"]),
         None,
     )
@@ -1176,6 +1253,13 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
     if winners:
         best = max(winners, key=lambda p: p["score"])
         action = {"tool": "play", "cards": best["cards"], "why": f"{best['hand']} WINS"}
+    elif discards > 0 and discard and one_shot_draw:
+        action = {
+            "tool": "discard",
+            "cards": discard,
+            "why": f"{one_shot_draw['kind']} draw ({round(one_shot_draw['chance'] * 100)}%) "
+            "would WIN the blind in one hand; every unused hand pays $1",
+        }
     elif discards > 0 and discard and strong_draw:
         action = {
             "tool": "discard",

@@ -200,12 +200,15 @@ class TestEstimate:
 
 class TestPlayAdvice:
     def test_wins_needs_margin(self) -> None:
-        G = make_state("H_A H_K H_T H_5 H_4 S_4 C_4 D_9")
-        advice = analysis.play_advice(G)
-        flush = next(p for p in advice["plays"] if p["hand"] == "Flush")
-        assert flush["score"] == 300
-        assert not flush["wins"]  # 300 < 1.10 * 300
-        G["round"]["chips"] = 30  # need 270 -> 300 >= 297
+        # With a joker the floor estimate needs a 10% margin to count as WINS.
+        jok = [joker("j_joker", "Joker", "+4 Mult")]
+        G = make_state("H_A H_K H_T H_5 H_4 S_4 C_4 D_9", jok, chips=-260)
+        flush = next(
+            p for p in analysis.play_advice(G)["plays"] if p["hand"] == "Flush"
+        )
+        assert flush["score"] == 600
+        assert not flush["wins"]  # need 560: 600 < 1.10 * 560
+        G["round"]["chips"] = -240  # need 540: 600 >= 594
         flush = next(
             p for p in analysis.play_advice(G)["plays"] if p["hand"] == "Flush"
         )
@@ -394,3 +397,30 @@ class TestPlanAwareConsumables:
         strength = {"key": "c_strength", "set": "TAROT", "label": "Strength"}
         assert knowledge.consumable_tag(strength, "Two Pair").startswith("[GOOD]")
         assert knowledge.consumable_tag(strength, "Flush").startswith("[SITUATIONAL]")
+
+
+class TestOneShotDraws:
+    JOKER = [joker("j_joker", "Joker", "+4 Mult")]
+
+    def test_one_shot_straight_beats_pace_pair_in_ante_one(self) -> None:
+        # Pair of 4s reaches PER_HAND, but a Straight (T needed, ~33%) wins outright.
+        G = make_state("S_J D_Q C_K H_A H_3 S_4 C_4 D_2", self.JOKER)
+        advice = analysis.play_advice(G)
+        straight = next(d for d in advice["draws"] if d["kind"] == "Straight")
+        assert straight["one_shot"] and 0.30 <= straight["chance"] < 0.5
+        assert advice["action"]["tool"] == "discard"
+        assert "one hand" in advice["action"]["why"]
+        assert {0, 1, 2, 3} & set(advice["action"]["cards"]) == set()
+
+    def test_no_one_shot_after_open_antes(self) -> None:
+        G = make_state("S_J D_Q C_K H_A H_3 S_4 C_4 D_2", self.JOKER)
+        G["ante_num"] = 3
+        advice = analysis.play_advice(G)
+        assert all(d["kind"] == "Two Pair" for d in advice["draws"])
+        assert "one hand" not in advice["action"]["why"]
+
+    def test_exact_win_without_jokers(self) -> None:
+        # No jokers: the estimate is exact, so 300 vs 300 needed WINS.
+        G = make_state("H_A H_K H_T H_5 H_4 S_4 C_4 D_9")
+        flush = next(p for p in analysis.play_advice(G)["plays"] if p["hand"] == "Flush")
+        assert flush["score"] == 300 and flush["wins"]
