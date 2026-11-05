@@ -528,6 +528,7 @@ def estimate_play(
     G: dict[str, Any],
     played_raw: list[dict[str, Any]],
     held_raw: list[dict[str, Any]],
+    expected: bool = False,
 ) -> dict[str, Any]:
     """Estimate the score of playing ``played_raw`` while holding ``held_raw``.
 
@@ -535,7 +536,8 @@ def estimate_play(
     right (with per-card jokers and retriggers) -> held cards -> jokers left to
     right. This is a FLOOR estimate: random effects (Misprint, Lucky cards,
     Bloodstone) count as zero and unknown jokers are skipped and listed in
-    ``unknown``.
+    ``unknown``. ``expected=True`` counts a Lucky card at its average
+    (+4 Mult per trigger) for valuing jokers in the shop.
     """
     keys = _joker_keys(G)
     keyset = set(keys)
@@ -558,10 +560,20 @@ def estimate_play(
     groups = _suit_groups(smeared)
     hands_left = int((G.get("round") or {}).get("hands_left", 0))
     scored_cards = [played[i] for i in scoring]
-    first_face_done = False
 
     def is_face(c: dict[str, Any]) -> bool:
         return not c["stone"] and (pareidolia or (c["rank"] in FACE_RANKS))
+
+    # Photograph fires on every trigger of the first scored face card, so
+    # Hanging Chad / Sock and Buskin / Red Seal retriggers multiply it again.
+    first_face_pos = next(
+        (
+            pos
+            for pos, i in enumerate(scoring)
+            if is_face(played[i]) and not played[i]["debuff"]
+        ),
+        None,
+    )
 
     def suit_match(c: dict[str, Any], suit: str) -> bool:
         if c["enh"] == "WILD":
@@ -592,6 +604,8 @@ def estimate_play(
             elif c["enh"] == "MULT":
                 mult += 4
             # LUCKY (1 in 5 for +20 Mult) counts 0 in the floor estimate
+            elif c["enh"] == "LUCKY" and expected:
+                mult += 4
             elif c["enh"] == "GLASS":
                 mult *= 2
             if c["ed"] == "FOIL":
@@ -630,10 +644,8 @@ def estimate_play(
                 # Bloodstone (1 in 2 for x1.5) counts x1 in the floor estimate
                 elif k == "j_triboulet" and c["rank"] in ("K", "Q"):
                     mult *= 2
-                elif k == "j_photograph" and is_face(c) and not first_face_done:
+                elif k == "j_photograph" and pos == first_face_pos:
                     mult *= 2
-            if is_face(c):
-                first_face_done = True
 
     # Held-in-hand effects
     mime = keys.count("j_mime")
@@ -1901,8 +1913,8 @@ def typical_plays(
 
     Pair / Three / Four of a Kind: every combination of that many cards of one
     rank, so ranks, suits and face cards count as often as they come up.
-    Flush: the low, middle and high five cards of MAIN_SUIT. Two Pair / Full
-    House: the single typical play.
+    Two Pair / Full House: one play per pair of ranks, higher rank first as in
+    a sorted hand. Flush: the low, middle and high five cards of MAIN_SUIT.
     """
     plan = plan or main_hand_plan(G)
     raw = [_face_up(c) for a in ("cards", "hand") for c in _area_cards(G, a)]
@@ -1918,6 +1930,24 @@ def typical_plays(
             for same in by_rank.values()
             for combo in combinations(same, shape[0])
         ]
+    if shape:
+        by_rank = {}
+        for c, n in cards:
+            if n["rank"]:
+                by_rank.setdefault(n["rank"], []).append(c)
+        first, second = shape
+        plays = []
+        for r1 in by_rank:
+            for r2 in by_rank:
+                if r1 == r2 or len(by_rank[r1]) < first or len(by_rank[r2]) < second:
+                    continue
+                if first == second and RANKS.index(r1) < RANKS.index(r2):
+                    continue  # Two Pair: each pair of ranks once
+                play = by_rank[r1][:first] + by_rank[r2][:second]
+                plays.append(
+                    sorted(play, key=lambda c: -RANKS.index(_norm(c)["rank"]))
+                )
+        return plays
     if plan["hand"] == "Flush":
         suit = plan.get("suit") or main_suit(G)
         same = sorted(
@@ -1967,7 +1997,7 @@ def shop_impact(G: dict[str, Any]) -> dict[str, Any]:
     plays = [
         p
         for p in typical_plays(G, plan)
-        if estimate_play(G_owned, p, [])["hand"] == plan["hand"]
+        if estimate_play(G_owned, p, [], expected=True)["hand"] == plan["hand"]
     ]
     if not plays:
         return out
@@ -1975,7 +2005,7 @@ def shop_impact(G: dict[str, Any]) -> dict[str, Any]:
     def average(G2: dict[str, Any]) -> tuple[float, set[str]]:
         total, unknown = 0.0, set()
         for p in plays:
-            est = estimate_play(G2, p, [])
+            est = estimate_play(G2, p, [], expected=True)
             total += est["score"]
             unknown |= set(est["unknown"])
         return total / len(plays), unknown
@@ -2031,7 +2061,12 @@ def shop_impact(G: dict[str, Any]) -> dict[str, Any]:
     # weakest = least score among jokers that do not grow or pay money
     ante = int(G.get("ante_num") or 1)
     protected = {"SCALE", "XMULT"} | ({"ECON"} if ante <= 4 else set())
-    candidates = [(gain, i) for i, (gain, cat) in contrib.items() if cat not in protected]
+    keep = synergy_keep(G)
+    candidates = [
+        (gain, i)
+        for i, (gain, cat) in contrib.items()
+        if cat not in protected and owned[i].get("label") not in keep
+    ]
     if candidates:
         gain, i = min(candidates)
         out["weakest"] = {
@@ -2040,6 +2075,25 @@ def shop_impact(G: dict[str, Any]) -> dict[str, Any]:
             "gain": gain,
         }
     return out
+
+
+def synergy_keep(G: dict[str, Any]) -> dict[str, str]:
+    """Owned jokers never to sell because of a partner joker: label -> reason.
+
+    Hanging Chad + Photograph: the first face card scores three times, and
+    Photograph's x2 fires each time (x8). Only The Plant (face cards debuffed)
+    breaks it, and a boss reroll voucher (Director's Cut / Retcon) avoids that.
+    """
+    labels = {j.get("label") for j in _area_cards(G, "jokers")}
+    if not {"Hanging Chad", "Photograph"} <= labels:
+        return {}
+    boss = str(((G.get("blinds") or {}).get("boss") or {}).get("name") or "")
+    vouchers = {str(v) for v in (G.get("used_vouchers") or {})}
+    reroll = bool(vouchers & {"v_directors_cut", "v_retcon"})
+    if boss == "The Plant" and not reroll:
+        return {}
+    reason = "with Photograph it gives the first face card x2 three times (x8)"
+    return {"Hanging Chad": reason, "Photograph": reason}
 
 
 def _sell_veto(G: dict[str, Any], joker: dict[str, Any], full: bool) -> str | None:
@@ -2055,6 +2109,8 @@ def _sell_veto(G: dict[str, Any], joker: dict[str, Any], full: bool) -> str | No
     tier = info.get("early") if ante <= 3 else info.get("late")
     if info.get("category") == "TRAP" or tier == "T":
         return None
+    if label in (keep := synergy_keep(G)):
+        return f"Keep {label}: {keep[label]}. Sell a different joker."
     makes_joker = ("c_judgement", "c_soul", "c_wraith")
     if any(c.get("key") in makes_joker for c in _area_cards(G, "consumables")):
         return None

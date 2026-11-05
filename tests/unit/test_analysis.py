@@ -198,6 +198,56 @@ class TestEstimate:
         assert analysis.estimate_play(G, hand[:2], hand[2:])["score"] == 0
 
 
+class TestRetriggerSynergies:
+    def test_hanging_chad_retriggers_photograph(self) -> None:
+        photo = joker("j_photograph", "Photograph")
+        chad = joker("j_hanging_chad", "Hanging Chad")
+        G = make_state("H_K S_K D_2 C_3 H_5", [photo])
+        pair = G["hand"]["cards"][:2]
+        # Pair of Kings: (10 + 10 + 10) x (2 x2 Photograph) = 120
+        assert analysis.estimate_play(G, pair, [])["score"] == 120
+        G = make_state("H_K S_K D_2 C_3 H_5", [photo, chad])
+        # first King scores 3 times and Photograph fires each time:
+        # (10 + 3*10 + 10) x (2 x8) = 800
+        assert analysis.estimate_play(G, pair, [])["score"] == 800
+
+    def test_chad_and_photograph_are_kept_unless_the_plant(self) -> None:
+        jokers = [
+            joker("j_photograph", "Photograph"),
+            joker("j_hanging_chad", "Hanging Chad"),
+            joker("j_joker", "Joker", "+4 Mult"),
+        ]
+        G = make_state("H_K S_K D_2", jokers, state="SHOP")
+        G["jokers"]["limit"] = 3  # full
+        G["shop"] = {"cards": [joker("j_duo", "The Duo", cost=1)]}
+        assert "Hanging Chad" in analysis.synergy_keep(G)
+        assert "Photograph" in analysis.validate_action(G, "sell", {"joker": 1})
+        assert analysis.shop_impact(G)["weakest"]["label"] == "Joker"
+        G["blinds"] = {"boss": {"name": "The Plant"}}
+        assert analysis.synergy_keep(G) == {}
+        G["used_vouchers"] = {"v_directors_cut": ""}
+        assert "Hanging Chad" in analysis.synergy_keep(G)
+
+    def test_two_pair_averages_every_pair_of_ranks(self) -> None:
+        G = make_state("H_2", state="SHOP")
+        plays = analysis.typical_plays(G, {"hand": "Two Pair"})
+        assert len(plays) == 78  # 13 ranks choose 2
+        first = analysis._norm(plays[0][0])["rank"]
+        assert first == max(
+            (analysis._norm(c)["rank"] for c in plays[0]), key=analysis.RANKS.index
+        )
+
+    def test_lucky_cards_count_only_when_expected(self) -> None:
+        chad = joker("j_hanging_chad", "Hanging Chad")
+        G = make_state("H_7 S_7 D_2 C_3 H_5", [chad])
+        G["hand"]["cards"][0]["modifier"] = {"enhancement": "LUCKY"}
+        pair = G["hand"]["cards"][:2]
+        floor = analysis.estimate_play(G, pair, [])["score"]
+        expected = analysis.estimate_play(G, pair, [], expected=True)["score"]
+        # (10 + 3*7 + 7) chips; the Lucky 7 scores 3 times: +4 Mult each on average
+        assert floor == 38 * 2 and expected == 38 * (2 + 12)
+
+
 class TestPlayAdvice:
     def test_wins_needs_margin(self) -> None:
         # With a joker the floor estimate needs a 10% margin to count as WINS.
