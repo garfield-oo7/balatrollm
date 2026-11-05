@@ -1365,6 +1365,16 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         action = {"tool": "play", "cards": cards, "why": f"best play ({best['hand']})"}
     else:
         action = {"tool": "discard", "cards": discard, "why": "no visible play"}
+    # A Tarot with suggested targets costs no hand or discard: use it first
+    for i, c in enumerate(_area_cards(G, "consumables")):
+        if c.get("set") == "TAROT" and (targets := suggest_targets(G, c)):
+            action = {
+                "tool": "use",
+                "consumable": i,
+                "cards": targets,
+                "why": f"use {c.get('label')} first: it costs no hand or discard",
+            }
+            break
     return {
         "plan": plan,
         "progress": progress,

@@ -225,6 +225,17 @@ class TestPlayAdvice:
         action = analysis.play_advice(G)["action"]
         assert action == {"tool": "play", "cards": [0, 1, 2, 3, 4], "why": "Flush WINS"}
 
+    def test_targeted_tarot_is_suggested_first(self) -> None:
+        G = make_state("H_A H_K H_T H_5 H_4 S_4 C_4 D_9", chips=200)
+        G["consumables"] = {
+            "count": 1,
+            "limit": 2,
+            "cards": [{"key": "c_justice", "label": "Justice", "set": "TAROT"}],
+        }
+        action = analysis.play_advice(G)["action"]
+        assert action["tool"] == "use" and action["consumable"] == 0
+        assert action["cards"] == analysis.suggest_targets(G, G["consumables"]["cards"][0])
+
     def test_discard_of_winning_cards_is_vetoed(self) -> None:
         G = make_state("H_A H_K H_T H_5 H_4 S_4 C_4 D_9", chips=200)
         assert analysis.validate_action(G, "discard", {"cards": [0, 5]})

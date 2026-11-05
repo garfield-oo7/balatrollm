@@ -399,7 +399,7 @@ VOUCHERS: dict[str, tuple[str, str]] = {
     "Paint Brush": ("BUY", "+1 hand size"),
     "Palette": ("GOOD", "+1 hand size"),
     "Antimatter": ("BUY", "+1 joker slot"),
-    "Blank": ("GOOD", "does nothing but unlocks Antimatter; only with $35+"),
+    "Blank": ("NEVER", "does nothing by itself"),
     "Clearance Sale": ("GOOD", "25% off (Antes 1-4)"),
     "Liquidation": ("GOOD", "50% off"),
     "Overstock": ("GOOD", "3 shop slots, more jokers"),
