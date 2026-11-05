@@ -351,14 +351,14 @@ PLANET_HAND = {
 #   verdict: GOOD | SITUATIONAL | AVOID
 CONSUMABLES: dict[str, tuple[str, str]] = {
     "The Fool": ("SITUATIONAL", "copies the last Tarot/Planet used"),
-    "The Magician": ("SITUATIONAL", "Lucky on 2 cards you play"),
+    "The Magician": ("GOOD", "Lucky on 2 cards you play (grows Lucky Cat)"),
     "The High Priestess": ("GOOD", "2 random Planets (needs empty slots)"),
     "The Empress": ("GOOD", "Mult (+4) on 2 cards you play"),
     "The Emperor": ("GOOD", "2 random Tarots (needs empty slots)"),
     "The Hierophant": ("GOOD", "Bonus (+30 chips) on 2 cards you play"),
     "The Lovers": ("SITUATIONAL", "Wild on 1 off-suit card (Flush)"),
     "The Chariot": ("SITUATIONAL", "Steel on 1 card you HOLD (not play)"),
-    "Justice": ("GOOD", "Glass (x2) on 1 card you play"),
+    "Justice": ("GOOD", "Glass (x2) on 1 card you play (grows Glass Joker)"),
     "The Hermit": ("GOOD", "doubles money (max +$20); use at $10-$39"),
     "The Wheel of Fortune": ("SITUATIONAL", "1 in 4 edition on a joker; free gamble"),
     "Strength": ("SITUATIONAL", "+1 rank on up to 2 cards (makes pairs)"),
@@ -399,7 +399,7 @@ VOUCHERS: dict[str, tuple[str, str]] = {
     "Paint Brush": ("BUY", "+1 hand size"),
     "Palette": ("GOOD", "+1 hand size"),
     "Antimatter": ("BUY", "+1 joker slot"),
-    "Blank": ("GOOD", "does nothing but unlocks Antimatter; only with $35+"),
+    "Blank": ("NEVER", "does nothing by itself"),
     "Clearance Sale": ("GOOD", "25% off (Antes 1-4)"),
     "Liquidation": ("GOOD", "50% off"),
     "Overstock": ("GOOD", "3 shop slots, more jokers"),
@@ -498,6 +498,14 @@ SMALL_PLAY_MAINS = {"High Card", "Pair", "Three of a Kind"}  # Half Joker: <= 3 
 FLUSH_ONLY_TAROTS = {"The Star", "The Moon", "The Sun", "The World", "The Lovers"}
 PAIR_FIXER_TAROTS = {"Strength", "The Hanged Man", "Death", "Cryptid"}
 HERMIT_MAX_MONEY = 40  # at this much money, Death / The Hanged Man come first
+# Jokers that start at X1 Mult and grow -> (enhancement that grows it, Tarot
+# key that makes it, source text); no enhancement = grows on its own.
+GROWS_XMULT: dict[str, tuple[str | None, str | None, str]] = {
+    "Glass Joker": ("GLASS", "c_justice", "grows when Glass cards break; Glass cards"),
+    "Lucky Cat": ("LUCKY", "c_magician", "grows when Lucky cards trigger; Lucky cards"),
+    "Hologram": (None, None, "grows with every card added to your deck"),
+    "Constellation": (None, None, "grows with every Planet used"),
+}
 SUIT_BOSSES = {"The Club": "C", "The Goad": "S", "The Window": "D", "The Head": "H"}
 
 

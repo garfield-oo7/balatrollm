@@ -1094,6 +1094,37 @@ def blue_seal_count(G: dict[str, Any]) -> int:
     )
 
 
+def grows_xmult(G: dict[str, Any], card: dict[str, Any]) -> str:
+    """``[GROWS-XMULT] ...`` for a joker that starts at X1 Mult and grows.
+
+    Its SCORE reads +0 when bought, so the tag says whether the thing that
+    grows it is present: a Glass/Lucky card in the deck (the game only offers
+    Glass Joker / Lucky Cat once you own one) or nothing (it grows on its own).
+    """
+    grows = knowledge.GROWS_XMULT.get(str(card.get("label")))
+    if not grows:
+        return ""
+    enhancement, tarot_key, source = grows
+    if not enhancement:
+        return f"[GROWS-XMULT] starts at X1 | {source} | SOURCE PRESENT"
+    count = sum(
+        1
+        for area in ("cards", "hand")
+        for c in _area_cards(G, area)
+        if _norm(c)["enh"] == enhancement
+    )
+    tarots = [
+        str(c.get("label"))
+        for area in ("consumables", "shop", "pack")
+        for c in _area_cards(G, area)
+        if c.get("key") == tarot_key
+    ]
+    text = f"[GROWS-XMULT] starts at X1 | {source}: {count} in your deck"
+    if tarots:
+        text += f" ({tarots[0]} available makes more)"
+    return text + (" | SOURCE PRESENT" if count else " | no source yet")
+
+
 def owns_hologram(G: dict[str, Any]) -> bool:
     """Hologram grows with every card added, so extra playing cards help."""
     return any(j.get("key") == "j_hologram" for j in _area_cards(G, "jokers"))
@@ -1365,6 +1396,16 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         action = {"tool": "play", "cards": cards, "why": f"best play ({best['hand']})"}
     else:
         action = {"tool": "discard", "cards": discard, "why": "no visible play"}
+    # A Tarot with suggested targets costs no hand or discard: use it first
+    for i, c in enumerate(_area_cards(G, "consumables")):
+        if c.get("set") == "TAROT" and (targets := suggest_targets(G, c)):
+            action = {
+                "tool": "use",
+                "consumable": i,
+                "cards": targets,
+                "why": f"use {c.get('label')} first: it costs no hand or discard",
+            }
+            break
     return {
         "plan": plan,
         "progress": progress,
@@ -1461,13 +1502,18 @@ def suggest_targets(G: dict[str, Any], consumable: dict[str, Any]) -> list[int]:
     if key == "c_death":
         if len(visible) < 2:
             return []
-        # Copy a sealed card first, then a face card (Flush: MAIN_SUIT only),
-        # then what MAIN_HAND wants.
+        # Copy only a modified card (seal, enhancement or edition; Flush:
+        # MAIN_SUIT only): sealed first, then what MAIN_HAND wants.
+        modified = [
+            i
+            for i in visible
+            if (hand[i]["seal"] or hand[i]["enh"] or hand[i]["ed"])
+            and (not flush or i in on_suit)
+        ]
         ranked = sorted(
-            visible,
+            modified,
             key=lambda i: (
-                (not flush or i in on_suit) and hand[i]["seal"] is not None,
-                (not flush or i in on_suit) and hand[i]["rank"] in FACE_RANKS,
+                hand[i]["seal"] is not None,
                 0 if flush else rc[hand[i]["rank"]],
                 hand[i]["enh"] is not None,
                 i in on_suit,
@@ -1477,7 +1523,11 @@ def suggest_targets(G: dict[str, Any], consumable: dict[str, Any]) -> list[int]:
         )
         # Death turns the LEFT selected card into a copy of the RIGHT one, so
         # the junk card must sit at a lower index than the card to copy.
-        plain = [i for i in visible if not hand[i]["seal"] and not hand[i]["enh"]]
+        plain = [
+            i
+            for i in visible
+            if not hand[i]["seal"] and not hand[i]["enh"] and not hand[i]["ed"]
+        ]
         for best in ranked:
             junk = [
                 i
@@ -1794,6 +1844,14 @@ PAIR_SHAPE = {
 }
 
 
+def _face_up(card: dict[str, Any]) -> dict[str, Any]:
+    """Copy of ``card`` with its face-down flag cleared."""
+    state = card.get("state")
+    if isinstance(state, dict) and state.get("hidden"):
+        return {**card, "state": {**state, "hidden": False}}
+    return card
+
+
 def typical_play(G: dict[str, Any], plan: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Real deck cards forming a typical MAIN_HAND play (empty if impossible).
 
@@ -1801,7 +1859,9 @@ def typical_play(G: dict[str, Any], plan: dict[str, Any] | None = None) -> list[
     Flush: five middle-value cards of MAIN_SUIT.
     """
     plan = plan or main_hand_plan(G)
-    raw = [c for a in ("cards", "hand") for c in _area_cards(G, a)]
+    # Deck cards are face-down in the shop but their rank and suit are known;
+    # the typical play is hypothetical, so score them face-up.
+    raw = [_face_up(c) for a in ("cards", "hand") for c in _area_cards(G, a)]
     cards = [(c, _norm(c)) for c in raw if not _norm(c)["stone"]]
     shape = PAIR_SHAPE.get(plan["hand"])
     if shape:
@@ -1925,6 +1985,48 @@ def shop_impact(G: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _sell_veto(G: dict[str, Any], joker: dict[str, Any], full: bool) -> str | None:
+    """Refuse selling a joker unless it hurts you or makes room you can use.
+
+    A sale is fine for a [TRAP] / tier T joker, to make room for Judgement /
+    The Soul / Wraith, or when slots are full and a shop joker or Buffoon
+    pack is affordable with the sale money (an [XMULT] joker may use all of it).
+    """
+    label = str(joker.get("label") or joker.get("key") or "this joker")
+    info = knowledge.joker_info(label) or {}
+    ante = int(G.get("ante_num") or 1)
+    tier = info.get("early") if ante <= 3 else info.get("late")
+    if info.get("category") == "TRAP" or tier == "T":
+        return None
+    makes_joker = ("c_judgement", "c_soul", "c_wraith")
+    if any(c.get("key") in makes_joker for c in _area_cards(G, "consumables")):
+        return None
+    if not full:
+        return (
+            f"Keep {label}: your joker slots are not full, so selling only loses "
+            "a joker. Buy something else, use a card, or call next_round."
+        )
+    money = int(G.get("money") or 0) + int((joker.get("cost") or {}).get("sell") or 0)
+
+    def price(c: dict[str, Any]) -> int:
+        return int((c.get("cost") or {}).get("buy") or 0)
+
+    room_for = [
+        c for c in _area_cards(G, "shop") if c.get("set") == "JOKER" and price(c) <= money
+    ] + [
+        p
+        for p in _area_cards(G, "packs")
+        if "buffoon" in str(p.get("label", "")).lower() and price(p) <= money
+    ]
+    if not room_for:
+        return (
+            f"Keep {label}: even with its sell money (${money}) you cannot afford "
+            "a joker or Buffoon pack in this shop. Buy something else, use a "
+            "card, or call next_round."
+        )
+    return None
+
+
 def validate_action(
     G: dict[str, Any], method: str, params: dict[str, Any]
 ) -> str | None:
@@ -1948,6 +2050,13 @@ def validate_action(
                     f"Discard refused: cards {winners[0]['cards']} already make a "
                     f"{winners[0]['hand']} that WINS the blind. Play it instead."
                 )
+    if method == "sell" and "joker" in params and G.get("state") == "SHOP":
+        try:
+            target = _area_cards(G, "jokers")[int(params["joker"])]
+        except (IndexError, TypeError, ValueError):
+            target = None
+        if target is not None and (veto := _sell_veto(G, target, full)):
+            return veto
     if method == "buy" and "pack" in params and full:
         packs = _area_cards(G, "packs")
         try:
@@ -2129,6 +2238,7 @@ TEMPLATE_GLOBALS = {
     "boss_impact": boss_impact,
     "suggest_targets": suggest_targets,
     "joker_order": joker_order,
+    "grows_xmult": grows_xmult,
     "joker_tag": knowledge.joker_tag,
     "consumable_tag": knowledge.consumable_tag,
     "voucher_tag": knowledge.voucher_tag,
