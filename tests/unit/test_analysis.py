@@ -217,9 +217,10 @@ class TestLookAheadAndRefusals:
         # Big Blind: 3 hands at 1,100. The Flint at 60% pace: 4000 / 660 = 7 hands
         assert S["hands_needed"] == 3 and S["boss_hands"] == 7
         assert S["status"] == "TOO WEAK"
-        G["blinds"]["boss"]["name"] = "The Wall"  # 4000 / 1100 = 4 hands
+        G["blinds"]["boss"]["name"] = "The Wall"  # 6000 / 1100 = 6 hands > 4
+        G["blinds"]["boss"]["score"] = 6000
         assert analysis.run_status(G, [], history)["status"] == "TOO WEAK"
-        G["blinds"]["boss"]["score"] = 3000
+        G["blinds"]["boss"]["score"] = 4000  # 4 hands: the 4 you have
         assert analysis.run_status(G, [], history)["status"] == "ON TRACK"
         assert "spend money" in analysis.boss_impact({**G, "blinds": {"boss": {"name": "The Ox"}}})["prep"]
 
