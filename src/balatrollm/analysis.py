@@ -233,9 +233,10 @@ CONSUMABLE_TARGETS = {
 }
 
 # Boss look-ahead: scoring pace under a boss that cuts it, and hands you can
-# afford to need against it (The Needle allows one hand).
+# afford to need against it (Red Deck has 4; The Needle allows one).
 BOSS_PACE = {"The Flint": 0.6}
 BOSS_HANDS = {"The Needle": 1}
+BOSS_HANDS_DEFAULT = 4
 
 # White Stake base chips per ante (Small = 1x, Big = 1.5x, Boss = 2x).
 ANTE_BASE = {1: 300, 2: 800, 3: 2000, 4: 5000, 5: 11000, 6: 20000, 7: 35000, 8: 50000}
@@ -1754,7 +1755,7 @@ def run_status(
     if scores and boss_target:
         pace = sum(scores) / len(scores) * BOSS_PACE.get(boss_name, 1.0)
         boss_hands = -(-boss_target // max(int(pace), 1))
-        if boss_hands > BOSS_HANDS.get(boss_name, 3):
+        if boss_hands > BOSS_HANDS.get(boss_name, BOSS_HANDS_DEFAULT):
             status = "TOO WEAK"
     effective_floor = 0 if status == "TOO WEAK" else floor
 
