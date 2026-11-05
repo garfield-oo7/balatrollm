@@ -410,6 +410,10 @@ class TestPlanAndStatus:
         assert "1 in your deck | SOURCE PRESENT" in analysis.grows_xmult(G, glass)
         holo = joker("j_hologram", "Hologram")
         assert analysis.grows_xmult(G, holo).endswith("SOURCE PRESENT")
+        G["ante_num"] = 5  # late: only while you own no xMult joker
+        assert analysis.grows_xmult(G, holo).endswith("SOURCE PRESENT")
+        G["jokers"]["cards"].append(joker("j_duo", "The Duo"))
+        assert "too late to grow" in analysis.grows_xmult(G, holo)
         assert analysis.grows_xmult(G, joker("j_joker", "Joker")) == ""
 
     def test_magician_is_good(self) -> None:
