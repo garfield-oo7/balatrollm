@@ -585,4 +585,8 @@ class TestShopImpact:
         sm = StrategyManager("mastery")
         text = sm.render_gamestate(self._shop(), rounds=[], history=[], flags={})
         assert "TYPICAL Pair" in text and "SCORE +320 per hand" in text
+        assert "WEAKEST:" not in text  # only named once slots are full
+        G = self._shop()
+        G["jokers"]["limit"] = len(G["jokers"]["cards"])
+        text = sm.render_gamestate(G, rounds=[], history=[], flags={})
         assert "WEAKEST: 0 Jolly Joker" in text
