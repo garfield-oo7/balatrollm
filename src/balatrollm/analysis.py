@@ -1057,9 +1057,9 @@ def pct(value: float) -> str:
 ################################################################################
 
 STRONG_DRAW = 0.5  # discard toward a MAIN_HAND draw that completes this often
-# Antes 1-2: chase a Flush/Straight that would beat the WHOLE blind in one hand
-# (saves hands, each worth $1) at this chance with 2+ discards left.
-ONE_SHOT_DRAW = 0.30
+# Ante 1: keep discarding toward a Flush/Straight draw while the chance to hit
+# it within the remaining discards is at least this.
+CHASE_DRAW = 0.5
 WIN_MARGIN = 1.10  # a play is marked WINS only if its floor estimate >= 110% of NEED
 PAIR_FAMILY = {"Pair", "Two Pair", "Three of a Kind", "Full House", "Four of a Kind"}
 
@@ -1103,7 +1103,7 @@ def main_suit(G: dict[str, Any]) -> str:
     return max("HDCS", key=lambda s: (counts[s], -"HDCS".index(s)))
 
 
-OPEN_ANTES = 2  # Antes 1-2: also take Flush/Straight when they are dealt
+OPEN_ANTES = 1  # Ante 1: chase Flush/Straight draws; from Ante 2 build MAIN_HAND
 FLUSH_ENGINES = {"j_tribe", "j_smeared", "j_four_fingers"}
 SUIT_SHARE_FOR_FLUSH = 0.5  # deck this concentrated in one suit makes Flush reliable
 
@@ -1149,7 +1149,7 @@ def main_hand_plan(G: dict[str, Any]) -> dict[str, Any]:
         )
     is_open = ante <= OPEN_ANTES and hand != "Flush"
     if is_open:
-        reason += "; Antes 1-2: a dealt Flush/Straight is fine too"
+        reason += "; Ante 1: chase Flush/Straight draws first"
     return {
         "hand": hand,
         "family": knowledge.HAND_FAMILY.get(hand, "pair"),
@@ -1254,23 +1254,24 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
     for d in analysis_["draws"]:
         if d["kind"] not in plan["draw_kinds"]:
             continue
-        one_shot = (
-            ante <= OPEN_ANTES
-            and remaining > 0
-            and d.get("if_complete", 0) >= margin * remaining
+        # chance to hit within ALL remaining discards (approximation)
+        within = 1 - (1 - d["chance"]) ** max(discards, 1)
+        chase = ante <= OPEN_ANTES and discards > 0 and within >= CHASE_DRAW
+        draws.append(
+            {
+                **d,
+                "within": within,
+                "chase": chase,
+                "one_shot": remaining > 0
+                and d.get("if_complete", 0) >= margin * remaining,
+            }
         )
-        draws.append({**d, "one_shot": one_shot})
-    one_shot_need = ONE_SHOT_DRAW if discards >= 2 else STRONG_DRAW
-    one_shot_draw = max(
-        (
-            d
-            for d in draws
-            if d["one_shot"] and d["chance"] >= one_shot_need and d["discard"]
-        ),
-        key=lambda d: (round(d["chance"], 2), d["if_complete"]),
+    chase_draw = max(
+        (d for d in draws if d["chase"] and d["discard"]),
+        key=lambda d: (round(d["within"], 2), d["if_complete"]),
         default=None,
     )
-    strong_draw = one_shot_draw or next(
+    strong_draw = chase_draw or next(
         (d for d in draws if d["chance"] >= STRONG_DRAW and d["discard"]),
         None,
     )
@@ -1294,12 +1295,12 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         if blue_in_hand and not (blue_in_hand & set(best["cards"])):
             why += " and keeps the Blue Seal card in hand"
         action = {"tool": "play", "cards": best["cards"], "why": why}
-    elif discards > 0 and discard and one_shot_draw:
+    elif discards > 0 and discard and chase_draw:
         action = {
             "tool": "discard",
             "cards": discard,
-            "why": f"{one_shot_draw['kind']} draw ({round(one_shot_draw['chance'] * 100)}%) "
-            "would WIN the blind in one hand; every unused hand pays $1",
+            "why": f"Ante 1: chase the {chase_draw['kind']} "
+            f"({round(chase_draw['within'] * 100)}% to hit with your discards)",
         }
     elif discards > 0 and discard and strong_draw:
         action = {
@@ -1527,7 +1528,7 @@ def ante_goals(
     level = int((hands.get(plan["hand"]) or {}).get("level", 1))
     scale = sum(1 for i in infos if i["category"] == "SCALE")
     filler = sum(1 for i in infos if i["category"] in ("ECON", "CHIPS", "TRAP"))
-    want_jokers = {1: 2, 2: 3}.get(ante, limit)
+    want_jokers = {1: 2, 2: 4}.get(ante, limit)
     want_xmult = 0 if ante <= 3 else (1 if ante <= 5 else 2)
     want_level = max(1, ante - 1) if ante >= 3 else 1
     goals = [

@@ -238,9 +238,9 @@ class TestPlanAndStatus:
         assert plan["hand"] == "Two Pair"
         assert plan["open"] and plan["draw_kinds"] == {"Flush", "Straight"}
 
-    def test_open_phase_ends_at_ante_three(self) -> None:
+    def test_open_phase_ends_at_ante_two(self) -> None:
         G = make_state("H_2")
-        G["ante_num"] = 3
+        G["ante_num"] = 2
         plan = analysis.main_hand_plan(G)
         assert not plan["open"] and plan["draw_kinds"] == {"Two Pair"}
 
@@ -399,25 +399,31 @@ class TestPlanAwareConsumables:
         assert knowledge.consumable_tag(strength, "Flush").startswith("[SITUATIONAL]")
 
 
-class TestOneShotDraws:
+class TestAnteOneChase:
     JOKER = [joker("j_joker", "Joker", "+4 Mult")]
 
-    def test_one_shot_straight_beats_pace_pair_in_ante_one(self) -> None:
-        # Pair of 4s reaches PER_HAND, but a Straight (T needed, ~33%) wins outright.
+    def test_ante_one_chases_straight_over_pace_pair(self) -> None:
+        # Pair of 4s reaches PER_HAND, but Ante 1 keeps digging for the Straight:
+        # ~33% per discard, ~80% within 4 discards.
         G = make_state("S_J D_Q C_K H_A H_3 S_4 C_4 D_2", self.JOKER)
         advice = analysis.play_advice(G)
-        straight = next(d for d in advice["draws"] if d["kind"] == "Straight")
-        assert straight["one_shot"] and 0.30 <= straight["chance"] < 0.5
+        straight = next(d for d in advice["draws"] if d["chance"] < 0.5)
+        assert straight["chase"] and straight["within"] >= 0.5
         assert advice["action"]["tool"] == "discard"
-        assert "one hand" in advice["action"]["why"]
+        assert "chase" in advice["action"]["why"]
         assert {0, 1, 2, 3} & set(advice["action"]["cards"]) == set()
 
-    def test_no_one_shot_after_open_antes(self) -> None:
+    def test_ante_one_chase_stops_without_discards(self) -> None:
+        G = make_state("S_J D_Q C_K H_A H_3 S_4 C_4 D_2", self.JOKER, discards_left=0)
+        advice = analysis.play_advice(G)
+        assert advice["action"]["tool"] == "play"
+
+    def test_no_chase_from_ante_two(self) -> None:
         G = make_state("S_J D_Q C_K H_A H_3 S_4 C_4 D_2", self.JOKER)
-        G["ante_num"] = 3
+        G["ante_num"] = 2
         advice = analysis.play_advice(G)
         assert all(d["kind"] == "Two Pair" for d in advice["draws"])
-        assert "one hand" not in advice["action"]["why"]
+        assert "chase" not in advice["action"]["why"]
 
     def test_exact_win_without_jokers(self) -> None:
         # No jokers: the estimate is exact, so 300 vs 300 needed WINS.

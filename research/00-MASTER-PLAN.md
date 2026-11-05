@@ -9,14 +9,13 @@
 > with 2+ flush jokers and 0 pair jokers; or when half the deck is one suit. Half Joker → Pair;
 > The Trio (or Zany + Wily) → Three of a Kind.
 >
-> **R2′. Antes 1–2 are "open":** a dealt Flush or Straight is still played, and Flush/Straight draws of 50%+ are
-> still chased. From Ante 3 only MAIN_HAND draws are shown or chased. **ONE-SHOT rule (Antes 1–2):** a
-> Flush or Straight draw is marked ONE-SHOT and chased at 30%+ (with 2+ discards left) if, once it hits,
-> it would beat the whole blind in one hand. The projection uses the median completing card. This applies
-> even when a Pair already reaches pace, because every unused hand pays $1. Without jokers the estimate is
-> exact, so WINS needs only 100% of NEED; the 110% margin applies once jokers are involved. Note: with no
-> jokers a typical Ante 1 Flush scores about 270–290 against a 300 target, so one-shots usually need a
-> +Mult joker or high cards.
+> **R2′. Only Ante 1 is "open" (owner decision).** In Ante 1, Flush and Straight draws are chased. The bot keeps
+> discarding toward a draw marked CHASE while the chance to hit it within the remaining discards,
+> 1−(1−p)^discards, is ≥50% and no listed play WINS. This holds even if a Pair keeps pace and even if the draw
+> would not win the blind in one hand. When discards run out, it plays the best listed play and tries again
+> next hand. From Ante 2, Flush and Straight are not chased: MAIN_HAND is the Pair family, and the shop focuses
+> on jokers (4 jokers by the end of Ante 2, 1 reroll allowed in Antes 2–3). Without jokers the estimate is
+> exact, so WINS needs 100% of NEED; the 110% margin applies once jokers are involved.
 >
 > **R5′. GOALS checklist instead of a milestone sentence:**
 > - Ante 1: 2 jokers; Ante 2: 3 jokers; Ante 3+: all slots full.

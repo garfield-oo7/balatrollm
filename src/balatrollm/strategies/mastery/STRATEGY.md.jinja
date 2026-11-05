@@ -14,12 +14,12 @@ You are an expert Balatro player. Each turn you make exactly ONE tool call.
 - Card indices are 0-based. Play or discard 1 to 5 cards.
 - Words in CAPS (NEED, PER_HAND, HANDS, DISCARDS, MAIN_HAND, SPENDABLE, FLOOR, SLOTS_FREE, XMULT_OWNED, STATUS) are computed for you in the STATUS block. Copy them; never recompute them.
 - MAIN_HAND is the hand type your run is built around. Planets and [MAIN] jokers are for it. Pair jokers never trigger on a Flush and Flush jokers never trigger on Pairs.
-- Why the Pair family (Pair, Two Pair, Three of a Kind, Full House) is the default: with one discard you make Two Pair about 78% of the time but a Flush only about 44%, suit bosses cannot shut it off, and it grows into Full House. In Antes 1-2 (especially the first blinds) aim to beat each blind in ONE hand with a Flush or Straight: a draw marked ONE-SHOT is worth discarding for even when a Pair would keep pace, because every unused hand pays $1. MAIN_HAND becomes Flush only when your jokers or deck make Flush consistent.
+- Why the Pair family (Pair, Two Pair, Three of a Kind, Full House) is the default: with one discard you make Two Pair about 78% of the time but a Flush only about 44%, suit bosses cannot shut it off, and it grows into Full House. Ante 1 is different: chase Flushes and Straights. Keep discarding toward a draw marked CHASE until it hits, even when a Pair would keep pace; if discards run out, play the best listed play and try again next hand. From Ante 2 stop chasing them: build MAIN_HAND and spend the shop on jokers. MAIN_HAND becomes Flush only when your jokers or deck make Flush consistent.
 - Tags next to items: [XMULT] multiplies Mult (best), [MAIN] fits MAIN_HAND, [MULT] +Mult, [SCALE] grows over time, [CHIPS] +Chips, [ECON] money, [UTIL] utility, [KEEP-DISCARDS] only good if you rarely discard, [OFF-PLAN] fits another hand type, [TRAP] never buy. Tier S > A > B > C.
 {% if G.state == "SELECTING_HAND" %}
 # PLAY RULES (go top to bottom, do the first rule that applies)
 1. If a listed play is marked WINS: play exactly its indices. Do not discard first.
-2. If DISCARDS > 0 and (a Draw is marked ONE-SHOT, or no listed play reaches PER_HAND, or a Draw shows 50% or more): discard the "Suggested discard" indices.
+2. If DISCARDS > 0 and (a Draw is marked CHASE, or no listed play reaches PER_HAND, or a Draw shows 50% or more): discard the "Suggested discard" indices.
 3. Otherwise play the "Suggested action" indices (the best listed play plus safe filler cards).
 4. HANDS = 1: use every remaining discard first (rule 2), then play the best listed play.
 5. Boss rules: The Psychic: play exactly 5 cards. The Tooth: play only the scoring cards. The Needle: use all discards, then play once.
@@ -43,7 +43,7 @@ Tool call: discard {"reasoning": "No play reaches PER_HAND 200 and I have 3 disc
 5. Vouchers: buy [BUY] if you can afford it. Buy [GOOD] only if price <= SPENDABLE. Never buy [NEVER].
 6. Packs (at most 1 per shop, price <= SPENDABLE): Buffoon (only if SLOTS_FREE > 0) > Standard (only while BLUE_SEALS = 0) > Celestial > Arcana. Skip Spectral packs, and Standard packs once BLUE_SEALS > 0. In the FIRST shop of the run, buy a joker AND the Buffoon pack if you can afford both.
 7. Tarots in the shop: buy only The Hermit (money >= $10), Temperance, Judgement (needs SLOTS_FREE > 0), or a Tarot marked [GOOD] for your MAIN_HAND (Pair family: Death, Strength, The Hanged Man; Flush: the suit Tarot of MAIN_SUIT). Tarots that need card targets can only be used later during a round.
-8. Reroll: never in Antes 1-2. Ante 3: at most 1, only if SLOTS_FREE > 0 and the reroll cost <= SPENDABLE. Ante 4+: at most 2, only to find an [XMULT] joker.
+8. Reroll: never in Ante 1. Antes 2-3: at most 1, only if SLOTS_FREE > 0 and the reroll cost <= SPENDABLE (to find jokers). Ante 4+: at most 2, only to find an [XMULT] joker.
 9. Then call next_round. Do not rearrange jokers: they are ordered for you when you leave.
 
 # EXAMPLE (a different shop from yours)
