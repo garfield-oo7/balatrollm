@@ -242,3 +242,24 @@ STRATEGY.md.jinja branches on `G.state` (each variant is a stable cached prefix)
 3. Is the prompt structure (core facts + ante plan + phase rulebook + reference + decide-now) the right way to
    teach a small model? What would you cut?
 4. Any facts in the research that are wrong or any rule that would mislead a small model?
+
+---
+
+## 7. Implementation status (v2)
+
+| Plan item | Where | Status |
+|---|---|---|
+| Hand analyser, floor estimates, WINS ≥ 1.10×, draws + odds, suggested discard/action (R1, R2, R4) | `src/balatrollm/analysis.py` (`play_advice`, `estimate_play`, `main_hand_plan`) | Done, unit-tested |
+| STATUS block with CAPS tokens, milestone + priority, new power check (R5, R6) | `analysis.run_status`, `mastery/GAMESTATE.md.jinja` | Done |
+| Inline joker / consumable / voucher / boss annotations with corrected tiers (R3, R10) | `src/balatrollm/knowledge.py` (all 150 jokers) | Done |
+| Phase-specific rulebook in the `system` role, worked example per phase, DECIDE NOW tail (R7) | `mastery/STRATEGY.md.jinja`, `mastery/MEMORY.md.jinja`, manifest `harness.system_prompt` | Done (~1.1–1.4k tokens per decision vs ~13.4k for `default`) |
+| Reasoning-first tool schemas, max 5 cards | `mastery/TOOLS.json` | Done |
+| Outcome memory: per-action result, estimate vs actual, round log (R4 calibration) | `bot.py`, `analysis.summarize_outcome`, `analysis.round_record` | Done (estimate vs actual also logged in `run.log`) |
+| Harness pre-decisions behind manifest flags: veto bad moves, auto joker reorder, rearrange loop guard (R8) | `bot.py` + `analysis.validate_action`, `analysis.joker_order` | Done |
+| Economy simplification, never-buy list, first-shop Buffoon, no early rerolls (R9) | `mastery/STRATEGY.md.jinja`, `knowledge.VOUCHERS`, `analysis.MONEY_FLOOR` | Done |
+| Evaluation protocol (R11) | `config/mastery.yaml` (5 seeds × 3 runs) | Ready to run; needs a live Balatro + API key |
+| Rule-based Small-Blind skip, `tool_choice: required`, max-calls cap | — | Deferred (low lift / provider-dependent) |
+
+Not changed on purpose: the `default`, `aggressive` and `conservative` strategies render exactly as before
+(except the `default` memory line now shows the reasoning text that it previously tried and failed to render),
+so they remain a clean A/B baseline.
