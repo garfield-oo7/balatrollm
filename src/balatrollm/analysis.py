@@ -232,6 +232,11 @@ CONSUMABLE_TARGETS = {
     "c_cryptid": (1, 1),
 }
 
+# Boss look-ahead: scoring pace under a boss that cuts it, and hands you can
+# afford to need against it (The Needle allows one hand).
+BOSS_PACE = {"The Flint": 0.6}
+BOSS_HANDS = {"The Needle": 1}
+
 # White Stake base chips per ante (Small = 1x, Big = 1.5x, Boss = 2x).
 ANTE_BASE = {1: 300, 2: 800, 3: 2000, 4: 5000, 5: 11000, 6: 20000, 7: 35000, 8: 50000}
 # Money to keep after shopping, by ante (see research/03-economy-shop-tags.md).
@@ -1618,12 +1623,17 @@ def boss_impact(
         impact = "Score check: buy raw score (xMult/+Mult joker, MAIN_HAND planet) before it."
     elif name == "Verdant Leaf":
         impact = "Keep a cheap joker you can sell at the start of the round."
+    prep = knowledge.BOSS_PREP.get(name, "")
+    if name in knowledge.SUIT_BOSSES:
+        suit = SUIT_NAME[knowledge.SUIT_BOSSES[name]]
+        prep = f"{suit} score 0 against it: jokers that need {suit} do nothing this boss"
     return {
         "name": name,
         "effect": effect,
         "score": boss.get("score") or 0,
         "counter": knowledge.boss_counter(name),
         "impact": impact,
+        "prep": prep,
     }
 
 
@@ -1735,6 +1745,17 @@ def run_status(
         status = "ON TRACK" if hands_needed <= 3 else "TOO WEAK"
     elif rounds:
         status = "ON TRACK" if int(rounds[-1].get("hands_left", 0)) >= 1 else "TOO WEAK"
+    # Look ahead to this ante's boss (in the shop it is always UPCOMING): if it
+    # needs too many hands at the current pace, spend on score now.
+    boss = (G.get("blinds") or {}).get("boss") or {}
+    boss_name = str(boss.get("name") or "")
+    boss_target = int(boss.get("score") or 0)
+    boss_hands = None
+    if scores and boss_target:
+        pace = sum(scores) / len(scores) * BOSS_PACE.get(boss_name, 1.0)
+        boss_hands = -(-boss_target // max(int(pace), 1))
+        if boss_hands > BOSS_HANDS.get(boss_name, 3):
+            status = "TOO WEAK"
     effective_floor = 0 if status == "TOO WEAK" else floor
 
     econ = sum(1 for i in infos if i["category"] == "ECON")
@@ -1773,6 +1794,10 @@ def run_status(
         "xmult_owned": xmult,
         "status": status,
         "hands_needed": hands_needed,
+        "boss_name": boss_name,
+        "boss_target": boss_target,
+        "boss_hands": boss_hands,
+        "boss_halved": boss_name in BOSS_PACE,
         "recent_scores": scores,
         "next_target": nxt_target,
         "milestone": milestone,
@@ -2077,6 +2102,64 @@ def shop_impact(G: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def swap_plan(
+    G: dict[str, Any], method: str, params: dict[str, Any]
+) -> dict[str, Any] | str | None:
+    """Sell-first plan for buying a shop joker while joker slots are full.
+
+    Returns None when no swap is needed, a refusal message when the swap is
+    bad, or ``{"sell": index, "label": WEAKEST, "buy": label}``. The swap is
+    allowed for an [XMULT] joker, a [GROWS-XMULT] joker with a source, or a
+    joker that scores more than the line-up with WEAKEST in it.
+    """
+    if method != "buy" or "card" not in params or G.get("state") != "SHOP":
+        return None
+    jokers = G.get("jokers") or {}
+    if int(jokers.get("count", 0)) < int(jokers.get("limit", 5)):
+        return None
+    try:
+        card = _area_cards(G, "shop")[int(params["card"])]
+    except (IndexError, TypeError, ValueError):
+        return None
+    if card.get("set") != "JOKER" or _norm(card)["ed"] == "NEGATIVE":
+        return None
+    label = str(card.get("label") or card.get("key"))
+    weakest = shop_impact(G).get("weakest")
+    if not weakest:
+        return (
+            f"Your joker slots are full and every joker you own is kept (xMult, "
+            f"scaling, economy or a synergy pair), so there is no room for {label}. "
+            "Buy something else or call next_round."
+        )
+    owned = _area_cards(G, "jokers")
+    out = owned[int(weakest["index"])]
+    info = knowledge.joker_info(label) or {}
+    big = info.get("category") == "XMULT" or "SOURCE PRESENT" in grows_xmult(G, card)
+    if not big:
+        plan = main_hand_plan(G)
+        plays = typical_plays(G, plan)
+        rest = [j for k, j in enumerate(owned) if k != int(weakest["index"])]
+
+        def average(js: list[dict[str, Any]]) -> float:
+            G2 = _with_jokers(G, js)
+            ests = [estimate_play(G2, p, [], expected=True) for p in plays]
+            return sum(e["score"] for e in ests) / max(len(ests), 1)
+
+        if plays and average([*rest, card]) <= average(owned):
+            return (
+                f"Swapping {weakest['label']} (WEAKEST) for {label} would not raise "
+                f"your score, so keep your jokers. Buy something else or call next_round."
+            )
+    price = int((card.get("cost") or {}).get("buy") or 0)
+    money = int(G.get("money") or 0) + int((out.get("cost") or {}).get("sell") or 0)
+    if price > money:
+        return (
+            f"Even after selling {weakest['label']} you would have ${money}, not "
+            f"enough for {label} (${price}). Buy something else or call next_round."
+        )
+    return {"sell": int(weakest["index"]), "label": weakest["label"], "buy": label}
+
+
 def synergy_keep(G: dict[str, Any]) -> dict[str, str]:
     """Owned jokers never to sell because of a partner joker: label -> reason.
 
@@ -2100,8 +2183,8 @@ def _sell_veto(G: dict[str, Any], joker: dict[str, Any], full: bool) -> str | No
     """Refuse selling a joker unless it hurts you or makes room you can use.
 
     A sale is fine for a [TRAP] / tier T joker, to make room for Judgement /
-    The Soul / Wraith, or when slots are full and a shop joker or Buffoon
-    pack is affordable with the sale money (an [XMULT] joker may use all of it).
+    The Soul / Wraith, or when slots are full and a Buffoon pack is affordable
+    with the sale money. Joker-for-joker swaps go through swap_plan instead.
     """
     label = str(joker.get("label") or joker.get("key") or "this joker")
     info = knowledge.joker_info(label) or {}
@@ -2124,18 +2207,16 @@ def _sell_veto(G: dict[str, Any], joker: dict[str, Any], full: bool) -> str | No
     def price(c: dict[str, Any]) -> int:
         return int((c.get("cost") or {}).get("buy") or 0)
 
-    room_for = [
-        c for c in _area_cards(G, "shop") if c.get("set") == "JOKER" and price(c) <= money
-    ] + [
+    buffoon = [
         p
         for p in _area_cards(G, "packs")
         if "buffoon" in str(p.get("label", "")).lower() and price(p) <= money
     ]
-    if not room_for:
+    if not buffoon:
         return (
-            f"Keep {label}: even with its sell money (${money}) you cannot afford "
-            "a joker or Buffoon pack in this shop. Buy something else, use a "
-            "card, or call next_round."
+            f"Keep {label}: to replace a joker, just buy the new one (the harness "
+            "sells WEAKEST for you if the new joker is better). Otherwise buy "
+            "something else, use a card, or call next_round."
         )
     return None
 
@@ -2147,6 +2228,8 @@ def validate_action(
     jokers = G.get("jokers") or {}
     full = int(jokers.get("count", 0)) >= int(jokers.get("limit", 5))
     cards = params.get("cards")
+    if method == "discard" and int((G.get("round") or {}).get("discards_left", 1)) <= 0:
+        return "No discards left: play the best listed play instead."
     if method in ("play", "discard") and isinstance(cards, list):
         if not cards:
             return "Select at least 1 card."

@@ -27,7 +27,7 @@
 - FLOOR ${{ S.effective_floor }}, SPENDABLE ${{ S.spendable }} (interest next round ${{ S.interest }}){% if G.state == "SHOP" and S.spendable < S.money %} | an [XMULT] joker may use all ${{ S.money }}{% endif %}
 - ECON_OK {{ "YES" if S.econ_ok else "NO" }} (economy jokers owned {{ S.econ_owned }}) | BLUE_SEALS {{ S.blue_seals }}{% if not S.blue_seals %} (none yet: Standard packs and Blue Seal cards are wanted){% endif %}{% if S.hologram %} | HOLOGRAM owned (every card added helps){% endif %}
 - INTEREST_SPARE ${{ S.interest_spare }} (spend up to this and next round's interest stays ${{ S.interest }})
-- STATUS: {{ S.status }}{% if S.hands_needed %} (next blind {{ S.next_target | fmt_num }} needs about {{ S.hands_needed }} hands at your recent scores){% endif %}{% if S.status == "TOO WEAK" %} -> spend money on score now; FLOOR is $0{% endif %}
+- STATUS: {{ S.status }}{% if S.hands_needed %} (next blind {{ S.next_target | fmt_num }} needs about {{ S.hands_needed }} hands at your recent scores{% if S.boss_hands and S.boss_target != S.next_target %}; boss {{ S.boss_name }} {{ S.boss_target | fmt_num }} needs about {{ S.boss_hands }}{% if S.boss_halved %} (it halves your base){% endif %}{% elif S.boss_hands and S.boss_halved %}, more under {{ S.boss_name }}: about {{ S.boss_hands }}{% endif %}){% endif %}{% if S.status == "TOO WEAK" %} -> spend money on score now; FLOOR is $0{% endif %}
 - GOALS for Ante {{ S.ante }}: {% for g in S.goals %}[{{ "x" if g.done else " " }}] {{ g.text }}{% if not loop.last %}; {% endif %}{% endfor %}
 - PRIORITY: {{ S.priority }}.
 {%- if S.observatory %}
@@ -37,6 +37,9 @@
 - Boss this ante: {{ boss.name }} ({{ boss.score | fmt_num }}): {{ boss.effect }}{% if boss.counter %}. Counter: {{ boss.counter }}{% endif %}
 {%- if boss.impact %}
 - Boss impact: {{ boss.impact }}
+{%- endif %}
+{%- if boss.prep and G.state in ["SHOP", "SMODS_BOOSTER_OPENED"] %}
+- Boss prep (plan this shop for it): {{ boss.prep }}
 {%- endif %}
 {%- endif %}
 {% if G.state == "SELECTING_HAND" %}
