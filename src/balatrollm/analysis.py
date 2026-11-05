@@ -1760,6 +1760,150 @@ def joker_order(G: dict[str, Any]) -> list[int] | None:
     return None if order == list(range(len(jokers))) else order
 
 
+################################################################################
+# Shop impact: what each item adds to a typical MAIN_HAND play
+################################################################################
+
+PAIR_SHAPE = {
+    "Pair": [2],
+    "Two Pair": [2, 2],
+    "Three of a Kind": [3],
+    "Full House": [3, 2],
+    "Four of a Kind": [4],
+}
+
+
+def typical_play(G: dict[str, Any], plan: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Real deck cards forming a typical MAIN_HAND play (empty if impossible).
+
+    Pair family: the ranks you own most copies of (ties: higher chips).
+    Flush: five middle-value cards of MAIN_SUIT.
+    """
+    plan = plan or main_hand_plan(G)
+    raw = [c for a in ("cards", "hand") for c in _area_cards(G, a)]
+    cards = [(c, _norm(c)) for c in raw if not _norm(c)["stone"]]
+    shape = PAIR_SHAPE.get(plan["hand"])
+    if shape:
+        by_rank: dict[str, list[dict[str, Any]]] = {}
+        for c, n in cards:
+            if n["rank"]:
+                by_rank.setdefault(n["rank"], []).append(c)
+        ranks = sorted(
+            by_rank, key=lambda r: (len(by_rank[r]), CHIP_VALUE[r]), reverse=True
+        )
+        play: list[dict[str, Any]] = []
+        used: set[str] = set()
+        for need in shape:
+            r = next((r for r in ranks if r not in used and len(by_rank[r]) >= need), None)
+            if r is None:
+                return []
+            used.add(r)
+            play += by_rank[r][:need]
+        return play
+    if plan["hand"] == "Flush":
+        suit = plan.get("suit") or main_suit(G)
+        same = sorted(
+            (c for c, n in cards if n["suit"] == suit),
+            key=lambda c: CHIP_VALUE.get(_norm(c)["rank"] or "", 0),
+        )
+        if len(same) < 5:
+            return []
+        mid = max(0, len(same) // 2 - 2)
+        return same[mid : mid + 5]
+    return []
+
+
+def _with_jokers(G: dict[str, Any], jokers: list[dict[str, Any]]) -> dict[str, Any]:
+    area = dict(G.get("jokers") or {})
+    area["cards"] = jokers
+    area["count"] = len(jokers)
+    G2 = {**G, "jokers": area}
+    order = joker_order(G2)
+    if order:
+        area["cards"] = [jokers[i] for i in order]
+    return G2
+
+
+def shop_impact(G: dict[str, Any]) -> dict[str, Any]:
+    """Score change per hand of a typical MAIN_HAND play for each shop/pack
+    joker and MAIN_HAND planet, and what each owned joker contributes."""
+    plan = main_hand_plan(G)
+    play = typical_play(G, plan)
+    out: dict[str, Any] = {
+        "hand": plan["hand"],
+        "cards": [card_name(c) for c in play],
+        "score": 0,
+        "shop": {},
+        "pack": {},
+        "owned": {},
+        "weakest": None,
+    }
+    if not play:
+        return out
+    owned = _area_cards(G, "jokers")
+    base = estimate_play(_with_jokers(G, owned), play, [])
+    if base["hand"] != plan["hand"]:
+        return out
+    score = int(base["score"])
+    out["score"] = score
+
+    def describe(new_score: float, unknown: bool) -> str:
+        if unknown:
+            return "effect not computed"
+        delta = int(new_score) - score
+        pct_txt = f" ({round(delta * 100 / score)}%)" if score else ""
+        return f"{'+' if delta >= 0 else ''}{fmt_num(delta)} per hand{pct_txt}"
+
+    def item_delta(card: dict[str, Any]) -> str | None:
+        if card.get("set") == "JOKER":
+            est = estimate_play(_with_jokers(G, [*owned, card]), play, [])
+            label = str(card.get("label") or card.get("key"))
+            return describe(est["score"], label in est["unknown"])
+        if card.get("set") == "PLANET":
+            hand = knowledge.planet_hand(card.get("label"))
+            if hand != plan["hand"]:
+                return None
+            levels = dict(G.get("hands") or {})
+            cur = dict(levels.get(hand) or {})
+            dc, dm = LEVEL_UP.get(hand, (0, 0))
+            cur["chips"] = float(cur.get("chips", 0)) + dc
+            cur["mult"] = float(cur.get("mult", 0)) + dm
+            levels[hand] = cur
+            est = estimate_play({**_with_jokers(G, owned), "hands": levels}, play, [])
+            return describe(est["score"], False)
+        return None
+
+    for area in ("shop", "pack"):
+        for i, card in enumerate(_area_cards(G, area)):
+            d = item_delta(card)
+            if d:
+                out[area][i] = d
+    contrib = {}
+    for i, j in enumerate(owned):
+        info = knowledge.joker_info(j.get("label")) or {}
+        rest = [x for k, x in enumerate(owned) if k != i]
+        est = estimate_play(_with_jokers(G, rest), play, [])
+        label = str(j.get("label") or j.get("key"))
+        if label in base["unknown"]:
+            out["owned"][i] = "effect not computed"
+            continue
+        gain = score - int(est["score"])
+        contrib[i] = (gain, info.get("category"))
+        out["owned"][i] = f"adds {fmt_num(gain)} per hand"
+    # weakest = least score among jokers that do not grow or pay money
+    ante = int(G.get("ante_num") or 1)
+    protected = {"SCALE", "XMULT"} | ({"ECON"} if ante <= 4 else set())
+    candidates = [(gain, i) for i, (gain, cat) in contrib.items() if cat not in protected]
+    if candidates:
+        gain, i = min(candidates)
+        out["weakest"] = {
+            "index": i,
+            "label": owned[i].get("label"),
+            "gain": gain,
+        }
+    return out
+
+
 def validate_action(
     G: dict[str, Any], method: str, params: dict[str, Any]
 ) -> str | None:
@@ -1959,6 +2103,7 @@ TEMPLATE_GLOBALS = {
     "play_advice": play_advice,
     "main_hand_plan": main_hand_plan,
     "run_status": run_status,
+    "shop_impact": shop_impact,
     "boss_impact": boss_impact,
     "suggest_targets": suggest_targets,
     "joker_order": joker_order,

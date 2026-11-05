@@ -502,3 +502,43 @@ class TestFableReviewFixes:
         G["ante_num"] = 2
         text = sm.render_gamestate(G, rounds=[], history=[], flags={})
         assert "Suggested discard: none: play instead" in text
+
+
+class TestShopImpact:
+    def _shop(self) -> dict[str, Any]:
+        G = make_state(
+            "H_2",
+            [joker("j_jolly", "Jolly Joker"), joker("j_golden", "Golden Joker")],
+            state="SHOP",
+        )
+        G["hand"]["cards"] = []
+        G["shop"] = {
+            "cards": [
+                joker("j_duo", "The Duo"),
+                joker("j_zany", "Zany Joker"),
+                {"key": "c_uranus", "set": "PLANET", "label": "Uranus", "cost": {"buy": 3}},
+                {"key": "c_mercury", "set": "PLANET", "label": "Mercury", "cost": {"buy": 3}},
+            ]
+        }
+        return G
+
+    def test_deltas_use_typical_main_hand(self) -> None:
+        impact = analysis.shop_impact(self._shop())
+        # Two Pair of Aces and 10s: (20 + 42) chips x (2 + 8 Jolly) mult
+        assert impact["hand"] == "Two Pair" and impact["score"] == 620
+        assert impact["shop"][0].startswith("+620")  # The Duo doubles it
+        assert impact["shop"][1].startswith("+0")  # Zany needs Three of a Kind
+        assert impact["shop"][2].startswith("+282")  # Uranus: 82 x 11
+        assert 3 not in impact["shop"]  # Mercury levels another hand
+
+    def test_weakest_skips_econ_early(self) -> None:
+        G = self._shop()
+        assert analysis.shop_impact(G)["weakest"]["label"] == "Jolly Joker"
+        G["ante_num"] = 5
+        assert analysis.shop_impact(G)["weakest"]["label"] == "Golden Joker"
+
+    def test_shop_render_shows_score(self) -> None:
+        sm = StrategyManager("mastery")
+        text = sm.render_gamestate(self._shop(), rounds=[], history=[], flags={})
+        assert "TYPICAL Two Pair" in text and "SCORE +620 per hand" in text
+        assert "WEAKEST: 0 Jolly Joker" in text

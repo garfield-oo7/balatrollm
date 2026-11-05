@@ -38,7 +38,8 @@ Tool call: discard {"reasoning": "No play reaches PER_HAND 200 and I have 3 disc
 3. Jokers: buy the best affordable joker, ranked [XMULT] > [MAIN] > [MULT] > [SCALE] > [CHIPS] > [ECON], higher tier first. If ECON_OK = YES, a tier A [ECON] joker costing $7 or less ranks like [MULT].
    - Price must be <= SPENDABLE. Exception: an [XMULT] joker may use all your money.
    - Never buy [TRAP], [KEEP-DISCARDS], a tier C joker, or an [ECON] joker while ECON_OK = NO.
-   - SLOTS_FREE = 0: sell your weakest joker only to buy an [XMULT] joker, or a tier S/A [MAIN] joker that replaces a [CHIPS], [ECON], [UTIL] or [OFF-PLAN] joker. Never sell your only [XMULT] joker.
+   - Between two jokers you can afford in the same rank, buy the one with the bigger SCORE. A joker with SCORE +0 does nothing for your hand now: buy it only if it is [XMULT], [SCALE] or [ECON] with ECON_OK = YES.
+   - SLOTS_FREE = 0: sell the joker named WEAKEST only to buy an [XMULT] joker, or a joker whose SCORE is bigger than what WEAKEST adds. Never sell your only [XMULT] joker.
 4. A Planet marked [MAIN]: buy it, then use it. Other planets: skip.
 5. Vouchers: buy [BUY] if you can afford it. Buy [GOOD] only if price <= SPENDABLE. Never buy [NEVER].
 6. Packs (at most 1 per shop, price <= SPENDABLE): Buffoon (only if SLOTS_FREE > 0) > Standard (only while BLUE_SEALS = 0) > Celestial > Arcana. Skip Spectral packs, and Standard packs once BLUE_SEALS > 0. In the FIRST shop of the run, buy a joker AND the Buffoon pack if you can afford both.

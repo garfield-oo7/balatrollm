@@ -3,6 +3,7 @@
 {%- set S = run_status(G, rounds, history) -%}
 {%- set plan = main_hand_plan(G) -%}
 {%- set boss = boss_impact(G, plan) -%}
+{%- set I = shop_impact(G) if G.state in ["SHOP", "SMODS_BOOSTER_OPENED"] else none -%}
 {%- macro card_line(c) -%}
 {%- if c.state and c.state.hidden -%}face-down card
 {%- else -%}{{ c | card_name }} ({{ c | card_chips }} chips)
@@ -79,14 +80,18 @@
 {% endif %}
 {%- if G.state == "SHOP" %}
 # SHOP
+{%- if I and I.score %}
+- TYPICAL {{ I.hand }} ({{ I.cards | join(", ") }}) scores about {{ I.score | fmt_num }} per hand now.{% set nb0 = next_blind(G) %}{% if nb0 and nb0.score %} Next blind {{ nb0.score | fmt_num }} = about {{ ((nb0.score + I.score - 1) // I.score) | int }} such hands.{% endif %}
+- SCORE = change per hand of that typical play if you buy the item ([SCALE] jokers show today's value; they grow).
+{%- endif %}
 {%- if G.shop and G.shop.cards %}
 {%- for card in G.shop.cards -%}
 {%- if card.state and card.state.hidden %}
 - {{ loop.index0 }}: face-down card
 {%- elif card.set == "JOKER" %}
-- {{ loop.index0 }}: {{ card.label }} ${{ card.cost.buy }} {{ joker_tag(card, S.main_hand, S.ante) }}{% if card.modifier and card.modifier.edition %} ({{ card.modifier.edition }}){% endif %} | effect: {{ card.value.effect }}
+- {{ loop.index0 }}: {{ card.label }} ${{ card.cost.buy }} {{ joker_tag(card, S.main_hand, S.ante) }}{% if card.modifier and card.modifier.edition %} ({{ card.modifier.edition }}){% endif %}{% if I and I.shop[loop.index0] %} | SCORE {{ I.shop[loop.index0] }}{% endif %} | effect: {{ card.value.effect }}
 {%- elif card.set in ["TAROT", "PLANET", "SPECTRAL"] %}
-- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) ${{ card.cost.buy }} {{ consumable_tag(card, S.main_hand, S.blue_seals) }}
+- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) ${{ card.cost.buy }} {{ consumable_tag(card, S.main_hand, S.blue_seals) }}{% if I and I.shop[loop.index0] %} | SCORE {{ I.shop[loop.index0] }}{% endif %}
 {%- else %}
 - {{ loop.index0 }}: {{ card_line(card) }} (playing card) ${{ card.cost.buy }}
 {%- endif %}
@@ -117,7 +122,7 @@
 # OPEN PACK (pick 1 card or skip)
 {% for card in G.pack.cards -%}
 {%- if card.set == "JOKER" -%}
-- {{ loop.index0 }}: {{ card.label }} (Joker) {{ joker_tag(card, S.main_hand, S.ante) }}{% if card.modifier and card.modifier.edition %} ({{ card.modifier.edition }}){% endif %} | effect: {{ card.value.effect }}
+- {{ loop.index0 }}: {{ card.label }} (Joker) {{ joker_tag(card, S.main_hand, S.ante) }}{% if card.modifier and card.modifier.edition %} ({{ card.modifier.edition }}){% endif %}{% if I and I.pack[loop.index0] %} | SCORE {{ I.pack[loop.index0] }}{% endif %} | effect: {{ card.value.effect }}
 {%- elif card.set in ["TAROT", "PLANET", "SPECTRAL"] -%}
 {%- set tg = consumable_targets(card.key) %}
 {%- set sug = suggest_targets(G, card) -%}
@@ -135,9 +140,9 @@
 {%- endif %}
 {%- endif %}
 
-# JOKERS (left to right)
+# JOKERS (left to right){% if I and I.weakest %}. WEAKEST: {{ I.weakest.index }} {{ I.weakest.label }} (adds {{ I.weakest.gain | fmt_num }} per hand){% endif %}
 {% for j in G.jokers.cards -%}
-- {{ loop.index0 }}: {{ joker_line(j) }} | sells for ${{ j.cost.sell }}
+- {{ loop.index0 }}: {{ joker_line(j) }}{% if I and I.owned[loop.index0] %} | {{ I.owned[loop.index0] }}{% endif %} | sells for ${{ j.cost.sell }}
 {% else -%}
 - none (empty slots lose runs: buy scoring jokers)
 {% endfor %}

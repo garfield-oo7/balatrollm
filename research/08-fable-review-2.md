@@ -39,7 +39,7 @@ only because fix #1 protects made hands.
 
 ## 3. Blue Seal and economy jokers
 
-**Blue Seal: Fable recommends a downgrade. The owner's rule is kept pending a decision.**
+**Blue Seal: Fable recommends a downgrade. The owner decided to keep the original rule** (Standard packs while BLUE_SEALS = 0; always pick a Blue Seal card; never a second one).
 - A held Blue Seal card is a dead card. Two Pair with 1 discard falls from 78%
   to 57% with 7 usable cards (91% to 75% with 2 discards).
 - The card is in hand at the end of about 69% of rounds, which gives about 0.6
@@ -63,7 +63,7 @@ only because fix #1 protects made hands.
 
 ## 4. Top 5 missing concepts (priority order, open)
 
-1. **Score change per shop item.** Run `estimate_play` on a representative
+1. **Score change per shop item** (**applied**: `analysis.shop_impact`, SCORE and WEAKEST in the shop prompt). Run `estimate_play` on a representative
    MAIN_HAND with each shop joker or planet added, and with each owned joker
    removed. Render "+X per hand" and "WEAKEST: name (−Y)", plus a real score
    gap against the next boss.
