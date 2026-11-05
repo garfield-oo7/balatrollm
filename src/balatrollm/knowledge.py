@@ -169,8 +169,20 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
     "Hologram": ("SCALE", "B", "A", None, "x0.25 per card added to deck"),
     "Vagabond": ("UTIL", "C", "C", None, "skip"),
     "Baron": ("XMULT", "B", "A", None, "x1.5 per King HELD; needs many Kings"),
-    "Cloud 9": ("ECON", "B", "C", None, "$1 per 9 in your deck each round; tier A only with 4+ nines"),
-    "Rocket": ("ECON", "A", "C", None, "$1 per round, +$2 more after every boss; sell it last"),
+    "Cloud 9": (
+        "ECON",
+        "B",
+        "C",
+        None,
+        "$1 per 9 in your deck each round; tier A only with 4+ nines",
+    ),
+    "Rocket": (
+        "ECON",
+        "A",
+        "C",
+        None,
+        "$1 per round, +$2 more after every boss; sell it last",
+    ),
     "Obelisk": ("TRAP", "T", "B", None, "resets when you play your main hand"),
     "Midas Mask": ("ECON", "C", "C", "face", "skip"),
     "Luchador": (
@@ -185,19 +197,43 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
     "Turtle Bean": ("UTIL", "B", "C", None, "+5 hand size, shrinks each round"),
     "Erosion": ("TRAP", "T", "B", None, "only with a thinned deck"),
     "Reserved Parking": ("ECON", "C", "C", "face", "skip"),
-    "Mail-In Rebate": ("ECON", "C", "C", None, "$5 per discarded card of a named rank; skip"),
-    "To the Moon": ("ECON", "B", "C", None, "+$1 interest per $5 held; only if you hold $20+"),
+    "Mail-In Rebate": (
+        "ECON",
+        "C",
+        "C",
+        None,
+        "$5 per discarded card of a named rank; skip",
+    ),
+    "To the Moon": (
+        "ECON",
+        "B",
+        "C",
+        None,
+        "+$1 interest per $5 held; only if you hold $20+",
+    ),
     "Hallucination": ("UTIL", "C", "C", None, "skip"),
     "Fortune Teller": ("SCALE", "C", "C", None, "+1 Mult per Tarot used"),
     "Juggler": ("UTIL", "B", "B", None, "+1 hand size"),
     "Drunkard": ("UTIL", "B", "C", None, "+1 discard"),
     "Stone Joker": ("CHIPS", "C", "C", None, "needs Stone cards"),
-    "Golden Joker": ("ECON", "A", "C", None, "$4 every round, pays for itself in 2 rounds"),
+    "Golden Joker": (
+        "ECON",
+        "A",
+        "C",
+        None,
+        "$4 every round, pays for itself in 2 rounds",
+    ),
     "Lucky Cat": ("SCALE", "C", "B", None, "needs Lucky cards"),
     "Baseball Card": ("XMULT", "B", "A", None, "x1.5 per Uncommon joker"),
     "Bull": ("CHIPS", "B", "C", None, "+2 Chips per $1 held"),
     "Diet Cola": ("UTIL", "C", "C", None, "skip"),
-    "Trading Card": ("ECON", "C", "C", None, "$3 for a 1-card first discard; conflicts with discards"),
+    "Trading Card": (
+        "ECON",
+        "C",
+        "C",
+        None,
+        "$3 for a 1-card first discard; conflicts with discards",
+    ),
     "Flash Card": ("SCALE", "C", "C", None, "grows on rerolls"),
     "Popcorn": ("MULT", "S", "C", None, "+20 Mult, -4 per round; replace by Ante 3"),
     "Spare Trousers": (
@@ -495,7 +531,7 @@ def joker_info(name: Any) -> dict[str, Any] | None:
 
 
 def joker_fit(label: Any, main_hand: str | None) -> str | None:
-    """"MAIN" / "OFF-PLAN" for jokers tied to a hand, None for generic ones."""
+    """ "MAIN" / "OFF-PLAN" for jokers tied to a hand, None for generic ones."""
     info = joker_info(label)
     if not info or not main_hand:
         return None

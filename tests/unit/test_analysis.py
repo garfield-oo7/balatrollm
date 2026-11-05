@@ -428,7 +428,9 @@ class TestAnteOneChase:
     def test_exact_win_without_jokers(self) -> None:
         # No jokers: the estimate is exact, so 300 vs 300 needed WINS.
         G = make_state("H_A H_K H_T H_5 H_4 S_4 C_4 D_9")
-        flush = next(p for p in analysis.play_advice(G)["plays"] if p["hand"] == "Flush")
+        flush = next(
+            p for p in analysis.play_advice(G)["plays"] if p["hand"] == "Flush"
+        )
         assert flush["score"] == 300 and flush["wins"]
 
 
@@ -484,7 +486,9 @@ class TestFableReviewFixes:
         trio = joker("j_trio", "The Trio")
         half = joker("j_half", "Half Joker")
         assert "[OFF-PLAN]" in knowledge.joker_tag(trio, "Two Pair", 2)
-        assert "[MAIN]" in knowledge.joker_tag(joker("j_mad", "Mad Joker"), "Two Pair", 2)
+        assert "[MAIN]" in knowledge.joker_tag(
+            joker("j_mad", "Mad Joker"), "Two Pair", 2
+        )
         assert "[OFF-PLAN]" in knowledge.joker_tag(half, "Two Pair", 2)
         assert "[MAIN]" in knowledge.joker_tag(half, "Pair", 2)
 

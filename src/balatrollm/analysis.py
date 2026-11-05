@@ -1411,7 +1411,9 @@ def suggest_targets(G: dict[str, Any], consumable: dict[str, Any]) -> list[int]:
         for i in ups:
             # skip chains (7->8 and 6->7): the 7 is gone when the 6 arrives
             r = hand[i]["rank"]
-            if any(hand[j]["rank"] == nxt[r] or nxt[hand[j]["rank"]] == r for j in chosen):
+            if any(
+                hand[j]["rank"] == nxt[r] or nxt[hand[j]["rank"]] == r for j in chosen
+            ):
                 continue
             chosen.append(i)
             if len(chosen) == hi:
@@ -1813,7 +1815,9 @@ def validate_action(
                 and _norm(chosen)["seal"] == "BLUE"
                 and blue_seal_count(G) >= 1
             ):
-                return "You already own a Blue Seal card: pick a different card or skip."
+                return (
+                    "You already own a Blue Seal card: pick a different card or skip."
+                )
     if method == "use":
         cons = _area_cards(G, "consumables")
         try:
