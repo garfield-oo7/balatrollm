@@ -1093,6 +1093,18 @@ WIN_MARGIN = 1.10  # a play is marked WINS only if its floor estimate >= 110% of
 PAIR_FAMILY = {"Pair", "Two Pair", "Three of a Kind", "Full House", "Four of a Kind"}
 
 
+def xmult_owned(G: dict[str, Any], plan: dict[str, Any] | None = None) -> int:
+    """Owned on-plan [XMULT] jokers (XMULT_OWNED)."""
+    plan = plan or main_hand_plan(G)
+    return sum(
+        1
+        for i in _owned_joker_infos(G)
+        if i["category"] == "XMULT"
+        and i["key"] not in ("j_loyalty_card", "j_stencil", "j_flower_pot")
+        and knowledge.joker_fit(i["name"], plan["hand"]) != "OFF-PLAN"
+    )
+
+
 def _owned_joker_infos(G: dict[str, Any]) -> list[dict[str, Any]]:
     out = []
     for j in _area_cards(G, "jokers"):
@@ -1112,6 +1124,9 @@ def blue_seal_count(G: dict[str, Any]) -> int:
     )
 
 
+GROWS_LATE_ANTE = 5  # self-growing X1 jokers need an empty xMult role from here
+
+
 def grows_xmult(G: dict[str, Any], card: dict[str, Any]) -> str:
     """``[GROWS-XMULT] ...`` for a joker that starts at X1 Mult and grows.
 
@@ -1124,6 +1139,13 @@ def grows_xmult(G: dict[str, Any], card: dict[str, Any]) -> str:
         return ""
     enhancement, tarot_key, source = grows
     if not enhancement:
+        # From Ante 5 it has few antes left to grow: worth a slot only while you
+        # own no xMult joker at all.
+        if int(G.get("ante_num") or 1) >= GROWS_LATE_ANTE and xmult_owned(G):
+            return (
+                f"[GROWS-XMULT] starts at X1 | {source} | no source: too late to "
+                "grow, and you already own an xMult joker"
+            )
         return f"[GROWS-XMULT] starts at X1 | {source} | SOURCE PRESENT"
     count = sum(
         1
@@ -1725,13 +1747,7 @@ def run_status(
     count = int(jokers.get("count", 0))
     limit = int(jokers.get("limit", 5))
     infos = _owned_joker_infos(G)
-    xmult = sum(
-        1
-        for i in infos
-        if i["category"] == "XMULT"
-        and i["key"] not in ("j_loyalty_card", "j_stencil", "j_flower_pot")
-        and knowledge.joker_fit(i["name"], plan["hand"]) != "OFF-PLAN"
-    )
+    xmult = xmult_owned(G, plan)
     floor = money_floor(G)
 
     # Power check: hands needed for the next blind at the recent scoring pace.
