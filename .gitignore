@@ -266,6 +266,7 @@ runs
 config/*
 !config/example.yaml
 !config/community.yaml
+!config/mastery.yaml
 
 # external repos for research
 repos

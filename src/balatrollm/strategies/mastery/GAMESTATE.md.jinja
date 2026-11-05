@@ -1,0 +1,158 @@
+{#- Live game state for the "mastery" strategy. Facts are computed by
+    balatrollm.analysis (Jinja globals) so the model never does arithmetic. -#}
+{%- set S = run_status(G, rounds, history) -%}
+{%- set plan = main_hand_plan(G) -%}
+{%- set boss = boss_impact(G, plan) -%}
+{%- macro card_line(c) -%}
+{%- if c.state and c.state.hidden -%}face-down card
+{%- else -%}{{ c | card_name }} ({{ c | card_chips }} chips)
+{%- if c.modifier and c.modifier.enhancement %} {{ c.modifier.enhancement }}{% endif %}
+{%- if c.modifier and c.modifier.edition %} {{ c.modifier.edition }}{% endif %}
+{%- if c.modifier and c.modifier.seal %} {{ c.modifier.seal }}-seal{% endif %}
+{%- if c.state and c.state.debuff %} DEBUFFED (scores 0){% endif %}
+{%- endif -%}
+{%- endmacro -%}
+{%- macro joker_line(j) -%}
+{%- if j.state and j.state.hidden -%}face-down joker
+{%- else -%}{{ j.label }} {{ joker_tag(j, S.main_hand, S.ante) }}{% if j.modifier and j.modifier.edition %} ({{ j.modifier.edition }}){% endif %}
+{%- if j.value and j.value.effect %} | effect: {{ j.value.effect }}{% endif %}
+{%- if j.state and j.state.debuff %} | DEBUFFED{% endif %}
+{%- endif -%}
+{%- endmacro -%}
+# STATUS
+- Ante {{ S.ante }}/8, round {{ G.round_num }}, money ${{ S.money }}
+- MAIN_HAND: {{ S.main_hand }}{% if S.main_suit %} (MAIN_SUIT: {{ S.main_suit }}){% endif %} - {{ S.main_reason }}
+- Jokers {{ S.jokers }}/{{ S.joker_limit }}, SLOTS_FREE {{ S.slots_free }}, XMULT_OWNED {{ S.xmult_owned }}
+- FLOOR ${{ S.effective_floor }}, SPENDABLE ${{ S.spendable }} (interest next round ${{ S.interest }})
+- STATUS: {{ S.status }}{% if S.hands_needed %} (next blind {{ S.next_target | fmt_num }} needs about {{ S.hands_needed }} hands at your recent scores){% endif %}{% if S.status == "TOO WEAK" %} -> spend money on score now; FLOOR is $0{% endif %}
+- {{ S.milestone }} PRIORITY: {{ S.priority }}.
+{%- if S.observatory %}
+- Observatory owned: HOLD MAIN_HAND planets instead of using them.
+{%- endif %}
+{%- if boss.name %}
+- Boss this ante: {{ boss.name }} ({{ boss.score | fmt_num }}): {{ boss.effect }}{% if boss.counter %}. Counter: {{ boss.counter }}{% endif %}
+{%- if boss.impact %}
+- Boss impact: {{ boss.impact }}
+{%- endif %}
+{%- endif %}
+{% if G.state == "SELECTING_HAND" %}
+{%- set A = play_advice(G) -%}
+{%- set P = A.progress %}
+# ROUND
+- Blind: {{ P.name }}, target {{ P.target | fmt_num }}, scored {{ P.scored | fmt_num }}
+- NEED {{ P.remaining | fmt_num }} more | HANDS {{ P.hands_left }} | DISCARDS {{ P.discards_left }} | PER_HAND {{ P.per_hand | fmt_num }}
+{%- if P.kind == "boss" and boss.counter %}
+- Boss rule now: {{ boss.counter }}
+{%- endif %}
+
+## Your hand (index: card)
+{% for c in G.hand.cards -%}
+- {{ loop.index0 }}: {{ card_line(c) }}
+{% endfor %}
+## Listed plays (best per hand type, FLOOR score estimates)
+{% for p in A.plays -%}
+- {{ p.hand }} {{ p.cards }} = {% for i in p.cards %}{{ G.hand.cards[i] | card_name }}{% if not loop.last %}, {% endif %}{% endfor %} -> {{ p.score | fmt_num }}
+{%- if p.blocked %} BLOCKED: {{ p.blocked }}
+{%- elif p.wins %} WINS
+{%- elif p.reaches_pace %} (reaches PER_HAND)
+{%- else %} (below PER_HAND){% endif %}
+{%- if p.unknown %} (not counted: {{ p.unknown | join(", ") }}){% endif %}
+{% else -%}
+- none
+{% endfor %}
+{%- if A.draws %}
+## Draws (chance to complete with one discard)
+{% for d in A.draws -%}
+- {{ d.text }}: discard {{ d.discard }} -> {{ d.chance | pct }}
+{% endfor %}
+{%- endif %}
+- Suggested discard: {{ A.discard }}{% if A.discard %} = {% for i in A.discard %}{{ G.hand.cards[i] | card_name }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
+{%- if flags and flags.suggest_action %}
+- Suggested action: {{ A.action.tool }} {{ A.action.cards }} ({{ A.action.why }})
+{%- endif %}
+- Suits in hand: {% for s, n in A.hand_suits.items() %}{{ s }} {{ n }}{% if not loop.last %}, {% endif %}{% endfor %} | Deck left {{ A.deck_size }}: {% for s, n in A.deck_suits.items() %}{{ s }} {{ n }}{% if not loop.last %}, {% endif %}{% endfor %}
+{% endif %}
+{%- if G.state == "SHOP" %}
+# SHOP
+{%- if G.shop and G.shop.cards %}
+{%- for card in G.shop.cards -%}
+{%- if card.state and card.state.hidden %}
+- {{ loop.index0 }}: face-down card
+{%- elif card.set == "JOKER" %}
+- {{ loop.index0 }}: {{ card.label }} ${{ card.cost.buy }} {{ joker_tag(card, S.main_hand, S.ante) }}{% if card.modifier and card.modifier.edition %} ({{ card.modifier.edition }}){% endif %} | effect: {{ card.value.effect }}
+{%- elif card.set in ["TAROT", "PLANET", "SPECTRAL"] %}
+- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) ${{ card.cost.buy }} {{ consumable_tag(card, S.main_hand) }}
+{%- else %}
+- {{ loop.index0 }}: {{ card_line(card) }} (playing card) ${{ card.cost.buy }}
+{%- endif %}
+{%- endfor %}
+{%- else %}
+- no cards left
+{%- endif %}
+- Reroll cost: ${{ G.round.reroll_cost }}
+{%- if G.vouchers and G.vouchers.cards %}
+
+## Vouchers (use buy with `voucher`)
+{% for v in G.vouchers.cards -%}
+- {{ loop.index0 }}: {{ v.label }} ${{ v.cost.buy }} {{ voucher_tag(v) }}
+{% endfor %}
+{%- endif %}
+{%- if G.packs and G.packs.cards %}
+## Packs (use buy with `pack`)
+{% for p in G.packs.cards -%}
+- {{ loop.index0 }}: {{ p.label }} ${{ p.cost.buy }}{% if p.value and p.value.effect %} | {{ p.value.effect }}{% endif %}
+{% endfor %}
+{%- endif %}
+{%- set nb = next_blind(G) %}
+{%- if nb %}
+- Next blind: {{ nb.name or nb.kind }} ({{ nb.score | fmt_num }} chips)
+{%- endif %}
+{%- endif %}
+{%- if G.state == "SMODS_BOOSTER_OPENED" %}
+# OPEN PACK (pick 1 card or skip)
+{% for card in G.pack.cards -%}
+{%- if card.set == "JOKER" -%}
+- {{ loop.index0 }}: {{ card.label }} (Joker) {{ joker_tag(card, S.main_hand, S.ante) }}{% if card.modifier and card.modifier.edition %} ({{ card.modifier.edition }}){% endif %} | effect: {{ card.value.effect }}
+{%- elif card.set in ["TAROT", "PLANET", "SPECTRAL"] -%}
+{%- set tg = consumable_targets(card.key) %}
+{%- set sug = suggest_targets(G, card) -%}
+- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) {{ consumable_tag(card, S.main_hand) }}
+{%- if tg %} | needs {{ tg[0] }}-{{ tg[1] }} target cards{% if sug %}. Suggested targets: {{ sug }}{% else %}. No good targets: do not pick{% endif %}{% endif %}
+{%- else -%}
+- {{ loop.index0 }}: {{ card_line(card) }} (playing card)
+{%- endif %}
+{% endfor %}
+{%- if G.hand and G.hand.cards %}
+## Cards in hand (for targets)
+{% for c in G.hand.cards -%}
+- {{ loop.index0 }}: {{ card_line(c) }}
+{% endfor %}
+{%- endif %}
+{%- endif %}
+
+# JOKERS (left to right)
+{% for j in G.jokers.cards -%}
+- {{ loop.index0 }}: {{ joker_line(j) }} | sells for ${{ j.cost.sell }}
+{% else -%}
+- none (empty slots lose runs: buy scoring jokers)
+{% endfor %}
+# CONSUMABLES ({{ G.consumables.count }}/{{ G.consumables.limit }})
+{% for c in G.consumables.cards -%}
+{%- set sug = suggest_targets(G, c) if G.state == "SELECTING_HAND" else [] -%}
+- {{ loop.index0 }}: {{ c.label }} {{ consumable_tag(c, S.main_hand) }}{% if consumable_targets(c.key) %}{% if sug %} | Suggested targets: {{ sug }}{% elif G.state == "SELECTING_HAND" %} | no good targets now{% else %} | needs cards in hand: use it during a round{% endif %}{% endif %}
+{% else -%}
+- none
+{% endfor %}
+# POKER HANDS (level: chips x mult, times played)
+{% for h in hands_table(G) -%}
+- {{ h.name }}{% if h.name == S.main_hand %} (MAIN_HAND){% endif %}: Lv{{ h.level }} {{ h.chips }} x {{ h.mult }}, played {{ h.played }}
+{% endfor %}
+{%- if G.state == "SHOP" %}
+{%- set D = deck_summary(G) %}
+# DECK ({{ D.size }} cards)
+- Suits: {% for s, n in D.suits.items() %}{{ s }} {{ n }}{% if not loop.last %}, {% endif %}{% endfor %}
+{%- if D.enhancements %} | Enhanced: {% for k, n in D.enhancements.items() %}{{ k }} {{ n }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
+{%- endif %}
+{%- if G.used_vouchers %}
+- Vouchers owned: {{ G.used_vouchers.keys() | join(", ") }}
+{%- endif %}

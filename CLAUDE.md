@@ -63,7 +63,7 @@ Async OpenAI client wrapper with retry logic. Provider-agnostic (works with Open
 
 #### StrategyManager (`strategy.py`)
 
-Manages Jinja2 strategy templates. Each strategy folder contains: `STRATEGY.md.jinja` (game rules/tactics), `GAMESTATE.md.jinja` (current state), `MEMORY.md.jinja` (action history), `TOOLS.json` (function calling tools), `manifest.json` (metadata). Current: `default` (conservative, financially-focused).
+Manages Jinja2 strategy templates. Each strategy folder contains: `STRATEGY.md.jinja` (game rules/tactics), `GAMESTATE.md.jinja` (current state), `MEMORY.md.jinja` (action history), `TOOLS.json` (function calling tools), `manifest.json` (metadata). Current: `default` (conservative, financially-focused), `aggressive`, `conservative`, and `mastery` (harness-assisted for small models: computed STATUS block, hand analyser, inline joker/consumable/boss annotations; opts into manifest `harness` flags).
 
 #### Config (`config.py`)
 
@@ -144,6 +144,8 @@ Output directory: `runs/v1.0.0/{strategy}/{vendor}/{model}/{timestamp}_{deck}_{s
 | `src/balatrollm/executor.py`  | Parallel execution orchestration       |
 | `src/balatrollm/collector.py` | Data collection and statistics         |
 | `src/balatrollm/views.py`     | HTTP server for views overlay          |
+| `src/balatrollm/analysis.py`  | Hand analyser / score estimates / run status (Jinja globals) |
+| `src/balatrollm/knowledge.py` | Static joker, consumable, voucher and boss annotations |
 
 ### Configuration
 

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://gist.githubusercontent.com/S1M0N38/5dc776cea0afa506ee7a4b20585558c6/raw/d2b92433fcc9d069c26958ff22b1f06777ecb91e/strategy.schema.json",
+  "name": "Mastery",
+  "description": "Harness-assisted strategy for small models: computed STATUS block, hand analyser with floor score estimates, inline joker/consumable/boss annotations, short phase-specific rulebook. See research/00-MASTER-PLAN.md.",
+  "author": "BalatroLLM",
+  "version": "1.0.0",
+  "tags": [
+    "flush",
+    "analyser",
+    "small-model"
+  ],
+  "harness": {
+    "system_prompt": true,
+    "validate_actions": true,
+    "auto_reorder_jokers": true,
+    "max_consecutive_rearranges": 2,
+    "suggest_action": true
+  }
+}

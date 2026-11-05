@@ -1,0 +1,49 @@
+################################################################################
+# Evaluation config for the "mastery" strategy (see research/00-MASTER-PLAN.md)
+# Usage: balatrollm config/mastery.yaml
+#
+# Protocol (research/06-fable-advisor-review.md §5.8): 5 seeds x 3 runs.
+# Compare against the same file with `strategy: [default]` to measure the lift,
+# and with `suggest_action: false` in the mastery manifest to A/B the
+# "Suggested action" line.
+################################################################################
+
+parallel: 1
+
+seed:
+  - AAAAAAA
+  - BBBBBBB
+  - CCCCCCC
+  - DDDDDDD
+  - EEEEEEE
+  - AAAAAAA
+  - BBBBBBB
+  - CCCCCCC
+  - DDDDDDD
+  - EEEEEEE
+  - AAAAAAA
+  - BBBBBBB
+  - CCCCCCC
+  - DDDDDDD
+  - EEEEEEE
+
+deck:
+  - RED
+
+stake:
+  - WHITE
+
+strategy:
+  - mastery
+
+# Set this to the exact model id you benchmarked before (e.g. your Haiku id on
+# your provider), so results are comparable with the default-strategy runs.
+model:
+  - anthropic/claude-haiku-4.5
+
+model_config:
+  extra_body:
+    usage:
+      include: true
+    provider:
+      sort: throughput

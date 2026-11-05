@@ -52,6 +52,26 @@ The `manifest.json` file defines strategy metadata with **5 required fields**:
 - **version** (string): Strategy version in semantic versioning format (e.g., "0.1.0")
 - **tags** (array of strings): Categorization tags for filtering and organization
 
+### Optional `harness` Flags
+
+A strategy can opt into extra harness behaviour with an optional `harness` object. Strategies without it behave exactly as before.
+
+```json
+"harness": {
+  "system_prompt": true,
+  "validate_actions": true,
+  "auto_reorder_jokers": true,
+  "max_consecutive_rearranges": 2,
+  "suggest_action": true
+}
+```
+
+- **system_prompt**: send the rendered `STRATEGY.md.jinja` as a cached `system` message; game state and memory go in the `user` message.
+- **validate_actions**: refuse illegal or clearly bad actions before they reach the game (more than 5 cards, discarding a play that already wins the blind, a Buffoon pack or joker-creating card with full joker slots, Death without exactly 2 targets). The model sees the reason as a failed call.
+- **auto_reorder_jokers**: when the model leaves the shop, re-order jokers (+Chips, +Mult, scaling, xMult rightmost; Blueprint left of the best xMult).
+- **max_consecutive_rearranges**: refuse further `rearrange` calls after N in a row (loop guard).
+- **suggest_action**: free-form flag exposed to templates as `flags.suggest_action`.
+
 ### Versioning
 
 Strategy versions are **independent** from BalatroLLM versions. Increment the strategy version when making changes:
@@ -70,9 +90,12 @@ Each template receives different context variables:
 
 `STRATEGY.md.jinja` and `GAMESTATE.md.jinja`:
 
-| Variable | Type   | Description                                   |
-| -------- | ------ | --------------------------------------------- |
-| `G`      | `dict` | Full gamestate dictionary from BalatroBot API |
+| Variable  | Type         | Description                                                           |
+| --------- | ------------ | --------------------------------------------------------------------- |
+| `G`       | `dict`       | Full gamestate dictionary from BalatroBot API                         |
+| `rounds`  | `list[dict]` | One record per finished blind (ante, blind, target, scored, hands left) |
+| `history` | `list[dict]` | All successful actions this run (see `MEMORY.md.jinja`)               |
+| `flags`   | `dict`       | The manifest `harness` flags                                          |
 
 The `G` dictionary contains all game state information including:
 
@@ -89,9 +112,10 @@ The `G` dictionary is the Game State returned by the [BalatroBot API](https://co
 
 | Variable               | Type          | Description                                          |
 | ---------------------- | ------------- | ---------------------------------------------------- |
-| `history`              | `list[dict]`  | Last 10 actions with `method`, `params`, `reasoning` |
+| `history`              | `list[dict]`  | Last 10 actions with `method`, `params`, `reasoning`, `result` (one-line outcome), `state`, `ante`, `round`, and for plays `score`/`estimate` |
 | `last_error_call_msg`  | `str \| None` | Error message from invalid LLM response              |
 | `last_failed_call_msg` | `str \| None` | Error message from failed API call                   |
+| `G`, `rounds`, `flags` | see above     | Current gamestate, round log and harness flags       |
 
 ### Custom Filters
 
@@ -100,6 +124,25 @@ The template environment includes a custom `from_json` filter for parsing JSON s
 ```jinja
 {{ some_json_string | from_json }}
 ```
+
+Card helpers are also available as filters: `card_name` ("King of Hearts"), `card_chips`, `fmt_num` (thousands separators) and `pct`.
+
+### Analysis Helpers (Jinja globals)
+
+`src/balatrollm/analysis.py` and `src/balatrollm/knowledge.py` expose deterministic helpers so templates can show computed facts instead of asking the model to do arithmetic. The `mastery` strategy uses all of them:
+
+| Global                            | Returns                                                                                       |
+| --------------------------------- | --------------------------------------------------------------------------------------------- |
+| `play_advice(G)`                  | Best play per hand type with card indices and floor score estimate, WINS flags, draws with odds, suggested discard and action |
+| `analyze_hand(G)` / `blind_progress(G)` | Lower-level hand enumeration and chips still needed per hand                            |
+| `run_status(G, rounds, history)`  | MAIN_HAND, money floor, spendable money, joker slots, xMult count, power check, milestone     |
+| `main_hand_plan(G)`               | Deterministic main hand (Flush by default, Two Pair family when jokers favour it)             |
+| `boss_impact(G)`                  | Upcoming boss, filled effect text, counter-play line, impact on MAIN_HAND                      |
+| `suggest_targets(G, card)`        | Suggested hand indices for a Tarot/Spectral                                                   |
+| `joker_tag` / `consumable_tag` / `voucher_tag` / `boss_counter` | Short static annotations (category, tier, hint)                  |
+| `hands_table(G)` / `deck_summary(G)` / `next_blind(G)` | Sorted poker hands, aggregate deck counts, next blind                       |
+
+The remaining deck is only ever summarised as counts, never in draw order, and face-down cards are never revealed.
 
 ### Template Files
 
