@@ -135,8 +135,8 @@ Card helpers are also available as filters: `card_name` ("King of Hearts"), `car
 | --------------------------------- | --------------------------------------------------------------------------------------------- |
 | `play_advice(G)`                  | Best play per hand type with card indices and floor score estimate, WINS flags, draws with odds, suggested discard and action |
 | `analyze_hand(G)` / `blind_progress(G)` | Lower-level hand enumeration and chips still needed per hand                            |
-| `run_status(G, rounds, history)`  | MAIN_HAND, money floor, spendable money, joker slots, xMult count, power check, milestone     |
-| `main_hand_plan(G)`               | Deterministic main hand (Flush by default, Two Pair family when jokers favour it)             |
+| `run_status(G, rounds, history)`  | MAIN_HAND, money floor, spendable money, slots, xMult count, power check, GOALS + PRIORITY   |
+| `main_hand_plan(G)`               | Deterministic main hand (Two Pair by default, Flush only when jokers/deck make it consistent) |
 | `boss_impact(G)`                  | Upcoming boss, filled effect text, counter-play line, impact on MAIN_HAND                      |
 | `suggest_targets(G, card)`        | Suggested hand indices for a Tarot/Spectral                                                   |
 | `joker_tag` / `consumable_tag` / `voucher_tag` / `boss_counter` | Short static annotations (category, tier, hint)                  |

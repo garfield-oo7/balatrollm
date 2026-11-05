@@ -1,5 +1,30 @@
 # 00 — MASTER PLAN: Teaching a small LLM to beat Balatro (Red Deck / White Stake)
 
+> **Revision 3 (community-consensus review, `07-community-consensus.md`).** It overrides R1 and the milestone
+> sentence in R5.
+>
+> **R1′. MAIN_HAND defaults to the Pair family (Two Pair), not Flush.** Measured on an unmodified deck with
+> one discard per hand: Two Pair is made about 78% of the time and Flush about 44%. Pair-family hands are immune
+> to suit bosses and grow into Full House. Flush is chosen only with Four Fingers, Smeared Joker or The Tribe;
+> with 2+ flush jokers and 0 pair jokers; or when half the deck is one suit. Half Joker → Pair;
+> The Trio (or Zany + Wily) → Three of a Kind.
+>
+> **R2′. Antes 1–2 are "open":** a dealt Flush or Straight is still played, and Flush/Straight draws of 50%+ are
+> still chased. From Ante 3 only MAIN_HAND draws are shown or chased.
+>
+> **R5′. GOALS checklist instead of a milestone sentence:**
+> - Ante 1: 2 jokers; Ante 2: 3 jokers; Ante 3+: all slots full.
+> - 1 xMult by Ante 4, 2 by Ante 6.
+> - 1 SCALE joker from Ante 4.
+> - MAIN_HAND at level ante−1 from Ante 3.
+> - No ECON/CHIPS filler from Ante 5.
+> - Hold $25 in Antes 3–6.
+>
+> PRIORITY is the first unmet goal.
+>
+> **R12. Pair deck fixing.** Strength, Death and The Hanged Man target ranks. Suit tarots and Lovers are
+> [AVOID] for pair plans. Death keeps the junk card on the LEFT, since Death copies right → left.
+
 > **Revision 2 (after the Fable advisor review, `06-fable-advisor-review.md`).** The review is accepted with the
 > changes below. They **override** the corresponding parts of the v1 plan (kept underneath for traceability).
 >

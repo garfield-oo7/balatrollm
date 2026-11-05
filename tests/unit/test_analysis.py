@@ -230,19 +230,62 @@ class TestPlayAdvice:
 
 
 class TestPlanAndStatus:
-    def test_default_main_hand_is_flush(self) -> None:
-        assert analysis.main_hand_plan(make_state("H_2"))["hand"] == "Flush"
+    def test_default_main_hand_is_two_pair(self) -> None:
+        plan = analysis.main_hand_plan(make_state("H_2"))
+        assert plan["hand"] == "Two Pair"
+        assert plan["open"] and plan["draw_kinds"] == {"Flush", "Straight"}
 
-    def test_duo_switches_to_two_pair(self) -> None:
-        G = make_state("H_2", [joker("j_duo", "The Duo")])
-        assert analysis.main_hand_plan(G)["hand"] == "Two Pair"
-
-    def test_pair_jokers_at_ante_three(self) -> None:
-        jokers = [joker("j_jolly", "Jolly Joker"), joker("j_mad", "Mad Joker")]
-        G = make_state("H_2", jokers)
-        assert analysis.main_hand_plan(G)["hand"] == "Flush"
+    def test_open_phase_ends_at_ante_three(self) -> None:
+        G = make_state("H_2")
         G["ante_num"] = 3
-        assert analysis.main_hand_plan(G)["hand"] == "Two Pair"
+        plan = analysis.main_hand_plan(G)
+        assert not plan["open"] and plan["draw_kinds"] == {"Two Pair"}
+
+    def test_flush_engine_switches_to_flush(self) -> None:
+        G = make_state("H_2", [joker("j_four_fingers", "Four Fingers")])
+        assert analysis.main_hand_plan(G)["hand"] == "Flush"
+
+    def test_flush_jokers_without_pair_jokers(self) -> None:
+        jokers = [joker("j_droll", "Droll Joker"), joker("j_crafty", "Crafty Joker")]
+        assert analysis.main_hand_plan(make_state("H_2", jokers))["hand"] == "Flush"
+        jokers.append(joker("j_jolly", "Jolly Joker"))
+        assert analysis.main_hand_plan(make_state("H_2", jokers))["hand"] == "Two Pair"
+
+    def test_half_joker_and_trio(self) -> None:
+        G = make_state("H_2", [joker("j_half", "Half Joker")])
+        assert analysis.main_hand_plan(G)["hand"] == "Pair"
+        G = make_state("H_2", [joker("j_trio", "The Trio")])
+        assert analysis.main_hand_plan(G)["hand"] == "Three of a Kind"
+
+    def test_flush_draw_not_chased_after_open_phase(self) -> None:
+        G = make_state("S_K H_9 H_7 D_7 H_4 C_Q H_2 S_3")
+        G["ante_num"] = 3
+        advice = analysis.play_advice(G)
+        assert advice["draws"] == []
+        assert advice["action"]["tool"] == "discard"
+        assert {2, 3} & set(advice["action"]["cards"]) == set()  # keeps the 7s
+
+    def test_pair_tarot_targets(self) -> None:
+        G = make_state("S_K H_K D_7 C_3 H_8 C_Q H_2 S_6")
+        G["ante_num"] = 3
+        assert analysis.suggest_targets(G, {"key": "c_strength"}) == [2, 5]
+        assert analysis.suggest_targets(G, {"key": "c_hanged_man"}) == [3, 6]
+        assert analysis.suggest_targets(G, {"key": "c_sun"}) == []
+        left, right = analysis.suggest_targets(G, {"key": "c_death"})
+        assert left < right  # Death copies the RIGHT card onto the LEFT one
+
+    def test_goals_and_priority(self) -> None:
+        G = make_state("H_2", state="SHOP")
+        G["ante_num"] = 4
+        status = analysis.run_status(G, [], [])
+        texts = [g["text"] for g in status["goals"]]
+        assert texts[0].startswith("5 jokers")
+        assert any("XMULT" in t for t in texts) and any("SCALE" in t for t in texts)
+        assert status["priority"] == "fill empty joker slots with scoring jokers"
+
+    def test_pair_boss_impact(self) -> None:
+        G = make_state("H_2", boss="The Eye")
+        assert "AFFECTS MAIN_HAND" in analysis.boss_impact(G)["impact"]
 
     def test_power_check_uses_recent_scores(self) -> None:
         G = make_state("H_2", state="SHOP")
@@ -329,7 +372,7 @@ class TestMasteryStrategy:
             + sm.render_memory([], G=G, rounds=[], flags=flags)
         )
         assert "# STATUS" in text and "# DECIDE NOW" in text
-        assert "MAIN_HAND: Flush" in text
+        assert "MAIN_HAND: Two Pair" in text and "GOALS for Ante 1" in text
         assert len(text) < 16000  # ~4k tokens budget
 
     def test_default_strategy_still_renders(self) -> None:
@@ -339,3 +382,15 @@ class TestMasteryStrategy:
         assert "Recent Decision History" in sm.render_memory(
             [{"method": "play", "params": {"cards": [0]}, "reasoning": "r"}]
         )
+
+
+class TestPlanAwareConsumables:
+    def test_suit_tarot_avoided_for_pairs(self) -> None:
+        sun = {"key": "c_sun", "set": "TAROT", "label": "The Sun"}
+        assert knowledge.consumable_tag(sun, "Two Pair").startswith("[AVOID]")
+        assert knowledge.consumable_tag(sun, "Flush").startswith("[GOOD]")
+
+    def test_strength_good_for_pairs(self) -> None:
+        strength = {"key": "c_strength", "set": "TAROT", "label": "Strength"}
+        assert knowledge.consumable_tag(strength, "Two Pair").startswith("[GOOD]")
+        assert knowledge.consumable_tag(strength, "Flush").startswith("[SITUATIONAL]")

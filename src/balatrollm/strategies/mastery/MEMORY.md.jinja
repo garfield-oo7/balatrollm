@@ -28,10 +28,10 @@ Do not repeat it. Choose a different action.
 # DECIDE NOW
 {%- if G and G.state == "SELECTING_HAND" %}
 1. A listed play marked WINS? -> play its indices.
-2. DISCARDS > 0 and (no listed play reaches PER_HAND, or a MAIN_HAND draw shows 50%+)? -> discard the "Suggested discard" indices.
+2. DISCARDS > 0 and (no listed play reaches PER_HAND, or a listed Draw shows 50%+)? -> discard the "Suggested discard" indices.
 3. Otherwise -> play the "Suggested action" indices (or the highest listed play).
 {%- elif G and G.state == "SHOP" %}
-1. Affordable [XMULT] joker, or tier S/A [MAIN]/[MULT] joker with price <= SPENDABLE and SLOTS_FREE > 0? -> buy it.
+1. Affordable [XMULT] joker, or tier S/A [MAIN]/[MULT] joker with price <= SPENDABLE and SLOTS_FREE > 0? -> buy it. Otherwise follow PRIORITY (first unchecked GOAL).
 2. Planet marked [MAIN] or a [BUY] voucher you can afford? -> buy it (then use the planet).
 3. Pack or reroll allowed by the SHOP RULES? -> do it. Otherwise -> next_round.
 {%- elif G and G.state == "SMODS_BOOSTER_OPENED" %}

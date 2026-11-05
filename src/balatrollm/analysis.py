@@ -1027,26 +1027,61 @@ def main_suit(G: dict[str, Any]) -> str:
     return max("HDCS", key=lambda s: (counts[s], -"HDCS".index(s)))
 
 
+OPEN_ANTES = 2  # Antes 1-2: also take Flush/Straight when they are dealt
+FLUSH_ENGINES = {"j_tribe", "j_smeared", "j_four_fingers"}
+SUIT_SHARE_FOR_FLUSH = 0.5  # deck this concentrated in one suit makes Flush reliable
+
+
+def _suit_share(G: dict[str, Any], suit: str) -> float:
+    cards = [_norm(c) for a in ("hand", "cards") for c in _area_cards(G, a)]
+    suited = [c for c in cards if c["suit"]]
+    if not suited:
+        return 0.0
+    return sum(1 for c in suited if c["suit"] == suit) / len(suited)
+
+
 def main_hand_plan(G: dict[str, Any]) -> dict[str, Any]:
-    """Deterministic MAIN_HAND: Flush by default, Two Pair family when jokers say so."""
+    """Deterministic MAIN_HAND.
+
+    Default is the Pair family (Two Pair): with one discard per hand an
+    unmodified deck makes Two Pair ~78% of the time versus ~44% for Flush, the
+    hand never dies to suit bosses, and it grows into Full House. Flush is
+    chosen only when the run has made it consistent (a Flush engine joker, a
+    flush-joker core with no pair jokers, or a deck half one suit). In the
+    OPEN antes, Flush/Straight are still taken when dealt (``open``).
+    """
     infos = _owned_joker_infos(G)
     keys = set(_joker_keys(G))
     ante = int(G.get("ante_num") or 1)
     pair_jokers = sum(1 for i in infos if i["family"] == "pair")
     flush_jokers = sum(1 for i in infos if i["family"] == "flush")
-    if keys & {"j_tribe", "j_smeared", "j_four_fingers"}:
-        hand, reason = "Flush", "you own a Flush engine joker"
-    elif "j_duo" in keys:
-        hand, reason = "Two Pair", "you own The Duo (works on any hand with a Pair)"
-    elif ante >= 3 and pair_jokers >= 2 and flush_jokers == 0:
-        hand, reason = "Two Pair", "you own 2+ pair jokers and no flush jokers"
+    suit = main_suit(G)
+    if keys & FLUSH_ENGINES:
+        hand, reason = "Flush", "you own a Flush engine joker, so Flush is consistent"
+    elif flush_jokers >= 2 and pair_jokers == 0:
+        hand, reason = "Flush", "your jokers are flush jokers and none are pair jokers"
+    elif _suit_share(G, suit) >= SUIT_SHARE_FOR_FLUSH:
+        hand, reason = "Flush", "half your deck is one suit"
+    elif "j_half" in keys:
+        hand, reason = "Pair", "Half Joker needs plays of 3 or fewer cards"
+    elif "j_trio" in keys or {"j_zany", "j_wily"} <= keys:
+        hand, reason = "Three of a Kind", "your jokers pay for Three of a Kind"
     else:
-        hand, reason = "Flush", "default plan"
+        hand, reason = (
+            "Two Pair",
+            "most consistent strong hand (with 1 discard: Two Pair ~78%, Flush ~44%)",
+        )
+    is_open = ante <= OPEN_ANTES and hand != "Flush"
+    if is_open:
+        reason += "; Antes 1-2: a dealt Flush/Straight is fine too"
     return {
         "hand": hand,
-        "family": knowledge.HAND_FAMILY.get(hand, "flush"),
-        "suit": main_suit(G) if hand == "Flush" else None,
+        "family": knowledge.HAND_FAMILY.get(hand, "pair"),
+        "suit": suit if hand == "Flush" else None,
         "reason": reason,
+        "open": is_open,
+        # draws worth discarding toward (shown to the model and used for advice)
+        "draw_kinds": {"Flush", "Straight"} if is_open else {hand},
     }
 
 
@@ -1127,13 +1162,11 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
     winners = [p for p in plays if p["wins"]]
     protect = set(winners[0]["cards"]) if winners else set()
     discard = suggested_discard(G, plan, protect)
-    # A strong draw toward MAIN_HAND beats spending a hand on a weak play.
+    # Only draws the plan allows are shown (Flush/Straight only in the OPEN antes
+    # or when MAIN_HAND is that hand); a strong one beats spending a weak hand.
+    draws = [d for d in analysis_["draws"] if d["kind"] in plan["draw_kinds"]]
     strong_draw = next(
-        (
-            d
-            for d in analysis_["draws"]
-            if d["kind"] == plan["hand"] and d["chance"] >= STRONG_DRAW and d["discard"]
-        ),
+        (d for d in draws if d["chance"] >= STRONG_DRAW and d["discard"]),
         None,
     )
     if strong_draw and not winners:
@@ -1172,7 +1205,7 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         "plan": plan,
         "progress": progress,
         "plays": plays,
-        "draws": analysis_["draws"],
+        "draws": draws,
         "discard": discard,
         "action": action,
         "strong_draw": strong_draw,
@@ -1192,14 +1225,33 @@ def suggest_targets(G: dict[str, Any], consumable: dict[str, Any]) -> list[int]:
     hand = [_norm(c) for c in _area_cards(G, "hand")]
     plan = main_hand_plan(G)
     suit = plan.get("suit")
+    flush = plan["hand"] == "Flush"
     visible = [i for i, c in enumerate(hand) if not c["hidden"] and not c["stone"]]
-    on_suit = [i for i in visible if suit and hand[i]["suit"] == suit]
+    rc = Counter(hand[i]["rank"] for i in visible if hand[i]["rank"])
+    # "core" = cards the MAIN_HAND is built from; "off" = cards that do not help it.
+    if flush:
+        on_suit = [i for i in visible if suit and hand[i]["suit"] == suit]
+    else:  # Pair family: cards whose rank you already hold 2+ of
+        on_suit = [i for i in visible if rc[hand[i]["rank"]] >= 2]
     off_suit = [i for i in visible if i not in on_suit]
 
     def by_chips(idx: list[int], reverse: bool) -> list[int]:
         return sorted(
             idx, key=lambda i: CHIP_VALUE.get(hand[i]["rank"] or "", 0), reverse=reverse
         )
+
+    if not flush and key == "c_strength":
+        # +1 rank: turn a card into a rank you already hold (makes pairs/trips).
+        nxt = {r: RANKS[RANKS.index(r) + 1] for r in RANKS[:-1]}
+        ups = [
+            i
+            for i in visible
+            if hand[i]["rank"] in nxt
+            and rc[hand[i]["rank"]] == 1  # never break an existing pair
+            and rc[nxt[hand[i]["rank"]]] >= 1
+        ]
+        ups.sort(key=lambda i: -rc[nxt[hand[i]["rank"]]])
+        return sorted(ups[:hi])
 
     suit_tarot = {"c_star": "D", "c_moon": "C", "c_sun": "H", "c_world": "S"}
     if key in suit_tarot:
@@ -1233,19 +1285,26 @@ def suggest_targets(G: dict[str, Any], consumable: dict[str, Any]) -> list[int]:
     if key == "c_death":
         if len(visible) < 2:
             return []
-        best = max(
+        ranked = sorted(
             visible,
             key=lambda i: (
+                0 if flush else rc[hand[i]["rank"]],
                 hand[i]["enh"] is not None,
                 i in on_suit,
                 CHIP_VALUE.get(hand[i]["rank"] or "", 0),
             ),
+            reverse=True,
         )
-        junk = [i for i in (off_suit or visible) if i != best]
-        if not junk:
-            return []
-        worst = min(junk, key=lambda i: CHIP_VALUE.get(hand[i]["rank"] or "", 0))
-        return sorted([worst, best])  # the LEFT (lower) one becomes the RIGHT one
+        # Death turns the LEFT selected card into a copy of the RIGHT one, so
+        # the junk card must sit at a lower index than the card to copy.
+        for best in ranked[:3]:
+            junk = [i for i in (off_suit or visible) if i < best]
+            if junk:
+                worst = min(
+                    junk, key=lambda i: CHIP_VALUE.get(hand[i]["rank"] or "", 0)
+                )
+                return [worst, best]
+        return []
     return sorted(by_chips(visible, False)[:lo])
 
 
@@ -1259,6 +1318,24 @@ def _play_scores(history: list[dict[str, Any]] | None) -> list[int]:
         and isinstance(h.get("score"), int | float)
         and h["score"] > 0
     ]
+
+
+PAIR_BOSS_IMPACT = {
+    "The Eye": (
+        "AFFECTS MAIN_HAND: no hand type twice this round. Order: biggest type first "
+        "(Full House / Three of a Kind / Two Pair), then Pair, then High Card."
+    ),
+    "The Mouth": (
+        "AFFECTS MAIN_HAND: your first play locks the hand type. Lock Pair (you can make "
+        "it every hand) unless a bigger listed play WINS outright."
+    ),
+    "The Psychic": "AFFECTS MAIN_HAND: plays must be 5 cards. Two Pair + 1 filler, or Full House.",
+    "The Arm": "AFFECTS MAIN_HAND: each play lowers its level. Win in as few hands as possible.",
+    "The Ox": (
+        "AFFECTS MAIN_HAND: playing your most played hand sets money to $0. "
+        "Use a different pair-family hand if it still scores enough."
+    ),
+}
 
 
 def boss_impact(
@@ -1280,6 +1357,8 @@ def boss_impact(
                 f"AFFECTS MAIN_HAND: your Flush suit ({SUIT_NAME[bsuit]}) gives 0 chips. "
                 "Prepare: +Mult/xMult jokers not tied to suit, or play Pairs/Two Pair from other suits."
             )
+    elif plan["family"] == "pair" and name in PAIR_BOSS_IMPACT:
+        impact = PAIR_BOSS_IMPACT[name]
     elif name == "The Plant":
         faces = sum(
             1
@@ -1299,6 +1378,80 @@ def boss_impact(
         "counter": knowledge.boss_counter(name),
         "impact": impact,
     }
+
+
+def ante_goals(
+    G: dict[str, Any],
+    plan: dict[str, Any],
+    infos: list[dict[str, Any]],
+    xmult: int,
+    count: int,
+    limit: int,
+    money: int,
+) -> list[dict[str, Any]]:
+    """Per-ante checklist, most important first. Each goal: text, done, action.
+
+    The arc: fill slots with flat scoring (Antes 1-3) -> first xMult and a
+    scaling joker (Ante 4) -> replace economy/flat jokers with scaling and a
+    second xMult (Antes 5-6) -> 2+ xMult and a high MAIN_HAND level (7-8).
+    MAIN_HAND levels track the ante (level ante-1 from Ante 3).
+    """
+    ante = int(G.get("ante_num") or 1)
+    hands = G.get("hands") or {}
+    level = int((hands.get(plan["hand"]) or {}).get("level", 1))
+    scale = sum(1 for i in infos if i["category"] == "SCALE")
+    filler = sum(1 for i in infos if i["category"] in ("ECON", "CHIPS", "TRAP"))
+    want_jokers = {1: 2, 2: 3}.get(ante, limit)
+    want_xmult = 0 if ante <= 3 else (1 if ante <= 5 else 2)
+    want_level = max(1, ante - 1) if ante >= 3 else 1
+    goals = [
+        {
+            "text": f"{want_jokers} jokers (have {count})",
+            "done": count >= want_jokers,
+            "action": "fill empty joker slots with scoring jokers",
+        },
+    ]
+    if want_xmult or ante == 3:
+        goals.append(
+            {
+                "text": f"{max(want_xmult, 1)} XMULT by Ante {max(ante, 4)} (have {xmult})",
+                "done": xmult >= max(want_xmult, 1),
+                "action": "buy an [XMULT] joker (sell your weakest joker if slots are full)",
+            }
+        )
+    if ante >= 4:
+        goals.append(
+            {
+                "text": f"1 SCALE joker that grows each round (have {scale})",
+                "done": scale >= 1,
+                "action": "buy a [SCALE] joker that fits MAIN_HAND",
+            }
+        )
+    if want_level > 1:
+        goals.append(
+            {
+                "text": f"{plan['hand']} level {want_level} (now {level})",
+                "done": level >= want_level,
+                "action": "level MAIN_HAND: buy its Planet or a Celestial pack",
+            }
+        )
+    if ante >= 5:
+        goals.append(
+            {
+                "text": f"no [ECON]/[CHIPS] filler jokers (have {filler})",
+                "done": filler == 0 or count < limit,
+                "action": "sell an [ECON]/[CHIPS] joker to make room for [XMULT]/[SCALE]",
+            }
+        )
+    if 3 <= ante <= 6:
+        goals.append(
+            {
+                "text": f"hold $25 for max interest (have ${money})",
+                "done": money >= 25,
+                "action": "save money: buy only what PRIORITY or [XMULT] needs",
+            }
+        )
+    return goals
 
 
 def run_status(
@@ -1337,23 +1490,14 @@ def run_status(
         status = "ON TRACK" if int(rounds[-1].get("hands_left", 0)) >= 1 else "TOO WEAK"
     effective_floor = 0 if status == "TOO WEAK" else floor
 
-    want_jokers = {1: 2, 2: 3, 3: 5}.get(ante, 5)
-    if ante <= 3:
-        milestone = (
-            f"Ante {ante} goal: {want_jokers} scoring jokers"
-            + (", and look for your first XMULT joker" if ante == 3 else "")
-            + f". You have {count}."
-        )
-    elif ante <= 5:
-        milestone = f"Ante {ante} goal: at least 1 XMULT joker now, 2 by Ante 6. You have {xmult}."
-    else:
-        milestone = f"Ante {ante} goal: 2+ XMULT jokers and MAIN_HAND level 5+. You have {xmult} XMULT."
-    if count < limit and ante <= 3:
-        priority = "fill empty joker slots with scoring jokers"
-    elif ante >= 3 and xmult < (1 if ante <= 5 else 2):
-        priority = "buy an [XMULT] joker (sell your weakest joker if slots are full)"
-    else:
-        priority = "level MAIN_HAND with planets and upgrade your weakest joker"
+    goals = ante_goals(G, plan, infos, xmult, count, limit, money)
+    open_goals = [g for g in goals if not g["done"]]
+    priority = (
+        open_goals[0]["action"]
+        if open_goals
+        else "level MAIN_HAND with planets and upgrade your weakest joker"
+    )
+    milestone = f"Ante {ante} goals met: {len(goals) - len(open_goals)}/{len(goals)}."
     return {
         "ante": ante,
         "money": money,
@@ -1373,6 +1517,7 @@ def run_status(
         "recent_scores": scores,
         "next_target": nxt_target,
         "milestone": milestone,
+        "goals": goals,
         "priority": priority,
         "observatory": any(
             "observatory" in str(k).lower() for k in (G.get("used_vouchers") or {})

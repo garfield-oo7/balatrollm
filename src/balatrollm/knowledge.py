@@ -31,7 +31,7 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
     "Droll Joker": ("MULT", "A", "B", "flush", "+10 Mult with a Flush"),
     "Sly Joker": ("CHIPS", "B", "C", "pair", "+50 Chips with a Pair"),
     "Wily Joker": ("CHIPS", "B", "C", "pair", "+100 Chips with Three of a Kind"),
-    "Clever Joker": ("CHIPS", "B", "C", "pair", "+80 Chips with Two Pair"),
+    "Clever Joker": ("CHIPS", "A", "C", "pair", "+80 Chips with Two Pair"),
     "Devious Joker": ("CHIPS", "B", "C", "straight", "+100 Chips with a Straight"),
     "Crafty Joker": ("CHIPS", "A", "C", "flush", "+80 Chips with a Flush"),
     "Half Joker": (
@@ -200,7 +200,13 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
     "Trading Card": ("ECON", "B", "C", None, "$3 for a 1-card first discard"),
     "Flash Card": ("SCALE", "C", "C", None, "grows on rerolls"),
     "Popcorn": ("MULT", "S", "C", None, "+20 Mult, -4 per round; replace by Ante 3"),
-    "Spare Trousers": ("SCALE", "A", "B", "pair", "grows with Two Pair"),
+    "Spare Trousers": (
+        "SCALE",
+        "A",
+        "A",
+        "pair",
+        "+2 Mult per Two Pair played, forever",
+    ),
     "Ancient Joker": (
         "XMULT",
         "B",
@@ -319,8 +325,8 @@ CONSUMABLES: dict[str, tuple[str, str]] = {
     "Justice": ("GOOD", "Glass (x2) on 1 card you play"),
     "The Hermit": ("GOOD", "doubles money (max +$20); use at $10+"),
     "The Wheel of Fortune": ("SITUATIONAL", "1 in 4 edition on a joker; free gamble"),
-    "Strength": ("SITUATIONAL", "+1 rank on up to 2 cards"),
-    "The Hanged Man": ("SITUATIONAL", "destroy up to 2 junk cards (never MAIN suit)"),
+    "Strength": ("SITUATIONAL", "+1 rank on up to 2 cards (makes pairs)"),
+    "The Hanged Man": ("SITUATIONAL", "destroy up to 2 junk cards (thins the deck)"),
     "Death": ("GOOD", "2 cards: LEFT card becomes copy of RIGHT card"),
     "Temperance": ("GOOD", "money = jokers' sell value (max $50)"),
     "The Devil": ("SITUATIONAL", "Gold on 1 card you HOLD"),
@@ -420,6 +426,8 @@ BOSSES: dict[str, str] = {
     "Crimson Heart": "a random joker is disabled each hand: play normally",
     "Cerulean Bell": "one card is always forced into your selection: build around it",
 }
+FLUSH_ONLY_TAROTS = {"The Star", "The Moon", "The Sun", "The World", "The Lovers"}
+PAIR_FIXER_TAROTS = {"Strength", "The Hanged Man", "Death", "Cryptid"}
 SUIT_BOSSES = {"The Club": "C", "The Goad": "S", "The Window": "D", "The Head": "H"}
 
 
@@ -484,6 +492,11 @@ def consumable_tag(card: dict[str, Any], main_hand: str | None) -> str:
     if not hit:
         return ""
     verdict, hint = hit[1]
+    if HAND_FAMILY.get(main_hand or "") == "pair":
+        if hit[0] in FLUSH_ONLY_TAROTS:
+            return "[AVOID] changes suits; useless for a Pair-family MAIN_HAND"
+        if hit[0] in PAIR_FIXER_TAROTS:
+            verdict = "GOOD"
     return f"[{verdict}] {hint}"
 
 

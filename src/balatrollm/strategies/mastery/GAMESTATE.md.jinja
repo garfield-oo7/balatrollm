@@ -25,7 +25,8 @@
 - Jokers {{ S.jokers }}/{{ S.joker_limit }}, SLOTS_FREE {{ S.slots_free }}, XMULT_OWNED {{ S.xmult_owned }}
 - FLOOR ${{ S.effective_floor }}, SPENDABLE ${{ S.spendable }} (interest next round ${{ S.interest }})
 - STATUS: {{ S.status }}{% if S.hands_needed %} (next blind {{ S.next_target | fmt_num }} needs about {{ S.hands_needed }} hands at your recent scores){% endif %}{% if S.status == "TOO WEAK" %} -> spend money on score now; FLOOR is $0{% endif %}
-- {{ S.milestone }} PRIORITY: {{ S.priority }}.
+- GOALS for Ante {{ S.ante }}: {% for g in S.goals %}[{{ "x" if g.done else " " }}] {{ g.text }}{% if not loop.last %}; {% endif %}{% endfor %}
+- PRIORITY: {{ S.priority }}.
 {%- if S.observatory %}
 - Observatory owned: HOLD MAIN_HAND planets instead of using them.
 {%- endif %}
@@ -61,7 +62,7 @@
 - none
 {% endfor %}
 {%- if A.draws %}
-## Draws (chance to complete with one discard)
+## Draws worth chasing (chance to complete with one discard)
 {% for d in A.draws -%}
 - {{ d.text }}: discard {{ d.discard }} -> {{ d.chance | pct }}
 {% endfor %}
