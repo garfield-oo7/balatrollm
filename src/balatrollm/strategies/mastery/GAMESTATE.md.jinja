@@ -24,7 +24,7 @@
 - Ante {{ S.ante }}/8, round {{ G.round_num }}, money ${{ S.money }}
 - MAIN_HAND: {{ S.main_hand }}{% if S.main_suit %} (MAIN_SUIT: {{ S.main_suit }}){% endif %} - {{ S.main_reason }}
 - Jokers {{ S.jokers }}/{{ S.joker_limit }}, SLOTS_FREE {{ S.slots_free }}, XMULT_OWNED {{ S.xmult_owned }}
-- FLOOR ${{ S.effective_floor }}, SPENDABLE ${{ S.spendable }} (interest next round ${{ S.interest }})
+- FLOOR ${{ S.effective_floor }}, SPENDABLE ${{ S.spendable }} (interest next round ${{ S.interest }}){% if G.state == "SHOP" and S.spendable < S.money %} | an [XMULT] joker may use all ${{ S.money }}{% endif %}
 - ECON_OK {{ "YES" if S.econ_ok else "NO" }} (economy jokers owned {{ S.econ_owned }}) | BLUE_SEALS {{ S.blue_seals }}{% if not S.blue_seals %} (none yet: Standard packs and Blue Seal cards are wanted){% endif %}{% if S.hologram %} | HOLOGRAM owned (every card added helps){% endif %}
 - INTEREST_SPARE ${{ S.interest_spare }} (spend up to this and next round's interest stays ${{ S.interest }})
 - STATUS: {{ S.status }}{% if S.hands_needed %} (next blind {{ S.next_target | fmt_num }} needs about {{ S.hands_needed }} hands at your recent scores){% endif %}{% if S.status == "TOO WEAK" %} -> spend money on score now; FLOOR is $0{% endif %}

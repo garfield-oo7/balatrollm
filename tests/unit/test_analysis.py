@@ -324,7 +324,10 @@ class TestPlanAndStatus:
         glass = joker("j_glass", "Glass Joker")
         assert analysis.grows_xmult(G, glass).endswith("no source yet")
         G["shop"] = {"cards": [{"key": "c_justice", "label": "Justice", "set": "TAROT"}]}
-        assert "Justice available | SOURCE PRESENT" in analysis.grows_xmult(G, glass)
+        # Justice only makes more Glass cards: the source is a Glass card in the deck
+        assert analysis.grows_xmult(G, glass).endswith(
+            "(Justice available makes more) | no source yet"
+        )
         G["shop"] = {"cards": []}
         G["hand"]["cards"][0]["modifier"] = {"enhancement": "GLASS"}
         assert "1 in your deck | SOURCE PRESENT" in analysis.grows_xmult(G, glass)
@@ -613,6 +616,31 @@ class TestShopImpact:
         assert analysis.shop_impact(G)["weakest"]["label"] == "Jolly Joker"
         G["ante_num"] = 5
         assert analysis.shop_impact(G)["weakest"]["label"] == "Golden Joker"
+
+    def test_face_down_deck_cards_still_score(self) -> None:
+        G = self._shop()
+        base = analysis.shop_impact(G)
+        for c in G["cards"]["cards"]:
+            c["state"] = {"hidden": True}
+        hidden = analysis.shop_impact(G)
+        assert hidden["score"] == base["score"] > 0
+        assert hidden["owned"] == base["owned"] and hidden["weakest"] == base["weakest"]
+        assert "face-down card" not in hidden["cards"]
+
+    def test_sell_guard(self) -> None:
+        G = self._shop()  # Jolly Joker + Golden Joker, 3 slots free
+        G["money"] = 4
+        assert "slots are not full" in analysis.validate_action(G, "sell", {"joker": 0})
+        G["jokers"]["limit"] = 2  # full
+        for c in G["shop"]["cards"]:
+            c["cost"] = {"buy": 8}
+        assert "cannot afford" in analysis.validate_action(G, "sell", {"joker": 0})
+        G["money"] = 7  # 7 + Jolly's sell value affords an $8 joker
+        G["jokers"]["cards"][0]["cost"] = {"sell": 1}
+        assert analysis.validate_action(G, "sell", {"joker": 0}) is None
+        G["money"] = 0
+        G["jokers"]["cards"][0] = joker("j_troubadour", "Troubadour")  # TRAP
+        assert analysis.validate_action(G, "sell", {"joker": 0}) is None
 
     def test_shop_render_shows_score(self) -> None:
         sm = StrategyManager("mastery")
