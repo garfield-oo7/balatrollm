@@ -1894,6 +1894,44 @@ def typical_play(G: dict[str, Any], plan: dict[str, Any] | None = None) -> list[
     return []
 
 
+def typical_plays(
+    G: dict[str, Any], plan: dict[str, Any] | None = None
+) -> list[list[dict[str, Any]]]:
+    """MAIN_HAND plays from your deck to average joker value over.
+
+    Pair / Three / Four of a Kind: every combination of that many cards of one
+    rank, so ranks, suits and face cards count as often as they come up.
+    Flush: the low, middle and high five cards of MAIN_SUIT. Two Pair / Full
+    House: the single typical play.
+    """
+    plan = plan or main_hand_plan(G)
+    raw = [_face_up(c) for a in ("cards", "hand") for c in _area_cards(G, a)]
+    cards = [(c, _norm(c)) for c in raw if not _norm(c)["stone"]]
+    shape = PAIR_SHAPE.get(plan["hand"])
+    if shape and len(shape) == 1:
+        by_rank: dict[str, list[dict[str, Any]]] = {}
+        for c, n in cards:
+            if n["rank"]:
+                by_rank.setdefault(n["rank"], []).append(c)
+        return [
+            list(combo)
+            for same in by_rank.values()
+            for combo in combinations(same, shape[0])
+        ]
+    if plan["hand"] == "Flush":
+        suit = plan.get("suit") or main_suit(G)
+        same = sorted(
+            (c for c, n in cards if n["suit"] == suit),
+            key=lambda c: CHIP_VALUE.get(_norm(c)["rank"] or "", 0),
+        )
+        if len(same) < 5:
+            return []
+        starts = sorted({0, max(0, len(same) // 2 - 2), len(same) - 5})
+        return [same[i : i + 5] for i in starts]
+    play = typical_play(G, plan)
+    return [play] if play else []
+
+
 def _with_jokers(G: dict[str, Any], jokers: list[dict[str, Any]]) -> dict[str, Any]:
     area = dict(G.get("jokers") or {})
     area["cards"] = jokers
@@ -1906,27 +1944,46 @@ def _with_jokers(G: dict[str, Any], jokers: list[dict[str, Any]]) -> dict[str, A
 
 
 def shop_impact(G: dict[str, Any]) -> dict[str, Any]:
-    """Score change per hand of a typical MAIN_HAND play for each shop/pack
-    joker and MAIN_HAND planet, and what each owned joker contributes."""
+    """Score change per hand of an average MAIN_HAND play for each shop/pack
+    joker and MAIN_HAND planet, and what each owned joker contributes.
+
+    The average runs over every MAIN_HAND play your deck can make (see
+    typical_plays), so face-card and suit jokers count as often as they fire.
+    """
     plan = main_hand_plan(G)
     play = typical_play(G, plan)
     out: dict[str, Any] = {
         "hand": plan["hand"],
         "cards": [card_name(c) for c in play],
+        "plays": 0,
         "score": 0,
         "shop": {},
         "pack": {},
         "owned": {},
         "weakest": None,
     }
-    if not play:
-        return out
     owned = _area_cards(G, "jokers")
-    base = estimate_play(_with_jokers(G, owned), play, [])
-    if base["hand"] != plan["hand"]:
+    G_owned = _with_jokers(G, owned)
+    plays = [
+        p
+        for p in typical_plays(G, plan)
+        if estimate_play(G_owned, p, [])["hand"] == plan["hand"]
+    ]
+    if not plays:
         return out
-    score = int(base["score"])
+
+    def average(G2: dict[str, Any]) -> tuple[float, set[str]]:
+        total, unknown = 0.0, set()
+        for p in plays:
+            est = estimate_play(G2, p, [])
+            total += est["score"]
+            unknown |= set(est["unknown"])
+        return total / len(plays), unknown
+
+    base_score, base_unknown = average(G_owned)
+    score = int(base_score)
     out["score"] = score
+    out["plays"] = len(plays)
 
     def describe(new_score: float, unknown: bool) -> str:
         if unknown:
@@ -1937,9 +1994,9 @@ def shop_impact(G: dict[str, Any]) -> dict[str, Any]:
 
     def item_delta(card: dict[str, Any]) -> str | None:
         if card.get("set") == "JOKER":
-            est = estimate_play(_with_jokers(G, [*owned, card]), play, [])
+            new_score, unknown = average(_with_jokers(G, [*owned, card]))
             label = str(card.get("label") or card.get("key"))
-            return describe(est["score"], label in est["unknown"])
+            return describe(new_score, label in unknown)
         if card.get("set") == "PLANET":
             hand = knowledge.planet_hand(card.get("label"))
             if hand != plan["hand"]:
@@ -1950,8 +2007,8 @@ def shop_impact(G: dict[str, Any]) -> dict[str, Any]:
             cur["chips"] = float(cur.get("chips", 0)) + dc
             cur["mult"] = float(cur.get("mult", 0)) + dm
             levels[hand] = cur
-            est = estimate_play({**_with_jokers(G, owned), "hands": levels}, play, [])
-            return describe(est["score"], False)
+            new_score, _ = average({**G_owned, "hands": levels})
+            return describe(new_score, False)
         return None
 
     for area in ("shop", "pack"):
@@ -1963,12 +2020,12 @@ def shop_impact(G: dict[str, Any]) -> dict[str, Any]:
     for i, j in enumerate(owned):
         info = knowledge.joker_info(j.get("label")) or {}
         rest = [x for k, x in enumerate(owned) if k != i]
-        est = estimate_play(_with_jokers(G, rest), play, [])
         label = str(j.get("label") or j.get("key"))
-        if label in base["unknown"]:
+        if label in base_unknown:
             out["owned"][i] = "effect not computed"
             continue
-        gain = score - int(est["score"])
+        rest_score, _ = average(_with_jokers(G, rest))
+        gain = score - int(rest_score)
         contrib[i] = (gain, info.get("category"))
         out["owned"][i] = f"adds {fmt_num(gain)} per hand"
     # weakest = least score among jokers that do not grow or pay money

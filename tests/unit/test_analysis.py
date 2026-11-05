@@ -602,14 +602,23 @@ class TestShopImpact:
         }
         return G
 
-    def test_deltas_use_typical_main_hand(self) -> None:
+    def test_deltas_average_every_pair_in_the_deck(self) -> None:
         impact = analysis.shop_impact(self._shop())
-        # Pair of Aces: (10 + 22) chips x (2 + 8 Jolly) mult
-        assert impact["hand"] == "Pair" and impact["score"] == 320
-        assert impact["shop"][0].startswith("+320")  # The Duo doubles it
+        # 75 pairs (12 ranks x 6, plus 3 from the three 2s); mean card 7.52 chips:
+        # (10 + 15.04) chips x (2 + 8 Jolly) mult = 250
+        assert impact["hand"] == "Pair" and impact["plays"] == 75
+        assert impact["score"] == 250
+        assert impact["shop"][0].startswith("+250")  # The Duo doubles it
         assert impact["shop"][1].startswith("+0")  # Zany needs Three of a Kind
         assert 2 not in impact["shop"]  # Uranus levels another hand
-        assert impact["shop"][3].startswith("+197")  # Mercury: 47 x 11 = 517
+        assert impact["shop"][3].startswith("+190")  # Mercury: 40.04 x 11 = 440
+        assert impact["owned"][0] == "adds 200 per hand"  # Jolly: 250 - 25.04 x 2
+
+    def test_face_jokers_count_face_pairs(self) -> None:
+        G = self._shop()
+        G["shop"]["cards"] = [joker("j_scary_face", "Scary Face")]
+        # 3 of 13 ranks are faces: Scary Face (+30 chips per face) is not +0
+        assert not analysis.shop_impact(G)["shop"][0].startswith("+0")
 
     def test_weakest_skips_econ_early(self) -> None:
         G = self._shop()
@@ -645,7 +654,7 @@ class TestShopImpact:
     def test_shop_render_shows_score(self) -> None:
         sm = StrategyManager("mastery")
         text = sm.render_gamestate(self._shop(), rounds=[], history=[], flags={})
-        assert "TYPICAL Pair" in text and "SCORE +320 per hand" in text
+        assert "TYPICAL Pair (average of the 75" in text and "SCORE +250 per hand" in text
         assert "WEAKEST:" not in text  # only named once slots are full
         G = self._shop()
         G["jokers"]["limit"] = len(G["jokers"]["cards"])

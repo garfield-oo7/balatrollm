@@ -82,8 +82,8 @@
 {%- if G.state == "SHOP" %}
 # SHOP
 {%- if I and I.score %}
-- TYPICAL {{ I.hand }} ({{ I.cards | join(", ") }}) scores about {{ I.score | fmt_num }} per hand now.{% set nb0 = next_blind(G) %}{% if nb0 and nb0.score %} Next blind {{ nb0.score | fmt_num }} = about {{ ((nb0.score + I.score - 1) // I.score) | int }} such hands.{% endif %}
-- SCORE = change per hand of that typical play if you buy the item ([SCALE] jokers show today's value; they grow).
+- TYPICAL {{ I.hand }}{% if I.plays > 1 %} (average of the {{ I.plays }} {{ I.hand }} plays your deck can make, e.g. {{ I.cards | join(", ") }}){% else %} ({{ I.cards | join(", ") }}){% endif %} scores about {{ I.score | fmt_num }} per hand now.{% set nb0 = next_blind(G) %}{% if nb0 and nb0.score %} Next blind {{ nb0.score | fmt_num }} = about {{ ((nb0.score + I.score - 1) // I.score) | int }} such hands.{% endif %}
+- SCORE = change per hand of that average play if you buy the item ([SCALE] jokers show today's value; they grow).
 {%- endif %}
 {%- if G.shop and G.shop.cards %}
 {%- set sk = namespace(modified=false, death=false, hanged=false) %}
