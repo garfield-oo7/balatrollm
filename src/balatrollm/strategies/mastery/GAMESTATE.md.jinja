@@ -71,7 +71,7 @@
 - {{ d.text }}: discard {{ d.discard }} -> {{ d.chance | pct }}{% if d.if_complete %}, if it hits scores {{ d.if_complete | fmt_num }}{% endif %}{% if d.one_shot %} (wins the blind in one hand){% endif %}{% if d.chase %} = CHASE ({{ d.within | pct }} to hit with your discards){% endif %}
 {% endfor %}
 {%- endif %}
-- Suggested discard: {{ A.discard }}{% if A.discard %} = {% for i in A.discard %}{{ G.hand.cards[i] | card_name }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
+- Suggested discard: {% if A.discard %}{{ A.discard }} = {% for i in A.discard %}{{ G.hand.cards[i] | card_name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none: play instead{% endif %}
 {%- if flags and flags.suggest_action %}
 - Suggested action: {{ A.action.tool }} {{ A.action.cards }} ({{ A.action.why }})
 {%- endif %}

@@ -461,3 +461,40 @@ class TestBlueSealAndEconomy:
         assert not analysis.run_status(G, [], [])["econ_ok"]
         G = make_state("H_2", scoring[:1], state="SHOP")
         assert not analysis.run_status(G, [], [])["econ_ok"]  # scoring first
+
+
+class TestFableReviewFixes:
+    def test_chase_never_breaks_a_made_flush(self) -> None:
+        G = make_state("H_K H_5 H_4 H_3 H_2 C_J D_T S_9")
+        action = analysis.play_advice(G)["action"]
+        assert action["tool"] == "play" and set(action["cards"]) == {0, 1, 2, 3, 4}
+
+    def test_no_chase_at_ante_one_boss_without_jokers(self) -> None:
+        G = make_state("S_J D_Q C_K H_A H_3 S_4 C_4 D_2", boss_current=True)
+        assert not any(d["chase"] for d in analysis.play_advice(G)["draws"])
+
+    def test_strength_avoids_chains(self) -> None:
+        G = make_state("H_6 S_7 D_8 C_T H_3 S_2 D_Q C_A")
+        G["ante_num"] = 2
+        targets = analysis.suggest_targets(G, {"key": "c_strength"})
+        ranks = {G["hand"]["cards"][i]["value"]["rank"] for i in targets}
+        assert len(targets) == 2 and not {"6", "7"} <= ranks
+
+    def test_main_tag_needs_exact_hand(self) -> None:
+        trio = joker("j_trio", "The Trio")
+        half = joker("j_half", "Half Joker")
+        assert "[OFF-PLAN]" in knowledge.joker_tag(trio, "Two Pair", 2)
+        assert "[MAIN]" in knowledge.joker_tag(joker("j_mad", "Mad Joker"), "Two Pair", 2)
+        assert "[OFF-PLAN]" in knowledge.joker_tag(half, "Two Pair", 2)
+        assert "[MAIN]" in knowledge.joker_tag(half, "Pair", 2)
+
+    def test_family_not_counted_as_xmult_for_two_pair(self) -> None:
+        G = make_state("H_2", [joker("j_family", "The Family")], state="SHOP")
+        assert analysis.run_status(G, [], [])["xmult_owned"] == 0
+
+    def test_empty_discard_renders_none(self) -> None:
+        sm = StrategyManager("mastery")
+        G = make_state("H_K S_K H_9 S_9 D_5 C_5 H_3 S_3")
+        G["ante_num"] = 2
+        text = sm.render_gamestate(G, rounds=[], history=[], flags={})
+        assert "Suggested discard: none: play instead" in text

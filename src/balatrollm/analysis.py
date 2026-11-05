@@ -1060,6 +1060,17 @@ STRONG_DRAW = 0.5  # discard toward a MAIN_HAND draw that completes this often
 # Ante 1: keep discarding toward a Flush/Straight draw while the chance to hit
 # it within the remaining discards is at least this.
 CHASE_DRAW = 0.5
+BIG_HANDS = {
+    "Straight",
+    "Flush",
+    "Full House",
+    "Four of a Kind",
+    "Straight Flush",
+    "Five of a Kind",
+    "Flush House",
+    "Flush Five",
+}
+DRAW_UPGRADE = 1.2  # a draw must beat the best made play by 20% to discard for it
 WIN_MARGIN = 1.10  # a play is marked WINS only if its floor estimate >= 110% of NEED
 PAIR_FAMILY = {"Pair", "Two Pair", "Three of a Kind", "Full House", "Four of a Kind"}
 
@@ -1250,13 +1261,27 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
     # or when MAIN_HAND is that hand); a strong one beats spending a weak hand.
     ante = int(G.get("ante_num") or 1)
     margin = 1.0 if exact else WIN_MARGIN
+    best_listed = max((p["score"] for p in plays if not p["blocked"]), default=0)
+    any_pace = any(p["reaches_pace"] for p in plays)
+    # Already holding a Straight/Flush or better: that IS what Ante 1 chases.
+    made_big = any(p["hand"] in BIG_HANDS and not p["blocked"] for p in plays)
+    # Simulated: with no jokers, chasing at the Ante 1 boss loses ~10 points
+    # of win rate, so the chase needs a joker there.
+    chase_allowed = (
+        ante <= OPEN_ANTES
+        and discards > 0
+        and (bool(_joker_keys(G)) or progress.get("kind") != "boss")
+    )
     draws = []
     for d in analysis_["draws"]:
         if d["kind"] not in plan["draw_kinds"]:
             continue
         # chance to hit within ALL remaining discards (approximation)
         within = 1 - (1 - d["chance"]) ** max(discards, 1)
-        chase = ante <= OPEN_ANTES and discards > 0 and within >= CHASE_DRAW
+        # never break up a made hand for a draw that is not clearly bigger
+        worth_it = d.get("if_complete", 0) > DRAW_UPGRADE * best_listed or not any_pace
+        d = {**d, "worth_it": worth_it}
+        chase = chase_allowed and within >= CHASE_DRAW and worth_it and not made_big
         draws.append(
             {
                 **d,
@@ -1272,7 +1297,11 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         default=None,
     )
     strong_draw = chase_draw or next(
-        (d for d in draws if d["chance"] >= STRONG_DRAW and d["discard"]),
+        (
+            d
+            for d in draws
+            if d["chance"] >= STRONG_DRAW and d["discard"] and d["worth_it"]
+        ),
         None,
     )
     if strong_draw and not winners:
@@ -1377,8 +1406,17 @@ def suggest_targets(G: dict[str, Any], consumable: dict[str, Any]) -> list[int]:
             and rc[hand[i]["rank"]] == 1  # never break an existing pair
             and rc[nxt[hand[i]["rank"]]] >= 1
         ]
-        ups.sort(key=lambda i: -rc[nxt[hand[i]["rank"]]])
-        return sorted(ups[:hi])
+        ups.sort(key=lambda i: -rc[nxt[hand[i]["rank"]]])  # trips first
+        chosen: list[int] = []
+        for i in ups:
+            # skip chains (7->8 and 6->7): the 7 is gone when the 6 arrives
+            r = hand[i]["rank"]
+            if any(hand[j]["rank"] == nxt[r] or nxt[hand[j]["rank"]] == r for j in chosen):
+                continue
+            chosen.append(i)
+            if len(chosen) == hi:
+                break
+        return sorted(chosen)
 
     suit_tarot = {"c_star": "D", "c_moon": "C", "c_sun": "H", "c_world": "S"}
     if key in suit_tarot:
@@ -1424,7 +1462,7 @@ def suggest_targets(G: dict[str, Any], consumable: dict[str, Any]) -> list[int]:
         )
         # Death turns the LEFT selected card into a copy of the RIGHT one, so
         # the junk card must sit at a lower index than the card to copy.
-        for best in ranked[:3]:
+        for best in ranked:
             junk = [i for i in (off_suit or visible) if i < best]
             if junk:
                 worst = min(
@@ -1570,7 +1608,7 @@ def ante_goals(
                 "action": "sell an [ECON]/[CHIPS] joker to make room for [XMULT]/[SCALE]",
             }
         )
-    if 3 <= ante <= 6:
+    if 4 <= ante <= 6:
         goals.append(
             {
                 "text": f"hold $25 for max interest (have ${money})",
@@ -1599,7 +1637,7 @@ def run_status(
         for i in infos
         if i["category"] == "XMULT"
         and i["key"] not in ("j_loyalty_card", "j_stencil", "j_flower_pot")
-        and (i["family"] in (None, plan["family"]))
+        and knowledge.joker_fit(i["name"], plan["hand"]) != "OFF-PLAN"
     )
     floor = money_floor(G)
 
@@ -1621,11 +1659,12 @@ def run_status(
     scoring = sum(
         1 for i in infos if i["category"] in ("XMULT", "MULT", "CHIPS", "SCALE")
     )
+    slots_free = max(limit - count, 0)
     econ_ok = (
         ante <= ECON_EARLY_MAX_ANTE
         and scoring >= 2
-        and econ < ECON_MAX_OWNED
-        and count < limit
+        and slots_free >= 1
+        and (econ == 0 or (ante <= 2 and econ < ECON_MAX_OWNED and slots_free >= 2))
     )
     cons = G.get("consumables") or {}
     goals = ante_goals(G, plan, infos, xmult, count, limit, money)

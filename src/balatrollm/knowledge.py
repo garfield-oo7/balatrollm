@@ -108,7 +108,7 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
     "Even Steven": ("MULT", "B", "C", None, "+4 Mult per scored even card"),
     "Odd Todd": ("CHIPS", "B", "C", None, "+31 Chips per scored odd card"),
     "Scholar": ("MULT", "B", "C", None, "+20 Chips +4 Mult per scored Ace"),
-    "Business Card": ("ECON", "B", "C", "face", "$2 sometimes from face cards"),
+    "Business Card": ("ECON", "C", "C", "face", "$2 sometimes from face cards; skip"),
     "Supernova": (
         "SCALE",
         "A",
@@ -124,7 +124,7 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
         "+1 Mult per hand with NO scoring face card; resets; bad with Flush",
     ),
     "Space Joker": ("SCALE", "B", "B", None, "1 in 4 to level the played hand"),
-    "Egg": ("ECON", "B", "C", None, "+$3 sell value per round"),
+    "Egg": ("ECON", "C", "C", None, "+$3 sell value per round; skip"),
     "Burglar": ("TRAP", "T", "C", None, "+3 hands but lose ALL discards"),
     "Blackboard": ("XMULT", "B", "A", None, "x3 if ALL held cards are Spades/Clubs"),
     "Runner": ("SCALE", "B", "C", "straight", "grows with Straights"),
@@ -169,8 +169,8 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
     "Hologram": ("SCALE", "B", "A", None, "x0.25 per card added to deck"),
     "Vagabond": ("UTIL", "C", "C", None, "skip"),
     "Baron": ("XMULT", "B", "A", None, "x1.5 per King HELD; needs many Kings"),
-    "Cloud 9": ("ECON", "A", "C", None, "$1 per 9 in your deck each round (about $4)"),
-    "Rocket": ("ECON", "A", "C", None, "$1 per round, +$2 more after every boss"),
+    "Cloud 9": ("ECON", "B", "C", None, "$1 per 9 in your deck each round; tier A only with 4+ nines"),
+    "Rocket": ("ECON", "A", "C", None, "$1 per round, +$2 more after every boss; sell it last"),
     "Obelisk": ("TRAP", "T", "B", None, "resets when you play your main hand"),
     "Midas Mask": ("ECON", "C", "C", "face", "skip"),
     "Luchador": (
@@ -185,8 +185,8 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
     "Turtle Bean": ("UTIL", "B", "C", None, "+5 hand size, shrinks each round"),
     "Erosion": ("TRAP", "T", "B", None, "only with a thinned deck"),
     "Reserved Parking": ("ECON", "C", "C", "face", "skip"),
-    "Mail-In Rebate": ("ECON", "B", "C", None, "$5 per discarded card of a named rank"),
-    "To the Moon": ("ECON", "B", "C", None, "+$1 interest per $5 held; only if you hold $25"),
+    "Mail-In Rebate": ("ECON", "C", "C", None, "$5 per discarded card of a named rank; skip"),
+    "To the Moon": ("ECON", "B", "C", None, "+$1 interest per $5 held; only if you hold $20+"),
     "Hallucination": ("UTIL", "C", "C", None, "skip"),
     "Fortune Teller": ("SCALE", "C", "C", None, "+1 Mult per Tarot used"),
     "Juggler": ("UTIL", "B", "B", None, "+1 hand size"),
@@ -197,7 +197,7 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
     "Baseball Card": ("XMULT", "B", "A", None, "x1.5 per Uncommon joker"),
     "Bull": ("CHIPS", "B", "C", None, "+2 Chips per $1 held"),
     "Diet Cola": ("UTIL", "C", "C", None, "skip"),
-    "Trading Card": ("ECON", "B", "C", None, "$3 for a 1-card first discard"),
+    "Trading Card": ("ECON", "C", "C", None, "$3 for a 1-card first discard; conflicts with discards"),
     "Flash Card": ("SCALE", "C", "C", None, "grows on rerolls"),
     "Popcorn": ("MULT", "S", "C", None, "+20 Mult, -4 per round; replace by Ante 3"),
     "Spare Trousers": (
@@ -426,6 +426,39 @@ BOSSES: dict[str, str] = {
     "Crimson Heart": "a random joker is disabled each hand: play normally",
     "Cerulean Bell": "one card is always forced into your selection: build around it",
 }
+# Jokers that only fire when the played hand CONTAINS a specific hand type.
+REQUIRED_HAND = {
+    "Jolly Joker": "Pair",
+    "Sly Joker": "Pair",
+    "The Duo": "Pair",
+    "Zany Joker": "Three of a Kind",
+    "Wily Joker": "Three of a Kind",
+    "The Trio": "Three of a Kind",
+    "Mad Joker": "Two Pair",
+    "Clever Joker": "Two Pair",
+    "Spare Trousers": "Two Pair",
+    "The Family": "Four of a Kind",
+    "Droll Joker": "Flush",
+    "Crafty Joker": "Flush",
+    "The Tribe": "Flush",
+    "Crazy Joker": "Straight",
+    "Devious Joker": "Straight",
+    "The Order": "Straight",
+    "Runner": "Straight",
+}
+# Hand types each MAIN_HAND contains (Four of a Kind does NOT count as Two Pair).
+MAIN_CONTAINS = {
+    "High Card": {"High Card"},
+    "Pair": {"Pair"},
+    "Two Pair": {"Pair", "Two Pair"},
+    "Three of a Kind": {"Pair", "Three of a Kind"},
+    "Full House": {"Pair", "Two Pair", "Three of a Kind", "Full House"},
+    "Four of a Kind": {"Pair", "Three of a Kind", "Four of a Kind"},
+    "Flush": {"Flush"},
+    "Straight": {"Straight"},
+}
+SMALL_PLAY_MAINS = {"High Card", "Pair", "Three of a Kind"}  # Half Joker: <= 3 cards
+
 FLUSH_ONLY_TAROTS = {"The Star", "The Moon", "The Sun", "The World", "The Lovers"}
 PAIR_FIXER_TAROTS = {"Strength", "The Hanged Man", "Death", "Cryptid"}
 SUIT_BOSSES = {"The Club": "C", "The Goad": "S", "The Window": "D", "The Head": "H"}
@@ -461,6 +494,23 @@ def joker_info(name: Any) -> dict[str, Any] | None:
     }
 
 
+def joker_fit(label: Any, main_hand: str | None) -> str | None:
+    """"MAIN" / "OFF-PLAN" for jokers tied to a hand, None for generic ones."""
+    info = joker_info(label)
+    if not info or not main_hand:
+        return None
+    name = info["name"]
+    if name == "Half Joker":
+        return "MAIN" if main_hand in SMALL_PLAY_MAINS else "OFF-PLAN"
+    required = REQUIRED_HAND.get(name)
+    if required:
+        return "MAIN" if required in MAIN_CONTAINS.get(main_hand, set()) else "OFF-PLAN"
+    family, main_family = info["family"], HAND_FAMILY.get(main_hand)
+    if family in ("pair", "flush", "straight") and main_family:
+        return "MAIN" if family == main_family else "OFF-PLAN"
+    return None
+
+
 def joker_tag(card: dict[str, Any], main_hand: str | None, ante: int) -> str:
     """Render ``[TAGS] tier X: hint`` for a joker card dict."""
     info = joker_info(card.get("label"))
@@ -468,9 +518,9 @@ def joker_tag(card: dict[str, Any], main_hand: str | None, ante: int) -> str:
         return ""
     tags = [info["category"]]
     family = info["family"]
-    main_family = HAND_FAMILY.get(main_hand or "")
-    if family and main_family:
-        tags.append("MAIN" if family == main_family else "OFF-PLAN")
+    fit = joker_fit(card.get("label"), main_hand)
+    if fit:
+        tags.append(fit)
     elif family == "face":
         tags.append("FACE")
     tier = info["early"] if ante <= 3 else info["late"]
