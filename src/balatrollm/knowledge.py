@@ -169,8 +169,8 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
     "Hologram": ("SCALE", "B", "A", None, "x0.25 per card added to deck"),
     "Vagabond": ("UTIL", "C", "C", None, "skip"),
     "Baron": ("XMULT", "B", "A", None, "x1.5 per King HELD; needs many Kings"),
-    "Cloud 9": ("ECON", "B", "C", None, "$1 per 9 in deck each round"),
-    "Rocket": ("ECON", "A", "C", None, "$1+ per round, grows on bosses"),
+    "Cloud 9": ("ECON", "A", "C", None, "$1 per 9 in your deck each round (about $4)"),
+    "Rocket": ("ECON", "A", "C", None, "$1 per round, +$2 more after every boss"),
     "Obelisk": ("TRAP", "T", "B", None, "resets when you play your main hand"),
     "Midas Mask": ("ECON", "C", "C", "face", "skip"),
     "Luchador": (
@@ -186,13 +186,13 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
     "Erosion": ("TRAP", "T", "B", None, "only with a thinned deck"),
     "Reserved Parking": ("ECON", "C", "C", "face", "skip"),
     "Mail-In Rebate": ("ECON", "B", "C", None, "$5 per discarded card of a named rank"),
-    "To the Moon": ("ECON", "B", "C", None, "extra interest"),
+    "To the Moon": ("ECON", "B", "C", None, "+$1 interest per $5 held; only if you hold $25"),
     "Hallucination": ("UTIL", "C", "C", None, "skip"),
     "Fortune Teller": ("SCALE", "C", "C", None, "+1 Mult per Tarot used"),
     "Juggler": ("UTIL", "B", "B", None, "+1 hand size"),
     "Drunkard": ("UTIL", "B", "C", None, "+1 discard"),
     "Stone Joker": ("CHIPS", "C", "C", None, "needs Stone cards"),
-    "Golden Joker": ("ECON", "A", "C", None, "$4 per round; sell by Ante 5"),
+    "Golden Joker": ("ECON", "A", "C", None, "$4 every round, pays for itself in 2 rounds"),
     "Lucky Cat": ("SCALE", "C", "B", None, "needs Lucky cards"),
     "Baseball Card": ("XMULT", "B", "A", None, "x1.5 per Uncommon joker"),
     "Bull": ("CHIPS", "B", "C", None, "+2 Chips per $1 held"),
@@ -349,7 +349,7 @@ CONSUMABLES: dict[str, tuple[str, str]] = {
     "Ankh": ("AVOID", "destroys all other jokers"),
     "Deja Vu": ("GOOD", "Red Seal (retrigger) on a card you play"),
     "Hex": ("AVOID", "destroys all other jokers"),
-    "Trance": ("GOOD", "Blue Seal on a card you HOLD"),
+    "Trance": ("GOOD", "Blue Seal on a card: a free Planet every round"),
     "Medium": ("GOOD", "Purple Seal on a junk card you discard"),
     "Cryptid": ("GOOD", "2 copies of your best card"),
     "The Soul": ("GOOD", "LEGENDARY joker (needs an empty joker slot)"),
@@ -479,10 +479,14 @@ def joker_tag(card: dict[str, Any], main_hand: str | None, ante: int) -> str:
     return f"[{'] ['.join(tags)}] tier {tier}: {info['hint']}"
 
 
-def consumable_tag(card: dict[str, Any], main_hand: str | None) -> str:
+def consumable_tag(
+    card: dict[str, Any], main_hand: str | None, blue_seals: int | None = None
+) -> str:
     """Render a short verdict for a Tarot / Planet / Spectral card dict."""
     label = card.get("label")
     n = _norm_name(label)
+    if n == "trance" and blue_seals:
+        return "[SITUATIONAL] you already own a Blue Seal card: skip"
     if n in _PLANET_N:
         hand = _PLANET_N[n]
         if main_hand and hand == main_hand:

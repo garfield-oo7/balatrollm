@@ -808,6 +808,8 @@ def analyze_hand(G: dict[str, Any], top: int = 6) -> dict[str, Any]:
     keyset = set(_joker_keys(G))
 
     best: dict[str, dict[str, Any]] = {}
+    best_no_blue: dict[str, dict[str, Any]] = {}  # same, keeping Blue Seals held
+    blue = {i for i, c in enumerate(hand) if c["seal"] == "BLUE"}
     visible = [i for i, c in enumerate(hand) if not c["hidden"]]
     for k in range(1, min(limit, len(visible)) + 1):
         for idx in combinations(visible, k):
@@ -819,6 +821,14 @@ def analyze_hand(G: dict[str, Any], top: int = 6) -> dict[str, Any]:
             prev = best.get(est["hand"])
             if prev is None or est["score"] > prev["score"]:
                 best[est["hand"]] = {"cards": list(idx), **est}
+            if blue and not blue & set(idx):
+                prev = best_no_blue.get(est["hand"])
+                if prev is None or est["score"] > prev["score"]:
+                    best_no_blue[est["hand"]] = {"cards": list(idx), **est}
+    for htype, play in best.items():
+        alt = best_no_blue.get(htype)
+        if alt is not None and blue & set(play["cards"]):
+            play["no_blue"] = alt
     plays = sorted(best.values(), key=lambda p: -p["score"])[:top]
 
     deck = [_norm(c) for c in _area_cards(G, "cards")]
@@ -1063,6 +1073,20 @@ def _owned_joker_infos(G: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def blue_seal_count(G: dict[str, Any]) -> int:
+    """Blue Seal playing cards owned (deck + hand)."""
+    return sum(
+        1
+        for area in ("cards", "hand")
+        for c in _area_cards(G, area)
+        if _norm(c)["seal"] == "BLUE"
+    )
+
+
+ECON_EARLY_MAX_ANTE = 3  # buy economy jokers only while they have time to pay back
+ECON_MAX_OWNED = 2
+
+
 def main_suit(G: dict[str, Any]) -> str:
     """Suit the deck (hand + remaining deck) holds most of; joker suit wins ties."""
     counts: Counter[str] = Counter()
@@ -1212,7 +1236,11 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
     exact = not _joker_keys(G)
     plays = []
     for p in analysis_["plays"]:
+        alt = p.pop("no_blue", None)
         margin = 1.0 if exact and not p["unknown"] else WIN_MARGIN
+        # Prefer the version that keeps a Blue Seal card held if it still wins.
+        if alt and alt["score"] >= margin * remaining and not alt["blocked"]:
+            p = alt
         wins = p["score"] >= margin * remaining and not p["blocked"]
         plays.append({**p, "wins": wins, "reaches_pace": p["score"] >= per_hand})
     winners = [p for p in plays if p["wins"]]
@@ -1250,9 +1278,22 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         discard = strong_draw["discard"]
 
     action: dict[str, Any]
+    blue_in_hand = {i for i, c in enumerate(hand) if c["seal"] == "BLUE"}
     if winners:
-        best = max(winners, key=lambda p: p["score"])
-        action = {"tool": "play", "cards": best["cards"], "why": f"{best['hand']} WINS"}
+        # A Blue Seal card makes the Planet of the LAST played hand only while
+        # it is HELD: win without playing it, ideally with MAIN_HAND.
+        best = max(
+            winners,
+            key=lambda p: (
+                not (blue_in_hand & set(p["cards"])),
+                bool(blue_in_hand) and p["hand"] == plan["hand"],
+                p["score"],
+            ),
+        )
+        why = f"{best['hand']} WINS"
+        if blue_in_hand and not (blue_in_hand & set(best["cards"])):
+            why += " and keeps the Blue Seal card in hand"
+        action = {"tool": "play", "cards": best["cards"], "why": why}
     elif discards > 0 and discard and one_shot_draw:
         action = {
             "tool": "discard",
@@ -1293,6 +1334,7 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         "discard": discard,
         "action": action,
         "strong_draw": strong_draw,
+        "blue_in_hand": sorted(blue_in_hand),
         "hand_suits": analysis_["hand_suits"],
         "deck_size": analysis_["deck_size"],
         "deck_suits": analysis_["deck_suits"],
@@ -1574,6 +1616,17 @@ def run_status(
         status = "ON TRACK" if int(rounds[-1].get("hands_left", 0)) >= 1 else "TOO WEAK"
     effective_floor = 0 if status == "TOO WEAK" else floor
 
+    econ = sum(1 for i in infos if i["category"] == "ECON")
+    scoring = sum(
+        1 for i in infos if i["category"] in ("XMULT", "MULT", "CHIPS", "SCALE")
+    )
+    econ_ok = (
+        ante <= ECON_EARLY_MAX_ANTE
+        and scoring >= 2
+        and econ < ECON_MAX_OWNED
+        and count < limit
+    )
+    cons = G.get("consumables") or {}
     goals = ante_goals(G, plan, infos, xmult, count, limit, money)
     open_goals = [g for g in goals if not g["done"]]
     priority = (
@@ -1602,6 +1655,12 @@ def run_status(
         "next_target": nxt_target,
         "milestone": milestone,
         "goals": goals,
+        "econ_owned": econ,
+        "econ_ok": econ_ok,
+        "blue_seals": blue_seal_count(G),
+        "consumable_slots_free": max(
+            int(cons.get("limit", 2)) - int(cons.get("count", 0)), 0
+        ),
         "priority": priority,
         "observatory": any(
             "observatory" in str(k).lower() for k in (G.get("used_vouchers") or {})
@@ -1709,6 +1768,12 @@ def validate_action(
                 return "Your joker slots are full: this card would be wasted. Skip the pack or pick another card."
             if key == "c_death" and len(params.get("targets") or []) != 2:
                 return "Death needs exactly 2 targets: [junk card, card to copy]."
+            if (
+                chosen.get("set") not in ("JOKER", "TAROT", "PLANET", "SPECTRAL")
+                and _norm(chosen)["seal"] == "BLUE"
+                and blue_seal_count(G) >= 1
+            ):
+                return "You already own a Blue Seal card: pick a different card or skip."
     if method == "use":
         cons = _area_cards(G, "consumables")
         try:
@@ -1863,5 +1928,6 @@ TEMPLATE_FILTERS = {
     "card_name": card_name,
     "card_chips": card_chips,
     "fmt_num": fmt_num,
+    "blue_seal_count": blue_seal_count,
     "pct": pct,
 }

@@ -8,6 +8,8 @@ You are an expert Balatro player. Each turn you make exactly ONE tool call.
 - Run plan: Antes 1-3 fill all 5 joker slots with flat +Mult/+Chips jokers. Ante 4: first [XMULT] joker and a [SCALE] joker that grows every round. Antes 5-6: a second [XMULT]; replace [ECON]/[CHIPS] jokers. Without [XMULT] jokers you lose around Ante 5. The GOALS line tracks this for you.
 - Every hand you have NOT used when the blind is beaten pays $1. Discards are free and pay nothing.
 - Interest: +$1 per $5 you hold at the end of a round, at most $5.
+- Economy jokers ([ECON]) pay money every round. Bought in Antes 1-3 they pay for themselves within 2-3 rounds and fund later [XMULT] jokers; bought later they never pay back. ECON_OK says when one may be bought. Sell them from Ante 5 when you need the slot.
+- A Blue Seal playing card HELD in hand when a blind is beaten creates the Planet of the last played hand (needs a free consumable slot): free levels every round. One Blue Seal card is enough; BLUE_SEALS counts yours.
 - SHOP means you already beat the last blind.
 - Card indices are 0-based. Play or discard 1 to 5 cards.
 - Words in CAPS (NEED, PER_HAND, HANDS, DISCARDS, MAIN_HAND, SPENDABLE, FLOOR, SLOTS_FREE, XMULT_OWNED, STATUS) are computed for you in the STATUS block. Copy them; never recompute them.
@@ -33,13 +35,13 @@ Tool call: discard {"reasoning": "No play reaches PER_HAND 200 and I have 3 disc
 # SHOP RULES (at most 6 actions, then next_round)
 1. Read STATUS. SPENDABLE is what you may spend now. PRIORITY is what you need most.
 2. An item that costs $0: take it.
-3. Jokers: buy the best affordable joker, ranked [XMULT] > [MAIN] > [MULT] > [SCALE] > [CHIPS] > [ECON], higher tier first.
+3. Jokers: buy the best affordable joker, ranked [XMULT] > [MAIN] > [MULT] > [SCALE] > [CHIPS] > [ECON], higher tier first. If ECON_OK = YES, a tier A [ECON] joker ranks like [MULT].
    - Price must be <= SPENDABLE. Exception: an [XMULT] joker may use all your money.
-   - Never buy [TRAP], [KEEP-DISCARDS], a tier C joker, or a second [ECON] joker.
+   - Never buy [TRAP], [KEEP-DISCARDS], a tier C joker, or an [ECON] joker while ECON_OK = NO.
    - SLOTS_FREE = 0: sell your weakest joker only to buy an [XMULT] joker, or a tier S/A [MAIN] joker that replaces a [CHIPS], [ECON], [UTIL] or [OFF-PLAN] joker. Never sell your only [XMULT] joker.
 4. A Planet marked [MAIN]: buy it, then use it. Other planets: skip.
 5. Vouchers: buy [BUY] if you can afford it. Buy [GOOD] only if price <= SPENDABLE. Never buy [NEVER].
-6. Packs (at most 1 per shop, price <= SPENDABLE): Buffoon (only if SLOTS_FREE > 0) > Celestial > Arcana. Skip Standard and Spectral packs. In the FIRST shop of the run, buy a joker AND the Buffoon pack if you can afford both.
+6. Packs (at most 1 per shop, price <= SPENDABLE): Buffoon (only if SLOTS_FREE > 0) > Standard (only while BLUE_SEALS = 0) > Celestial > Arcana. Skip Spectral packs, and Standard packs once BLUE_SEALS > 0. In the FIRST shop of the run, buy a joker AND the Buffoon pack if you can afford both.
 7. Tarots in the shop: buy only The Hermit (money >= $10), Temperance, Judgement (needs SLOTS_FREE > 0), or a Tarot marked [GOOD] for your MAIN_HAND (Pair family: Death, Strength, The Hanged Man; Flush: the suit Tarot of MAIN_SUIT). Tarots that need card targets can only be used later during a round.
 8. Reroll: never in Antes 1-2. Ante 3: at most 1, only if SLOTS_FREE > 0 and the reroll cost <= SPENDABLE. Ante 4+: at most 2, only to find an [XMULT] joker.
 9. Then call next_round. Do not rearrange jokers: they are ordered for you when you leave.
@@ -52,7 +54,7 @@ Tool call: buy {"reasoning": "Gros Michel is tier S +15 Mult and $5 <= SPENDABLE
 1. Joker cards: pick the best joker by the shop ranking ([XMULT] > [MAIN] > [MULT] > [SCALE] > [CHIPS]). If SLOTS_FREE = 0: skip.
 2. Planet cards: pick the one marked [MAIN]; else Black Hole; else skip.
 3. Tarot/Spectral cards: pick a [GOOD] card. If it shows "Suggested targets", pass exactly those indices as `targets`. If it needs targets but shows none, do not pick it. Never pick [AVOID].
-4. Playing cards (Standard pack): pick one with an enhancement or seal (Flush: MAIN_SUIT only; Pair family: a rank you already own many of is best); else skip.
+4. Playing cards (Standard pack): a card marked [PICK: Blue Seal] comes first. Never pick a card marked [SKIP]. Otherwise pick one with an enhancement or a Red/Gold seal (Flush: MAIN_SUIT only); else skip.
 5. If the pack is still open after your pick (Mega pack), pick again with the same rules.
 
 # EXAMPLE (a different pack from yours)

@@ -424,3 +424,34 @@ class TestOneShotDraws:
         G = make_state("H_A H_K H_T H_5 H_4 S_4 C_4 D_9")
         flush = next(p for p in analysis.play_advice(G)["plays"] if p["hand"] == "Flush")
         assert flush["score"] == 300 and flush["wins"]
+
+
+class TestBlueSealAndEconomy:
+    def test_winning_play_keeps_blue_seal_in_hand(self) -> None:
+        G = make_state("H_K S_K D_K C_K H_2 S_3 D_7 C_9", chips=200)
+        G["hand"]["cards"][0]["modifier"] = {"seal": "BLUE"}
+        action = analysis.play_advice(G)["action"]
+        assert action["tool"] == "play" and 0 not in action["cards"]
+        assert "Blue Seal" in action["why"]
+
+    def test_second_blue_seal_pick_is_vetoed(self) -> None:
+        G = make_state("H_2", state="SMODS_BOOSTER_OPENED")
+        sealed = card("S_9", seal="BLUE")
+        G["pack"] = {"cards": [sealed]}
+        assert analysis.validate_action(G, "pack", {"card": 0}) is None
+        G["cards"]["cards"][0]["modifier"] = {"seal": "BLUE"}
+        assert "Blue Seal" in analysis.validate_action(G, "pack", {"card": 0})
+
+    def test_trance_verdict_depends_on_blue_seals(self) -> None:
+        trance = {"key": "c_trance", "set": "SPECTRAL", "label": "Trance"}
+        assert knowledge.consumable_tag(trance, "Two Pair", 0).startswith("[GOOD]")
+        assert "already own" in knowledge.consumable_tag(trance, "Two Pair", 1)
+
+    def test_econ_ok_window(self) -> None:
+        scoring = [joker("j_joker", "Joker"), joker("j_jolly", "Jolly Joker")]
+        G = make_state("H_2", scoring, state="SHOP")
+        assert analysis.run_status(G, [], [])["econ_ok"]
+        G["ante_num"] = 4
+        assert not analysis.run_status(G, [], [])["econ_ok"]
+        G = make_state("H_2", scoring[:1], state="SHOP")
+        assert not analysis.run_status(G, [], [])["econ_ok"]  # scoring first

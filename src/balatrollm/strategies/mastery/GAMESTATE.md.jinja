@@ -24,6 +24,7 @@
 - MAIN_HAND: {{ S.main_hand }}{% if S.main_suit %} (MAIN_SUIT: {{ S.main_suit }}){% endif %} - {{ S.main_reason }}
 - Jokers {{ S.jokers }}/{{ S.joker_limit }}, SLOTS_FREE {{ S.slots_free }}, XMULT_OWNED {{ S.xmult_owned }}
 - FLOOR ${{ S.effective_floor }}, SPENDABLE ${{ S.spendable }} (interest next round ${{ S.interest }})
+- ECON_OK {{ "YES" if S.econ_ok else "NO" }} (economy jokers owned {{ S.econ_owned }}) | BLUE_SEALS {{ S.blue_seals }}{% if not S.blue_seals %} (none yet: Standard packs and Blue Seal cards are wanted){% endif %}
 - STATUS: {{ S.status }}{% if S.hands_needed %} (next blind {{ S.next_target | fmt_num }} needs about {{ S.hands_needed }} hands at your recent scores){% endif %}{% if S.status == "TOO WEAK" %} -> spend money on score now; FLOOR is $0{% endif %}
 - GOALS for Ante {{ S.ante }}: {% for g in S.goals %}[{{ "x" if g.done else " " }}] {{ g.text }}{% if not loop.last %}; {% endif %}{% endfor %}
 - PRIORITY: {{ S.priority }}.
@@ -44,6 +45,9 @@
 - NEED {{ P.remaining | fmt_num }} more | HANDS {{ P.hands_left }} | DISCARDS {{ P.discards_left }} | PER_HAND {{ P.per_hand | fmt_num }}
 {%- if P.kind == "boss" and boss.counter %}
 - Boss rule now: {{ boss.counter }}
+{%- endif %}
+{%- if A.blue_in_hand %}
+- Blue Seal card in hand at {{ A.blue_in_hand }}: never play or discard it. When the blind is beaten it makes the Planet of your last played hand{% if S.consumable_slots_free %}.{% else %}, but your consumable slots are FULL: use or sell a consumable first.{% endif %}
 {%- endif %}
 
 ## Your hand (index: card)
@@ -82,7 +86,7 @@
 {%- elif card.set == "JOKER" %}
 - {{ loop.index0 }}: {{ card.label }} ${{ card.cost.buy }} {{ joker_tag(card, S.main_hand, S.ante) }}{% if card.modifier and card.modifier.edition %} ({{ card.modifier.edition }}){% endif %} | effect: {{ card.value.effect }}
 {%- elif card.set in ["TAROT", "PLANET", "SPECTRAL"] %}
-- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) ${{ card.cost.buy }} {{ consumable_tag(card, S.main_hand) }}
+- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) ${{ card.cost.buy }} {{ consumable_tag(card, S.main_hand, S.blue_seals) }}
 {%- else %}
 - {{ loop.index0 }}: {{ card_line(card) }} (playing card) ${{ card.cost.buy }}
 {%- endif %}
@@ -117,10 +121,10 @@
 {%- elif card.set in ["TAROT", "PLANET", "SPECTRAL"] -%}
 {%- set tg = consumable_targets(card.key) %}
 {%- set sug = suggest_targets(G, card) -%}
-- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) {{ consumable_tag(card, S.main_hand) }}
+- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) {{ consumable_tag(card, S.main_hand, S.blue_seals) }}
 {%- if tg %} | needs {{ tg[0] }}-{{ tg[1] }} target cards{% if sug %}. Suggested targets: {{ sug }}{% else %}. No good targets: do not pick{% endif %}{% endif %}
 {%- else -%}
-- {{ loop.index0 }}: {{ card_line(card) }} (playing card)
+- {{ loop.index0 }}: {{ card_line(card) }} (playing card){% if card.modifier and card.modifier.seal == "BLUE" %}{% if S.blue_seals %} [SKIP: you already own a Blue Seal card]{% else %} [PICK: Blue Seal, you have none]{% endif %}{% endif %}
 {%- endif %}
 {% endfor %}
 {%- if G.hand and G.hand.cards %}
@@ -140,7 +144,7 @@
 # CONSUMABLES ({{ G.consumables.count }}/{{ G.consumables.limit }})
 {% for c in G.consumables.cards -%}
 {%- set sug = suggest_targets(G, c) if G.state == "SELECTING_HAND" else [] -%}
-- {{ loop.index0 }}: {{ c.label }} {{ consumable_tag(c, S.main_hand) }}{% if consumable_targets(c.key) %}{% if sug %} | Suggested targets: {{ sug }}{% elif G.state == "SELECTING_HAND" %} | no good targets now{% else %} | needs cards in hand: use it during a round{% endif %}{% endif %}
+- {{ loop.index0 }}: {{ c.label }} {{ consumable_tag(c, S.main_hand, S.blue_seals) }}{% if consumable_targets(c.key) %}{% if sug %} | Suggested targets: {{ sug }}{% elif G.state == "SELECTING_HAND" %} | no good targets now{% else %} | needs cards in hand: use it during a round{% endif %}{% endif %}
 {% else -%}
 - none
 {% endfor %}
