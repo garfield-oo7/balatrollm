@@ -1,4 +1,10 @@
 {
+  "autoCompactWindow": 500000,
+  "attribution": {
+    "commit": "",
+    "pr": "",
+    "sessionUrl": false
+  },
   "permissions": {
     "allow": [
       "Bash(pytest:*)",
