@@ -96,3 +96,39 @@ Joker.
 - [10 beginner tips (Turn Based Lovers)](https://turnbasedlovers.com/guides/10-beginner-tips-to-develop-better-strategies-in-balatro/)
 - [Should you skip blinds in Balatro (Twinfinite)](https://twinfinite.net/guides/should-you-skip-blinds-in-balatro/)
 - [Steam: skip-blind discussion](https://steamcommunity.com/app/2379780/discussions/0/4756452715167149899)
+
+## 4. Blue Seals and early economy jokers (owner request, checkpoint 3)
+
+**Blue Seal.** A Blue Seal card that is *held in hand* when the blind is beaten
+creates the Planet of the last played hand, if a consumable slot is free. In
+effect it gives a free level of the main hand every round.
+([dood.gg](https://dood.gg/balatro/seals/blue-seal), [Balatro wiki: Planet Cards](https://balatrogame.fandom.com/wiki/Planet_Cards))
+
+Owner's rule: open Standard packs to find one, always pick a Blue Seal card,
+and don't pick another once the deck has one.
+- `BLUE_SEALS` in STATUS. Standard packs rank right after Buffoon packs while
+  `BLUE_SEALS = 0`, and are skipped afterwards.
+- In packs, a Blue Seal card is marked `[PICK: Blue Seal]` when you have none
+  and `[SKIP]` once you own one. `validate_action` vetoes picking a second one.
+- The play advisor prefers winning plays that keep the Blue Seal card in hand,
+  and prefers MAIN_HAND among them so the planet levels MAIN_HAND. The ROUND
+  section warns when consumable slots are full.
+- Trance (adds a Blue Seal) is `[GOOD]` with 0 Blue Seals and `[SITUATIONAL]`
+  after that.
+
+Caveat: sealed cards are fairly rare in Standard packs; most guides say seals
+mostly come from Spectral packs. A Standard pack therefore often shows no Blue
+Seal, and the bot then picks an enhanced or Red/Gold-seal card or skips.
+
+**Economy jokers early.** Economy jokers bought in Antes 1–3 fund the later
+xMult jokers; bought later they never pay back. Sell them around Antes 5–6.
+([PC Gamer](https://www.pcgamer.com/balatro-tips/), [games.gg economy primer](https://games.gg/balatro/guides/balatro-economy-guide/))
+- `ECON_OK` in STATUS is YES only in Antes 1–3, with 2+ scoring jokers owned,
+  fewer than 2 economy jokers, and a free slot. Under those conditions a tier A
+  `[ECON]` joker ranks like a `[MULT]` joker.
+- Tier A economy jokers: Golden Joker ($4 per round), Rocket ($1 per round,
+  +$2 after each boss), Cloud 9 ($1 per 9 in the deck).
+- Tier B: To the Moon (only if you hold $25), Egg, Trading Card, Mail-In
+  Rebate, Business Card.
+- The Ante 5+ goal "no [ECON]/[CHIPS] filler jokers" sells them when the slot
+  is needed.
