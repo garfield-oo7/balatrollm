@@ -10,6 +10,13 @@ from typing import Any
 import httpx
 from openai.types.chat import ChatCompletion
 
+from .analysis import (
+    estimate_play,
+    joker_order,
+    round_record,
+    summarize_outcome,
+    validate_action,
+)
 from .client import BalatroClient, BalatroError
 from .collector import (
     ChatCompletionError,
@@ -18,10 +25,9 @@ from .collector import (
     FinishReason,
     Stats,
 )
-from .analysis import round_record, summarize_outcome
 from .config import Config, Task, get_model_config
 from .llm import LLMClient, LLMClientError, LLMTimeoutError
-from .strategy import StrategyManager
+from .strategy import StrategyManager, StrategyManifest
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +47,8 @@ class Bot:
         self.port = port if port is not None else config.port
         self.model_config = get_model_config(config.model_config)
         self.strategy = StrategyManager(task.strategy)
+        # Opt-in harness behaviour declared in the strategy manifest
+        self.harness: dict[str, Any] = StrategyManifest.from_file(task.strategy).harness
 
         self._balatro: BalatroClient | None = None
         self._llm: LLMClient | None = None
@@ -53,6 +61,9 @@ class Bot:
         self._rounds: list[dict[str, Any]] = []
         # Last SELECTING_HAND gamestate, used to summarise the blind at ROUND_EVAL
         self._last_hand_state: dict[str, Any] | None = None
+        # Harness guards (only active when enabled in the strategy manifest)
+        self._consecutive_vetoes: int = 0
+        self._consecutive_rearranges: int = 0
 
         # Finish reason tracking
         self._finish_reason: FinishReason | None = None
@@ -232,32 +243,50 @@ class Bot:
         assert self._llm is not None
         assert self._collector is not None
 
-        strategy_content = self.strategy.render_strategy(gamestate)
-        gamestate_content = self.strategy.render_gamestate(
-            gamestate, rounds=self._rounds
-        )
+        context: dict[str, Any] = {
+            "rounds": self._rounds,
+            "history": self._history,
+            "flags": self.harness,
+        }
+        strategy_content = self.strategy.render_strategy(gamestate, **context)
+        gamestate_content = self.strategy.render_gamestate(gamestate, **context)
         memory_content = self.strategy.render_memory(
             history=self._history[-10:],
             last_error=self._last_error_msg,
             last_failure=self._last_failed_msg,
-            rounds=self._rounds,
             G=gamestate,
+            rounds=self._rounds,
+            flags=self.harness,
         )
 
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": strategy_content,
-                        "cache_control": {"type": "ephemeral"},
-                    },
-                    {"type": "text", "text": gamestate_content},
-                    {"type": "text", "text": memory_content},
-                ],
-            }
-        ]
+        strategy_block = {
+            "type": "text",
+            "text": strategy_content,
+            "cache_control": {"type": "ephemeral"},
+        }
+        if self.harness.get("system_prompt"):
+            # Static rulebook in the system role, dynamic state in the user turn
+            messages: list[dict[str, Any]] = [
+                {"role": "system", "content": [strategy_block]},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": gamestate_content},
+                        {"type": "text", "text": memory_content},
+                    ],
+                },
+            ]
+        else:
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        strategy_block,
+                        {"type": "text", "text": gamestate_content},
+                        {"type": "text", "text": memory_content},
+                    ],
+                }
+            ]
 
         tools = self.strategy.get_tools(gamestate["state"])
 
@@ -359,13 +388,63 @@ class Bot:
                 f"Invalid JSON in tool call arguments: {e}"
             )
 
+        if not isinstance(fn_args, dict):
+            return await self._handle_error_call("Tool arguments must be a JSON object")
+
+        before = before or {}
+        params = {k: v for k, v in fn_args.items() if k != "reasoning"}
+
+        ################################################################################
+        # Harness guards (opt-in via strategy manifest)
+        ################################################################################
+
+        veto: str | None = None
+        if self.harness.get("validate_actions") and before:
+            veto = validate_action(before, fn_name, params)
+        max_rearranges = int(self.harness.get("max_consecutive_rearranges", 0) or 0)
+        if fn_name == "rearrange":
+            self._consecutive_rearranges += 1
+            if max_rearranges and self._consecutive_rearranges > max_rearranges:
+                veto = (
+                    "You already rearranged; rearranging again changes nothing. "
+                    "Choose a different action now."
+                )
+        else:
+            self._consecutive_rearranges = 0
+        if veto is not None:
+            return await self._handle_veto(veto)
+
+        if (
+            fn_name == "next_round"
+            and self.harness.get("auto_reorder_jokers")
+            and before.get("state") == "SHOP"
+        ):
+            order = joker_order(before)
+            if order is not None:
+                try:
+                    await self._balatro.call("rearrange", {"jokers": order})
+                    logger.info(f"Harness re-ordered jokers: {order}")
+                except BalatroError as e:
+                    logger.warning(f"Auto joker reorder failed: {e}")
+
+        estimate: int | None = None
+        if fn_name == "play" and before.get("state") == "SELECTING_HAND":
+            try:
+                hand = before.get("hand", {}).get("cards", [])
+                chosen = [int(i) for i in params.get("cards", [])]
+                played = [hand[i] for i in sorted(chosen)]
+                held = [c for i, c in enumerate(hand) if i not in chosen]
+                estimate = int(estimate_play(before, played, held)["score"])
+            except (IndexError, TypeError, ValueError):
+                estimate = None
+
         ################################################################################
         # Execute tool call
         ################################################################################
 
         try:
             logger.info(f"Executing: {fn_name}({fn_args})")
-            gamestate = await self._balatro.call(fn_name, fn_args)
+            gamestate = await self._balatro.call(fn_name, params)
 
             self._collector.reset_failures()
             # Reset both consecutive counters on success
@@ -375,8 +454,17 @@ class Bot:
             self._last_failed_msg = None
             self._collector.record_call("successful")
             self._collector.write_gamestate(gamestate)
-            before = before or {}
-            params = {k: v for k, v in fn_args.items() if k != "reasoning"}
+            self._consecutive_vetoes = 0
+            result = summarize_outcome(fn_name, params, before, gamestate)
+            score: int | None = None
+            if fn_name == "play":
+                chips_before = int((before.get("round") or {}).get("chips") or 0)
+                chips_after = int((gamestate.get("round") or {}).get("chips") or 0)
+                if chips_after >= chips_before:
+                    score = chips_after - chips_before
+                if estimate is not None:
+                    result += f" [estimate was {estimate:,}]"
+                    logger.info(f"Score estimate vs actual: {estimate} vs {score}")
             self._history.append(
                 {
                     "method": fn_name,
@@ -385,7 +473,9 @@ class Bot:
                     "state": before.get("state", ""),
                     "ante": before.get("ante_num"),
                     "round": before.get("round_num"),
-                    "result": summarize_outcome(fn_name, fn_args, before, gamestate),
+                    "result": result,
+                    "score": score,
+                    "estimate": estimate,
                 }
             )
 
@@ -421,6 +511,20 @@ class Bot:
             self._finish_reason = "consecutive_error_calls"
             raise BotError("Too many consecutive error calls")
 
+        return await self._balatro.call("gamestate")
+
+    async def _handle_veto(self, msg: str) -> dict[str, Any]:
+        """Handle an action refused by the harness before reaching the game."""
+        assert self._balatro is not None
+        assert self._collector is not None
+
+        logger.warning(f"Vetoed call: {msg}")
+        self._last_failed_msg = f"Refused by harness: {msg}"
+        self._collector.record_call("failed")
+        self._consecutive_vetoes += 1
+        if self._consecutive_vetoes >= 5:
+            self._finish_reason = "consecutive_failed_calls"
+            raise BotError("Too many consecutive refused calls")
         return await self._balatro.call("gamestate")
 
     async def _handle_failed_call(self, msg: str) -> dict[str, Any]:

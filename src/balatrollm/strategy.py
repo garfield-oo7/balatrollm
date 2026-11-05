@@ -1,7 +1,7 @@
 """Strategy template management for BalatroLLM."""
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +21,10 @@ class StrategyManifest:
     author: str
     version: str
     tags: list[str]
+    # Optional harness behaviour flags (e.g. ``system_prompt``,
+    # ``validate_actions``, ``auto_reorder_jokers``). Empty for strategies that
+    # don't opt in, so their behaviour is unchanged.
+    harness: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_file(
@@ -49,6 +53,7 @@ class StrategyManifest:
             author=data["author"],
             version=data["version"],
             tags=data["tags"],
+            harness=dict(data.get("harness") or {}),
         )
 
 
