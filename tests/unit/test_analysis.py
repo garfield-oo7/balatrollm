@@ -235,14 +235,14 @@ class TestPlayAdvice:
 class TestPlanAndStatus:
     def test_default_main_hand_is_two_pair(self) -> None:
         plan = analysis.main_hand_plan(make_state("H_2"))
-        assert plan["hand"] == "Two Pair"
+        assert plan["hand"] == "Pair"
         assert plan["open"] and plan["draw_kinds"] == {"Flush", "Straight"}
 
     def test_open_phase_ends_at_ante_two(self) -> None:
         G = make_state("H_2")
         G["ante_num"] = 2
         plan = analysis.main_hand_plan(G)
-        assert not plan["open"] and plan["draw_kinds"] == {"Two Pair"}
+        assert not plan["open"] and plan["draw_kinds"] == {"Pair"}
 
     def test_flush_engine_switches_to_flush(self) -> None:
         G = make_state("H_2", [joker("j_four_fingers", "Four Fingers")])
@@ -252,7 +252,13 @@ class TestPlanAndStatus:
         jokers = [joker("j_droll", "Droll Joker"), joker("j_crafty", "Crafty Joker")]
         assert analysis.main_hand_plan(make_state("H_2", jokers))["hand"] == "Flush"
         jokers.append(joker("j_jolly", "Jolly Joker"))
-        assert analysis.main_hand_plan(make_state("H_2", jokers))["hand"] == "Two Pair"
+        assert analysis.main_hand_plan(make_state("H_2", jokers))["hand"] == "Pair"
+
+    def test_two_pair_needs_a_two_pair_joker(self) -> None:
+        G = make_state("H_2", [joker("j_trousers", "Spare Trousers")])
+        assert analysis.main_hand_plan(G)["hand"] == "Two Pair"
+        G = make_state("H_2", [joker("j_duo", "The Duo")])
+        assert analysis.main_hand_plan(G)["hand"] == "Pair"
 
     def test_half_joker_and_trio(self) -> None:
         G = make_state("H_2", [joker("j_half", "Half Joker")])
@@ -375,7 +381,7 @@ class TestMasteryStrategy:
             + sm.render_memory([], G=G, rounds=[], flags=flags)
         )
         assert "# STATUS" in text and "# DECIDE NOW" in text
-        assert "MAIN_HAND: Two Pair" in text and "GOALS for Ante 1" in text
+        assert "MAIN_HAND: Pair" in text and "GOALS for Ante 1" in text
         assert len(text) < 16000  # ~4k tokens budget
 
     def test_default_strategy_still_renders(self) -> None:
@@ -422,7 +428,7 @@ class TestAnteOneChase:
         G = make_state("S_J D_Q C_K H_A H_3 S_4 C_4 D_2", self.JOKER)
         G["ante_num"] = 2
         advice = analysis.play_advice(G)
-        assert all(d["kind"] == "Two Pair" for d in advice["draws"])
+        assert advice["draws"] == []
         assert "chase" not in advice["action"]["why"]
 
     def test_exact_win_without_jokers(self) -> None:
@@ -524,12 +530,12 @@ class TestShopImpact:
 
     def test_deltas_use_typical_main_hand(self) -> None:
         impact = analysis.shop_impact(self._shop())
-        # Two Pair of Aces and 10s: (20 + 42) chips x (2 + 8 Jolly) mult
-        assert impact["hand"] == "Two Pair" and impact["score"] == 620
-        assert impact["shop"][0].startswith("+620")  # The Duo doubles it
+        # Pair of Aces: (10 + 22) chips x (2 + 8 Jolly) mult
+        assert impact["hand"] == "Pair" and impact["score"] == 320
+        assert impact["shop"][0].startswith("+320")  # The Duo doubles it
         assert impact["shop"][1].startswith("+0")  # Zany needs Three of a Kind
-        assert impact["shop"][2].startswith("+282")  # Uranus: 82 x 11
-        assert 3 not in impact["shop"]  # Mercury levels another hand
+        assert 2 not in impact["shop"]  # Uranus levels another hand
+        assert impact["shop"][3].startswith("+197")  # Mercury: 47 x 11 = 517
 
     def test_weakest_skips_econ_early(self) -> None:
         G = self._shop()
@@ -540,5 +546,5 @@ class TestShopImpact:
     def test_shop_render_shows_score(self) -> None:
         sm = StrategyManager("mastery")
         text = sm.render_gamestate(self._shop(), rounds=[], history=[], flags={})
-        assert "TYPICAL Two Pair" in text and "SCORE +620 per hand" in text
+        assert "TYPICAL Pair" in text and "SCORE +320 per hand" in text
         assert "WEAKEST: 0 Jolly Joker" in text

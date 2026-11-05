@@ -1114,6 +1114,7 @@ def main_suit(G: dict[str, Any]) -> str:
     return max("HDCS", key=lambda s: (counts[s], -"HDCS".index(s)))
 
 
+TWO_PAIR_JOKERS = {"j_trousers", "j_mad", "j_clever"}
 OPEN_ANTES = 1  # Ante 1: chase Flush/Straight draws; from Ante 2 build MAIN_HAND
 FLUSH_ENGINES = {"j_tribe", "j_smeared", "j_four_fingers"}
 SUIT_SHARE_FOR_FLUSH = 0.5  # deck this concentrated in one suit makes Flush reliable
@@ -1130,8 +1131,9 @@ def _suit_share(G: dict[str, Any], suit: str) -> float:
 def main_hand_plan(G: dict[str, Any]) -> dict[str, Any]:
     """Deterministic MAIN_HAND.
 
-    Default is the Pair family (Two Pair): with one discard per hand an
-    unmodified deck makes Two Pair ~78% of the time versus ~44% for Flush, the
+    Default is a plain Pair (owner decision): an unmodified 8-card hand holds
+    a Pair ~89% of the time with no discard and ~99% with one, versus ~44% for
+    a Flush with one discard. Two Pair only with a Two Pair joker. The
     hand never dies to suit bosses, and it grows into Full House. Flush is
     chosen only when the run has made it consistent (a Flush engine joker, a
     flush-joker core with no pair jokers, or a deck half one suit). In the
@@ -1153,10 +1155,12 @@ def main_hand_plan(G: dict[str, Any]) -> dict[str, Any]:
         hand, reason = "Pair", "Half Joker needs plays of 3 or fewer cards"
     elif "j_trio" in keys or {"j_zany", "j_wily"} <= keys:
         hand, reason = "Three of a Kind", "your jokers pay for Three of a Kind"
+    elif keys & TWO_PAIR_JOKERS:
+        hand, reason = "Two Pair", "you own a Two Pair joker (Spare Trousers/Mad/Clever)"
     else:
         hand, reason = (
-            "Two Pair",
-            "most consistent strong hand (with 1 discard: Two Pair ~78%, Flush ~44%)",
+            "Pair",
+            "most consistent hand (a Pair is in ~89% of hands, ~99% after 1 discard)",
         )
     is_open = ante <= OPEN_ANTES and hand != "Flush"
     if is_open:
@@ -1496,11 +1500,11 @@ PAIR_BOSS_IMPACT = {
         "AFFECTS MAIN_HAND: your first play locks the hand type. Lock Pair (you can make "
         "it every hand) unless a bigger listed play WINS outright."
     ),
-    "The Psychic": "AFFECTS MAIN_HAND: plays must be 5 cards. Two Pair + 1 filler, or Full House.",
+    "The Psychic": "AFFECTS MAIN_HAND: plays must be 5 cards. Your Pair + 3 filler cards.",
     "The Arm": "AFFECTS MAIN_HAND: each play lowers its level. Win in as few hands as possible.",
     "The Ox": (
         "AFFECTS MAIN_HAND: playing your most played hand sets money to $0. "
-        "Use a different pair-family hand if it still scores enough."
+        "Play Two Pair or Three of a Kind instead if it still scores enough."
     ),
 }
 

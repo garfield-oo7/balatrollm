@@ -3,6 +3,10 @@
 > **Revision 3 (community-consensus review, `07-community-consensus.md`).** It overrides R1 and the milestone
 > sentence in R5.
 >
+> **R1″ (owner decision, supersedes R1′'s default): MAIN_HAND defaults to a plain Pair.** Two Pair only with
+> Spare Trousers, Mad Joker or Clever Joker. A Pair is in ~89% of 8-card hands with no discard and ~99% after
+> one. Pair jokers (Jolly, Sly, The Duo) still fire on Two Pair, Three of a Kind and Full House when dealt.
+>
 > **R1′. MAIN_HAND defaults to the Pair family (Two Pair), not Flush.** Measured on an unmodified deck with
 > one discard per hand: Two Pair is made about 78% of the time and Flush about 44%. Pair-family hands are immune
 > to suit bosses and grow into Full House. Flush is chosen only with Four Fingers, Smeared Joker or The Tribe;

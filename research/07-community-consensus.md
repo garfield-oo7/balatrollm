@@ -72,7 +72,7 @@ Joker.
 
 | Change | Where |
 | --- | --- |
-| MAIN_HAND defaults to **Two Pair**. Flush only with Four Fingers, Smeared Joker or The Tribe; with 2+ flush jokers and no pair jokers; or when half the deck is one suit. Pair with Half Joker; Three of a Kind with The Trio, or Zany + Wily. | `analysis.main_hand_plan` |
+| MAIN_HAND defaults to **Pair** (owner decision; originally Two Pair). Two Pair only with Spare Trousers, Mad Joker or Clever Joker. Flush only with Four Fingers, Smeared Joker or The Tribe; with 2+ flush jokers and no pair jokers; or when half the deck is one suit. Pair with Half Joker; Three of a Kind with The Trio, or Zany + Wily. | `analysis.main_hand_plan` |
 | **Ante 1 is open** (was Antes 1–2): Flush and Straight draws of 50%+ are still chased, and a dealt Flush or Straight is still played. From Ante 3, only MAIN_HAND draws are shown or chased. | `plan["open"]`, `plan["draw_kinds"]`, `play_advice` |
 | **Ante 1 CHASE (owner decision):** in Ante 1 only, keep discarding toward a Flush/Straight draw while the chance to hit it within the remaining discards is 50%+, even when a Pair keeps pace. When discards run out, play the best hand. From Ante 2, no chasing; focus on jokers. | `analysis.play_advice` |
 | **GOALS checklist per ante**, with PRIORITY set to the first unmet goal. Goals cover joker slots, xMult (1 by Ante 4, 2 by Ante 6), one SCALE joker from Ante 4, MAIN_HAND level of ante−1 from Ante 3, no ECON/CHIPS filler from Ante 5, and $25 interest in Antes 3–6. | `analysis.ante_goals`, STATUS block |
