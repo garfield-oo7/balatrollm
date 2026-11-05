@@ -359,7 +359,7 @@ CONSUMABLES: dict[str, tuple[str, str]] = {
     "The Lovers": ("SITUATIONAL", "Wild on 1 off-suit card (Flush)"),
     "The Chariot": ("SITUATIONAL", "Steel on 1 card you HOLD (not play)"),
     "Justice": ("GOOD", "Glass (x2) on 1 card you play"),
-    "The Hermit": ("GOOD", "doubles money (max +$20); use at $10+"),
+    "The Hermit": ("GOOD", "doubles money (max +$20); use at $10-$39"),
     "The Wheel of Fortune": ("SITUATIONAL", "1 in 4 edition on a joker; free gamble"),
     "Strength": ("SITUATIONAL", "+1 rank on up to 2 cards (makes pairs)"),
     "The Hanged Man": ("SITUATIONAL", "destroy up to 2 junk cards (thins the deck)"),
@@ -497,6 +497,7 @@ SMALL_PLAY_MAINS = {"High Card", "Pair", "Three of a Kind"}  # Half Joker: <= 3 
 
 FLUSH_ONLY_TAROTS = {"The Star", "The Moon", "The Sun", "The World", "The Lovers"}
 PAIR_FIXER_TAROTS = {"Strength", "The Hanged Man", "Death", "Cryptid"}
+HERMIT_MAX_MONEY = 40  # at this much money, Death / The Hanged Man come first
 SUIT_BOSSES = {"The Club": "C", "The Goad": "S", "The Window": "D", "The Head": "H"}
 
 
@@ -566,13 +567,21 @@ def joker_tag(card: dict[str, Any], main_hand: str | None, ante: int) -> str:
 
 
 def consumable_tag(
-    card: dict[str, Any], main_hand: str | None, blue_seals: int | None = None
+    card: dict[str, Any],
+    main_hand: str | None,
+    blue_seals: int | None = None,
+    money: int | None = None,
 ) -> str:
     """Render a short verdict for a Tarot / Planet / Spectral card dict."""
     label = card.get("label")
     n = _norm_name(label)
     if n == "trance" and blue_seals:
         return "[SITUATIONAL] you already own a Blue Seal card: skip"
+    if n == "thehermit" and money is not None and money >= HERMIT_MAX_MONEY:
+        return (
+            f"[SITUATIONAL] you already have ${HERMIT_MAX_MONEY}+: "
+            "prefer Death or The Hanged Man"
+        )
     if n in _PLANET_N:
         hand = _PLANET_N[n]
         if main_hand and hand == main_hand:

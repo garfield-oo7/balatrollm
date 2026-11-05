@@ -283,6 +283,42 @@ class TestPlanAndStatus:
         left, right = analysis.suggest_targets(G, {"key": "c_death"})
         assert left < right  # Death copies the RIGHT card onto the LEFT one
 
+    def test_death_copies_sealed_then_face_card(self) -> None:
+        G = make_state("S_4 H_4 D_7 C_3 H_8 C_K H_2 S_6")
+        G["ante_num"] = 3
+        # face card beats a rank you already hold twice; junk is the lowest plain card
+        assert analysis.suggest_targets(G, {"key": "c_death"}) == [3, 5]
+        G["hand"]["cards"][6]["modifier"] = {"seal": "RED"}
+        assert analysis.suggest_targets(G, {"key": "c_death"}) == [3, 6]
+        G["hand"]["cards"][3]["modifier"] = {"enhancement": "BONUS"}  # keep upgrades
+        assert analysis.suggest_targets(G, {"key": "c_death"}) == [2, 6]
+
+    def test_death_flush_copies_main_suit_not_off_suit_face(self) -> None:
+        jokers = [joker("j_droll", "Droll Joker"), joker("j_crafty", "Crafty Joker")]
+        G = make_state("C_3 H_9 H_4 H_7 D_2 H_5 S_K H_8", jokers)
+        G["ante_num"] = 3
+        plan = analysis.main_hand_plan(G)
+        assert plan["hand"] == "Flush"
+        left, right = analysis.suggest_targets(G, {"key": "c_death"})
+        suit = G["hand"]["cards"][right]["value"]["suit"]
+        assert suit == plan["suit"] and left < right
+
+    def test_hermit_skipped_with_forty_dollars(self) -> None:
+        hermit = {"key": "c_hermit", "set": "TAROT", "label": "The Hermit"}
+        assert knowledge.consumable_tag(hermit, "Pair", 0, 39).startswith("[GOOD]")
+        assert "Death" in knowledge.consumable_tag(hermit, "Pair", 0, 40)
+        assert knowledge.consumable_tag(hermit, "Pair").startswith("[GOOD]")
+
+    def test_interest_spare_and_hologram(self) -> None:
+        G = make_state("H_2", state="SHOP")
+        G["money"] = 23
+        status = analysis.run_status(G, [], [])
+        assert status["interest_spare"] == 3 and not status["hologram"]
+        G["money"] = 40
+        G["jokers"]["cards"] = [joker("j_hologram", "Hologram")]
+        status = analysis.run_status(G, [], [])
+        assert status["interest_spare"] == 15 and status["hologram"]
+
     def test_goals_and_priority(self) -> None:
         G = make_state("H_2", state="SHOP")
         G["ante_num"] = 4
@@ -455,6 +491,8 @@ class TestBlueSealAndEconomy:
         assert analysis.validate_action(G, "pack", {"card": 0}) is None
         G["cards"]["cards"][0]["modifier"] = {"seal": "BLUE"}
         assert "Blue Seal" in analysis.validate_action(G, "pack", {"card": 0})
+        G["jokers"]["cards"] = [joker("j_hologram", "Hologram")]
+        assert analysis.validate_action(G, "pack", {"card": 0}) is None
 
     def test_trance_verdict_depends_on_blue_seals(self) -> None:
         trance = {"key": "c_trance", "set": "SPECTRAL", "label": "Trance"}

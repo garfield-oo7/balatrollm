@@ -1094,6 +1094,11 @@ def blue_seal_count(G: dict[str, Any]) -> int:
     )
 
 
+def owns_hologram(G: dict[str, Any]) -> bool:
+    """Hologram grows with every card added, so extra playing cards help."""
+    return any(j.get("key") == "j_hologram" for j in _area_cards(G, "jokers"))
+
+
 ECON_EARLY_MAX_ANTE = 3  # buy economy jokers only while they have time to pay back
 ECON_MAX_OWNED = 2
 
@@ -1456,9 +1461,13 @@ def suggest_targets(G: dict[str, Any], consumable: dict[str, Any]) -> list[int]:
     if key == "c_death":
         if len(visible) < 2:
             return []
+        # Copy a sealed card first, then a face card (Flush: MAIN_SUIT only),
+        # then what MAIN_HAND wants.
         ranked = sorted(
             visible,
             key=lambda i: (
+                (not flush or i in on_suit) and hand[i]["seal"] is not None,
+                (not flush or i in on_suit) and hand[i]["rank"] in FACE_RANKS,
                 0 if flush else rc[hand[i]["rank"]],
                 hand[i]["enh"] is not None,
                 i in on_suit,
@@ -1468,8 +1477,13 @@ def suggest_targets(G: dict[str, Any], consumable: dict[str, Any]) -> list[int]:
         )
         # Death turns the LEFT selected card into a copy of the RIGHT one, so
         # the junk card must sit at a lower index than the card to copy.
+        plain = [i for i in visible if not hand[i]["seal"] and not hand[i]["enh"]]
         for best in ranked:
-            junk = [i for i in (off_suit or visible) if i < best]
+            junk = [
+                i
+                for i in (off_suit or visible)
+                if i < best and i in plain and hand[i]["rank"] != hand[best]["rank"]
+            ]
             if junk:
                 worst = min(
                     junk, key=lambda i: CHIP_VALUE.get(hand[i]["rank"] or "", 0)
@@ -1704,6 +1718,9 @@ def run_status(
         "econ_owned": econ,
         "econ_ok": econ_ok,
         "blue_seals": blue_seal_count(G),
+        "hologram": owns_hologram(G),
+        # most you can spend without lowering next round's interest
+        "interest_spare": max(money - 5 * interest(money), 0),
         "consumable_slots_free": max(
             int(cons.get("limit", 2)) - int(cons.get("count", 0)), 0
         ),
@@ -1962,6 +1979,7 @@ def validate_action(
                 chosen.get("set") not in ("JOKER", "TAROT", "PLANET", "SPECTRAL")
                 and _norm(chosen)["seal"] == "BLUE"
                 and blue_seal_count(G) >= 1
+                and not owns_hologram(G)
             ):
                 return (
                     "You already own a Blue Seal card: pick a different card or skip."
