@@ -7,6 +7,8 @@ from typing import Any
 
 from jinja2 import Environment, FileSystemLoader
 
+from . import analysis
+
 STRATEGIES_DIR = Path(__file__).parent / "strategies"
 
 
@@ -95,40 +97,47 @@ class StrategyManager:
 
         self.env = Environment(loader=FileSystemLoader(self.path))
         self.env.filters["from_json"] = json.loads
+        # Deterministic analysis helpers (hand analyser, blind progress, ...).
+        # Templates that don't call them are unaffected.
+        self.env.globals.update(analysis.TEMPLATE_GLOBALS)
+        self.env.filters.update(analysis.TEMPLATE_FILTERS)
 
         # Load tools
         with open(self.path / "TOOLS.json") as f:
             self._tools = json.load(f)
 
-    def render_strategy(self, gamestate: dict[str, Any]) -> str:
+    def render_strategy(self, gamestate: dict[str, Any], **context: Any) -> str:
         """Render the strategy guidance template.
 
         Args:
             gamestate: Current game state from BalatroBot
+            **context: Extra run context (e.g. ``rounds``) for templates that use it
 
         Returns:
             Rendered strategy guidance text
         """
         template = self.env.get_template("STRATEGY.md.jinja")
-        return template.render(G=gamestate)
+        return template.render(G=gamestate, **context)
 
-    def render_gamestate(self, gamestate: dict[str, Any]) -> str:
+    def render_gamestate(self, gamestate: dict[str, Any], **context: Any) -> str:
         """Render the game state template.
 
         Args:
             gamestate: Current game state from BalatroBot
+            **context: Extra run context (e.g. ``rounds``) for templates that use it
 
         Returns:
             Rendered game state text for LLM context
         """
         template = self.env.get_template("GAMESTATE.md.jinja")
-        return template.render(G=gamestate)
+        return template.render(G=gamestate, **context)
 
     def render_memory(
         self,
         history: list[dict[str, Any]],
         last_error: str | None = None,
         last_failure: str | None = None,
+        **context: Any,
     ) -> str:
         """Render the memory/history template.
 
@@ -136,6 +145,8 @@ class StrategyManager:
             history: List of previous actions with method, params, reasoning
             last_error: Error message from last invalid LLM response
             last_failure: Error message from last failed API call
+            **context: Extra run context (e.g. ``rounds``, ``G``) for templates
+                that use it; ignored by templates that don't
 
         Returns:
             Rendered memory context text
@@ -145,6 +156,7 @@ class StrategyManager:
             history=history,
             last_error_call_msg=last_error,
             last_failed_call_msg=last_failure,
+            **context,
         )
 
     def get_tools(self, state: str) -> list[dict[str, Any]]:

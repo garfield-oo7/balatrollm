@@ -18,6 +18,7 @@ from .collector import (
     FinishReason,
     Stats,
 )
+from .analysis import round_record, summarize_outcome
 from .config import Config, Task, get_model_config
 from .llm import LLMClient, LLMClientError, LLMTimeoutError
 from .strategy import StrategyManager
@@ -48,6 +49,10 @@ class Bot:
         self._last_error_msg: str | None = None
         self._last_failed_msg: str | None = None
         self._history: list[dict[str, Any]] = []
+        # One entry per finished blind (see analysis.round_record)
+        self._rounds: list[dict[str, Any]] = []
+        # Last SELECTING_HAND gamestate, used to summarise the blind at ROUND_EVAL
+        self._last_hand_state: dict[str, Any] | None = None
 
         # Finish reason tracking
         self._finish_reason: FinishReason | None = None
@@ -199,9 +204,16 @@ class Bot:
 
             match current_state:
                 case "SELECTING_HAND" | "SHOP" | "SMODS_BOOSTER_OPENED":
+                    if current_state == "SELECTING_HAND":
+                        self._last_hand_state = gamestate
                     response = await self._get_llm_response(gamestate)
-                    gamestate = await self._execute_tool_call(response)
+                    gamestate = await self._execute_tool_call(response, gamestate)
                 case "ROUND_EVAL":
+                    if self._last_hand_state is not None:
+                        self._rounds.append(
+                            round_record(self._last_hand_state, gamestate)
+                        )
+                        self._last_hand_state = None
                     gamestate = await self._balatro.call("cash_out")
                 case "BLIND_SELECT":
                     # NOTE: This bot always selects and never skips blinds
@@ -221,11 +233,15 @@ class Bot:
         assert self._collector is not None
 
         strategy_content = self.strategy.render_strategy(gamestate)
-        gamestate_content = self.strategy.render_gamestate(gamestate)
+        gamestate_content = self.strategy.render_gamestate(
+            gamestate, rounds=self._rounds
+        )
         memory_content = self.strategy.render_memory(
             history=self._history[-10:],
             last_error=self._last_error_msg,
             last_failure=self._last_failed_msg,
+            rounds=self._rounds,
+            G=gamestate,
         )
 
         messages = [
@@ -301,8 +317,16 @@ class Bot:
             self._finish_reason = "llm_abort"
             raise BotError(f"LLM error: {e}") from e
 
-    async def _execute_tool_call(self, response: ChatCompletion) -> dict[str, Any]:
-        """Execute tool call from LLM response."""
+    async def _execute_tool_call(
+        self, response: ChatCompletion, before: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Execute tool call from LLM response.
+
+        Args:
+            response: LLM response containing the tool call
+            before: Gamestate the decision was made on (used to summarise the
+                outcome of the action in the memory log)
+        """
         assert self._balatro is not None
         assert self._collector is not None
 
@@ -351,7 +375,19 @@ class Bot:
             self._last_failed_msg = None
             self._collector.record_call("successful")
             self._collector.write_gamestate(gamestate)
-            self._history.append({"method": fn_name, "params": fn_args})
+            before = before or {}
+            params = {k: v for k, v in fn_args.items() if k != "reasoning"}
+            self._history.append(
+                {
+                    "method": fn_name,
+                    "params": params,
+                    "reasoning": str(fn_args.get("reasoning", "")),
+                    "state": before.get("state", ""),
+                    "ante": before.get("ante_num"),
+                    "round": before.get("round_num"),
+                    "result": summarize_outcome(fn_name, fn_args, before, gamestate),
+                }
+            )
 
             return gamestate
 
