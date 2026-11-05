@@ -1,5 +1,61 @@
 # 00 — MASTER PLAN: Teaching a small LLM to beat Balatro (Red Deck / White Stake)
 
+> **Revision 2 (after the Fable advisor review, `06-fable-advisor-review.md`).** The review is accepted with the
+> changes below. They **override** the corresponding parts of the v1 plan (kept underneath for traceability).
+>
+> **R1. MAIN_HAND is a harness fact, not a model decision.** `analysis.main_hand_plan(G)`: Flush by default;
+> own The Duo → Two Pair family; Ante ≥ 3 with ≥ 2 pair-family jokers and 0 flush jokers → Two Pair family;
+> own The Tribe / Smeared Joker / Four Fingers → Flush (locked). The pivot prose is deleted from the prompt.
+>
+> **R2. Antes 1–2 play rule has no hand loyalty:** "play the listed play marked WINS; else discard the
+> `Suggested discard` indices; else play the highest listed play". Loyalty (planets, Supernova, Card Sharp, Ox)
+> only matters from Ante 2+ and is carried by MAIN_HAND.
+>
+> **R3. Joker list fixed and moved into the state as tags.** A static `JOKER_NOTES` table (tag, tier, family,
+> hint) is rendered next to every joker (owned, shop, Buffoon pack). Tags: `[XMULT] [MAIN] [MULT] [SCALE]
+> [CHIPS] [ECON] [UTIL] [TRAP] [OFF-PLAN] [KEEP-DISCARDS]`. Corrections: Half Joker = pair family (dead on
+> 5-card plays); Ride the Bus = pair family, no faces; Green Joker / Banner / Delayed Gratification =
+> `[KEEP-DISCARDS]` B-tier; Smeared Joker, Four Fingers, Droll, Crafty, The Tribe, suit +3 jokers = `[MAIN]`
+> for Flush; Baron and Loyalty Card are not "reliable xMult"; Supernova A not S.
+>
+> **R4. Conservative analyser.** Floor estimates (Misprint → 0, Lucky → 0, Bloodstone → ×1); `WINS` only when
+> floor ≥ 1.10 × remaining; unknown jokers printed as exclusions; `Suggested discard` indices toward
+> MAIN_HAND; suggested consumable targets; estimate-vs-actual logged per play (memory feedback + calibration data).
+>
+> **R5. STATUS block with CAPS tokens** at the top of every user message (NEED, PER_HAND, HANDS, DISCARDS,
+> MAIN_HAND, FLOOR, SPENDABLE, SLOTS_FREE, XMULT_OWNED, STATUS) plus a computed milestone sentence; the rulebook
+> and the final DECIDE NOW block (≤ 6 lines) reference the same tokens verbatim.
+>
+> **R6. Power check redefined:** `hands_needed = ceil(next target / mean of last 3 play scores)`;
+> ON TRACK if ≤ 3, TOO WEAK if ≥ 4 (the "won with ≥ 2 hands left" rule would read TOO WEAK at every Ante 4+).
+>
+> **R7. Prompt layout & budget:** static rulebook in the `system` role (one cached variant per phase, ≤ ~2k
+> tokens); user message = STATUS → analyser → state → memory → DECIDE NOW. PLAY ≤ ~3.5k tokens total, SHOP/PACK
+> ≤ ~5k. One worked example per phase. Imperative, numbered rules; whitelists; no double negatives.
+>
+> **R8. Harness pre-decides mechanical things, behind manifest flags** (so `default` is unchanged): joker
+> re-order before leaving the shop; vetoes for strictly bad/illegal moves (Buffoon pack with full slots,
+> `card`+`skip`, >5 cards, wrong Death/Judgement/Soul usage, discarding a WINS play); loop guard on repeated
+> `rearrange`. A PLAY-phase `Suggested action` line is a manifest toggle so it can be A/B tested.
+>
+> **R9. Economy simplified:** floor Ante 1–2 $0, Ante 3 $15, Ante 4–6 $25, Ante 7 $10, Ante 8 $0; floor
+> exceptions are a whitelist (XMULT joker, $0 item, Grabber / Paint Brush / Antimatter, STATUS = TOO WEAK).
+> No rerolls in Antes 1–2; max 1 in Ante 3; max 2 later. "Multiple of $5" dropped. Never buy: Hieroglyph,
+> Petroglyph, Director's Cut, Retcon (and the Merchant/Tycoon/Magic Trick/Illusion/Omen Globe/Hone/Glow Up set).
+> First shop: buy a scoring joker **and** the Buffoon pack if affordable. Hermit at ≥ $10.
+>
+> **R10. Bosses as state:** SHOP and Small/Big headers show the upcoming boss, whether it hits MAIN_HAND or the
+> deck (computed: suit bosses vs flush suit, Plant vs face cards), and its one-line counter; The Ox `#1#` is filled.
+> Only the active boss's counter is shown in PLAY.
+>
+> **R11. Evaluation protocol:** 5 seeds × 3 runs for {analyser only, analyser + suggested action}; report death
+> ante/blind, hands used per blind, xMult count at death and estimate error. Add rules only for failure modes seen
+> in recorded runs.
+>
+> **Expectation (stated plainly):** this plan's realistic ceiling for a Haiku-class model is Ante 6–7; winning
+> needs a second xMult by Ante 6 plus a levelled main hand, which is why `[XMULT]` outranks everything from Ante 3
+> and selling a flat joker to make room is encouraged.
+
 Inputs: research reports 01–05 in this folder (jokers, hand play, economy, bosses/consumables, harness audit).
 Baseline: `default` strategy + Claude Haiku → best run reached **round 12 / 24 (Ante 4 Boss, 10,000 chips)**.
 A strong rule-based bot with an exact scorer (JackPotts) has a *median* of Ante 4 on Red Deck, so Haiku is
