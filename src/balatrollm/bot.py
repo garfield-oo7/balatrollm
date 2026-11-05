@@ -15,6 +15,7 @@ from .analysis import (
     joker_order,
     round_record,
     summarize_outcome,
+    swap_plan,
     validate_action,
 )
 from .client import BalatroClient, BalatroError
@@ -415,6 +416,19 @@ class Bot:
         if veto is not None:
             return await self._handle_veto(veto)
 
+        swap_note = ""
+        if self.harness.get("auto_swap_jokers") and before:
+            swap = swap_plan(before, fn_name, params)
+            if isinstance(swap, str):
+                return await self._handle_veto(swap)
+            if swap:
+                try:
+                    await self._balatro.call("sell", {"joker": swap["sell"]})
+                except BalatroError as e:
+                    return await self._handle_failed_call(f"BalatroError: {e}")
+                logger.info(f"Harness sold {swap['label']} to make room for {swap['buy']}")
+                swap_note = f"harness sold {swap['label']} (WEAKEST) to make room; "
+
         if (
             fn_name == "next_round"
             and self.harness.get("auto_reorder_jokers")
@@ -456,7 +470,7 @@ class Bot:
             self._collector.record_call("successful")
             self._collector.write_gamestate(gamestate)
             self._consecutive_vetoes = 0
-            result = summarize_outcome(fn_name, params, before, gamestate)
+            result = swap_note + summarize_outcome(fn_name, params, before, gamestate)
             score: int | None = None
             if fn_name == "play":
                 chips_before = int((before.get("round") or {}).get("chips") or 0)

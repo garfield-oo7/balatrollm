@@ -33,16 +33,16 @@ STATUS: NEED 800, PER_HAND 200, HANDS 4. Listed plays: "Pair [1, 2] = King of Sp
 Tool call: play {"reasoning": "No play WINS and no Draw is listed. The Pair of Kings reaches PER_HAND 200, so I play it with 3 filler cards to cycle my hand.", "cards": [1, 2, 5, 6, 7]}
 {% elif G.state == "SHOP" %}
 # SHOP RULES (at most 6 actions, then next_round)
-1. Read STATUS. SPENDABLE is what you may spend now. PRIORITY is what you need most.
+1. Read STATUS. SPENDABLE is what you may spend now. PRIORITY is what you need most. Look ahead to the boss of this ante: follow 'Boss prep', and never buy a joker the boss switches off or sell one you need against it. STATUS turns TOO WEAK when the boss needs more hands than you have at your recent scores: then spend on score now.
 2. An item that costs $0: take it.
 3. Jokers: in Ante 1, jokers come first: buy the best affordable joker before any planet, pack or voucher. Buy the best affordable joker, ranked [XMULT] > [MAIN] > [MULT] > [SCALE] > [CHIPS] > [ECON], higher tier first. If ECON_OK = YES, a tier A [ECON] joker costing $7 or less ranks like [MULT].
    - Price must be <= SPENDABLE. Exception: an [XMULT] joker may use all your money.
    - Never buy [TRAP] or [KEEP-DISCARDS]. While ECON_OK = NO, [ECON] jokers rank last.
    - Tier C jokers are allowed (economy ones like Business Card and Egg build your money) but rank below every tier S/A/B joker: buy one only if SLOTS_FREE > 0 and nothing better is affordable.
    - Between two jokers you can afford in the same rank, buy the one with the bigger SCORE. A joker with SCORE +0 does nothing for your hand now: buy it only if it is [XMULT], [SCALE], [ECON], or tier C with SLOTS_FREE > 0.
-   - Keep a tier C joker until you need its slot: when SLOTS_FREE = 0, the WEAKEST rule below decides what to sell. A joker marked [SELL NOW] ([TRAP] or tier T) hurts you: sell it first.
+   - Keep a tier C joker until you need its slot: when SLOTS_FREE = 0, the WEAKEST rule below decides what is replaced. A joker marked [SELL NOW] ([TRAP] or tier T) hurts you: sell it first.
    - A joker marked [GROWS-XMULT] starts at X1 Mult, so its SCORE reads +0 even though it grows into an xMult joker. With SOURCE PRESENT it ranks right after [XMULT]; with no source yet, rank it by its tier.
-   - SLOTS_FREE = 0: sell the joker named WEAKEST only to buy an [XMULT] joker, a [GROWS-XMULT] joker with SOURCE PRESENT, or a joker whose SCORE is bigger than what WEAKEST adds. Never sell your only [XMULT] joker.
+   - SLOTS_FREE = 0: to replace the joker named WEAKEST, just buy the new joker: the harness sells WEAKEST first and then buys it. Do this only for an [XMULT] joker, a [GROWS-XMULT] joker with SOURCE PRESENT, or a joker whose SCORE is bigger than what WEAKEST adds. Do not sell jokers yourself to make room.
 4. A Planet marked [MAIN]: buy it, then use it. Other planets: skip.
 5. Vouchers: never in Ante 1 (jokers first). From Ante 2, buy [BUY] if you can afford it. Buy [GOOD] only if price <= SPENDABLE. Never buy [NEVER].
 6. Packs (at most 1 per shop, price <= SPENDABLE): Buffoon (only if SLOTS_FREE > 0) > Standard (only while BLUE_SEALS = 0, or you own Hologram) > Celestial > Arcana. From Ante 3, an Arcana pack whose price <= INTEREST_SPARE ranks above Celestial (it costs you no interest). Skip Spectral packs, and Standard packs once BLUE_SEALS > 0 unless you own Hologram. In the FIRST shop of the run, buy a joker AND the Buffoon pack if you can afford both.

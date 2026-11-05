@@ -508,6 +508,22 @@ GROWS_XMULT: dict[str, tuple[str | None, str | None, str]] = {
 }
 SUIT_BOSSES = {"The Club": "C", "The Goad": "S", "The Window": "D", "The Head": "H"}
 
+# What to do in the SHOP before a boss (look ahead, not counter-play).
+BOSS_PREP: dict[str, str] = {
+    "The Plant": "face cards score 0 against it: do not buy face-card jokers for this ante (Director's Cut can reroll the boss)",
+    "The Flint": "base chips and Mult are halved: +Mult and xMult jokers matter more than planets",
+    "The Ox": "playing your most played hand there sets money to $0: spend money in this shop instead of saving it",
+    "The Needle": "only 1 hand: you need one big hand, so buy xMult jokers or a MAIN_HAND planet",
+    "The Wall": "a huge target: buy raw score (xMult/+Mult jokers, MAIN_HAND planet) now",
+    "Violet Vessel": "a huge target: buy raw score (xMult/+Mult jokers, MAIN_HAND planet) now",
+    "The Eye": "no hand type twice: level a second hand type too (Two Pair or Three of a Kind)",
+    "The Mouth": "only one hand type: make MAIN_HAND strong (its planet, MAIN jokers)",
+    "The Arm": "each play lowers that hand's level: a MAIN_HAND planet now keeps it up",
+    "The Tooth": "you lose $1 per card played: keep a few dollars",
+    "The Water": "no discards: discard-based jokers do nothing this boss",
+    "The Manacle": "-1 hand size: fewer cards to make pairs, so more score per hand helps",
+}
+
 
 def _norm_name(name: Any) -> str:
     return re.sub(r"[^a-z0-9]", "", str(name or "").lower())

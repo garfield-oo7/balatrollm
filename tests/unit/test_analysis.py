@@ -198,6 +198,32 @@ class TestEstimate:
         assert analysis.estimate_play(G, hand[:2], hand[2:])["score"] == 0
 
 
+class TestLookAheadAndRefusals:
+    def test_no_discards_left_is_refused(self) -> None:
+        G = make_state("H_A H_K H_T H_5 H_4 S_4 C_4 D_9")
+        G["round"]["discards_left"] = 0
+        assert "No discards left" in analysis.validate_action(G, "discard", {"cards": [7]})
+
+    def test_boss_look_ahead_turns_status_too_weak(self) -> None:
+        G = make_state("H_2", state="SHOP")
+        G["ante_num"] = 3
+        G["blinds"] = {
+            "small": {"status": "DEFEATED", "score": 2000},
+            "big": {"status": "UPCOMING", "score": 3000},
+            "boss": {"status": "UPCOMING", "score": 4000, "name": "The Flint"},
+        }
+        history = [{"method": "play", "score": 1100}] * 3
+        S = analysis.run_status(G, [], history)
+        # Big Blind: 3 hands at 1,100. The Flint at 60% pace: 4000 / 660 = 7 hands
+        assert S["hands_needed"] == 3 and S["boss_hands"] == 7
+        assert S["status"] == "TOO WEAK"
+        G["blinds"]["boss"]["name"] = "The Wall"  # 4000 / 1100 = 4 hands
+        assert analysis.run_status(G, [], history)["status"] == "TOO WEAK"
+        G["blinds"]["boss"]["score"] = 3000
+        assert analysis.run_status(G, [], history)["status"] == "ON TRACK"
+        assert "spend money" in analysis.boss_impact({**G, "blinds": {"boss": {"name": "The Ox"}}})["prep"]
+
+
 class TestRetriggerSynergies:
     def test_hanging_chad_retriggers_photograph(self) -> None:
         photo = joker("j_photograph", "Photograph")
@@ -690,16 +716,29 @@ class TestShopImpact:
         G = self._shop()  # Jolly Joker + Golden Joker, 3 slots free
         G["money"] = 4
         assert "slots are not full" in analysis.validate_action(G, "sell", {"joker": 0})
-        G["jokers"]["limit"] = 2  # full
-        for c in G["shop"]["cards"]:
-            c["cost"] = {"buy": 8}
-        assert "cannot afford" in analysis.validate_action(G, "sell", {"joker": 0})
-        G["money"] = 7  # 7 + Jolly's sell value affords an $8 joker
-        G["jokers"]["cards"][0]["cost"] = {"sell": 1}
+        G["jokers"]["limit"] = 2  # full: joker swaps go through swap_plan
+        assert "just buy the new one" in analysis.validate_action(G, "sell", {"joker": 0})
+        G["packs"] = {"cards": [{"label": "Buffoon Pack", "cost": {"buy": 4}}]}
         assert analysis.validate_action(G, "sell", {"joker": 0}) is None
+        G["packs"] = {"cards": []}
         G["money"] = 0
         G["jokers"]["cards"][0] = joker("j_troubadour", "Troubadour")  # TRAP
         assert analysis.validate_action(G, "sell", {"joker": 0}) is None
+
+    def test_swap_plan_sells_weakest_first(self) -> None:
+        G = self._shop()  # owns Jolly Joker + Golden Joker; shop: The Duo, Zany
+        G["money"] = 8
+        for c in G["shop"]["cards"]:
+            c["cost"] = {"buy": 8}
+        assert analysis.swap_plan(G, "buy", {"card": 0}) is None  # slots free
+        G["jokers"]["limit"] = 2
+        G["jokers"]["cards"][0]["cost"] = {"sell": 1}
+        plan = analysis.swap_plan(G, "buy", {"card": 0})  # The Duo is [XMULT]
+        assert plan == {"sell": 0, "label": "Jolly Joker", "buy": "The Duo"}
+        # Zany (+12 Mult with Three of a Kind) adds nothing to Pair: refused
+        assert "would not raise" in analysis.swap_plan(G, "buy", {"card": 1})
+        G["money"] = 6  # 6 + 1 < 8
+        assert "not enough" in analysis.swap_plan(G, "buy", {"card": 0})
 
     def test_shop_render_shows_score(self) -> None:
         sm = StrategyManager("mastery")
