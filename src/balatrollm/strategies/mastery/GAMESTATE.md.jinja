@@ -93,9 +93,9 @@
 {%- if card.state and card.state.hidden %}
 - {{ loop.index0 }}: face-down card
 {%- elif card.set == "JOKER" %}
-- {{ loop.index0 }}: {{ card.label }} ${{ card.cost.buy }} {{ joker_tag(card, S.main_hand, S.ante) }}{% if card.modifier and card.modifier.edition %} ({{ card.modifier.edition }}){% endif %}{% if I and I.shop[loop.index0] %} | SCORE {{ I.shop[loop.index0] }}{% endif %} | effect: {{ card.value.effect }}
+- {{ loop.index0 }}: {{ card.label }} ${{ card.cost.buy }} {{ joker_tag(card, S.main_hand, S.ante) }}{% set gx = grows_xmult(G, card) %}{% if gx %} {{ gx }}{% endif %}{% if card.modifier and card.modifier.edition %} ({{ card.modifier.edition }}){% endif %}{% if I and I.shop[loop.index0] %} | SCORE {{ I.shop[loop.index0] }}{% endif %} | effect: {{ card.value.effect }}
 {%- elif card.set in ["TAROT", "PLANET", "SPECTRAL"] %}
-- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) ${{ card.cost.buy }} {% if card.label == "Death" and sk.hanged and not sk.modified %}[SKIP] no sealed, enhanced or edition card in your deck to copy: take The Hanged Man instead{% else %}{{ consumable_tag(card, S.main_hand, S.blue_seals, S.money) }}{% endif %}{% if I and I.shop[loop.index0] %} | SCORE {{ I.shop[loop.index0] }}{% endif %}
+- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) ${{ card.cost.buy }} {% if card.label == "Death" and not sk.modified %}[SKIP] no sealed, enhanced or edition card in your deck to copy{% if sk.hanged %}: take The Hanged Man instead{% endif %}{% else %}{{ consumable_tag(card, S.main_hand, S.blue_seals, S.money) }}{% endif %}{% if I and I.shop[loop.index0] %} | SCORE {{ I.shop[loop.index0] }}{% endif %}
 {%- else %}
 - {{ loop.index0 }}: {{ card_line(card) }} (playing card) ${{ card.cost.buy }}
 {%- endif %}
@@ -127,15 +127,15 @@
 {%- set pk = namespace(modified=false, death=false, hanged=false) %}
 {%- for c in (G.hand.cards if G.hand and G.hand.cards else []) %}{% if c.modifier and (c.modifier.seal or c.modifier.enhancement or c.modifier.edition) %}{% set pk.modified = true %}{% endif %}{% endfor %}
 {%- for c in G.pack.cards %}{% if c.label == "Death" %}{% set pk.death = true %}{% elif c.label == "The Hanged Man" %}{% set pk.hanged = true %}{% endif %}{% endfor %}
-{%- set hanged_first = pk.death and pk.hanged and not pk.modified %}
+{%- set death_skip = pk.death and not pk.modified %}
 {% for card in G.pack.cards -%}
 {%- if card.set == "JOKER" -%}
 {%- set jt = joker_tag(card, S.main_hand, S.ante) -%}
-- {{ loop.index0 }}: {{ card.label }} (Joker) {{ jt }}{% if card.modifier and card.modifier.edition %} ({{ card.modifier.edition }}){% endif %}{% if I and I.pack[loop.index0] %} | SCORE {{ I.pack[loop.index0] }}{% endif %} | effect: {{ card.value.effect }} | sells for ${{ card.cost.sell }}{% if S.slots_free and ('tier T' in jt or '[TRAP]' in jt) %} [CASH ONLY: take it if nothing better, then sell it in the shop]{% endif %}
+- {{ loop.index0 }}: {{ card.label }} (Joker) {{ jt }}{% set gx = grows_xmult(G, card) %}{% if gx %} {{ gx }}{% endif %}{% if card.modifier and card.modifier.edition %} ({{ card.modifier.edition }}){% endif %}{% if I and I.pack[loop.index0] %} | SCORE {{ I.pack[loop.index0] }}{% endif %} | effect: {{ card.value.effect }} | sells for ${{ card.cost.sell }}{% if S.slots_free and ('tier T' in jt or '[TRAP]' in jt) %} [CASH ONLY: take it if nothing better, then sell it in the shop]{% endif %}
 {%- elif card.set in ["TAROT", "PLANET", "SPECTRAL"] -%}
 {%- set tg = consumable_targets(card.key) %}
 {%- set sug = suggest_targets(G, card) -%}
-- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) {% if hanged_first and card.label == "Death" %}[SKIP] no sealed, enhanced or edition card in hand to copy: take The Hanged Man instead{% else %}{{ consumable_tag(card, S.main_hand, S.blue_seals, S.money) }}{% endif %}
+- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) {% if death_skip and card.label == "Death" %}[SKIP] no sealed, enhanced or edition card in hand to copy{% if pk.hanged %}: take The Hanged Man instead{% endif %}{% else %}{{ consumable_tag(card, S.main_hand, S.blue_seals, S.money) }}{% endif %}
 {%- if tg %} | needs {{ tg[0] }}-{{ tg[1] }} target cards{% if sug %}. Suggested targets: {{ sug }}{% else %}. No good targets: do not pick{% endif %}{% endif %}
 {%- else -%}
 - {{ loop.index0 }}: {{ card_line(card) }} (playing card){% if card.modifier and card.modifier.seal == "BLUE" %}{% if S.blue_seals and not S.hologram %} [SKIP: you already own a Blue Seal card]{% elif S.blue_seals %} [OK: Hologram grows with every card added]{% else %} [PICK: Blue Seal, you have none]{% endif %}{% endif %}

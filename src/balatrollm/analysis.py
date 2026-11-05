@@ -1094,6 +1094,36 @@ def blue_seal_count(G: dict[str, Any]) -> int:
     )
 
 
+def grows_xmult(G: dict[str, Any], card: dict[str, Any]) -> str:
+    """``[GROWS-XMULT] ...`` for a joker that starts at X1 Mult and grows.
+
+    Its SCORE reads +0 when bought, so the tag says whether the thing that
+    grows it (a Glass/Lucky card or the Tarot that makes one) is present.
+    """
+    grows = knowledge.GROWS_XMULT.get(str(card.get("label")))
+    if not grows:
+        return ""
+    enhancement, tarot_key, source = grows
+    if not enhancement:
+        return f"[GROWS-XMULT] starts at X1 | {source} | SOURCE PRESENT"
+    count = sum(
+        1
+        for area in ("cards", "hand")
+        for c in _area_cards(G, area)
+        if _norm(c)["enh"] == enhancement
+    )
+    tarots = [
+        str(c.get("label"))
+        for area in ("consumables", "shop", "pack")
+        for c in _area_cards(G, area)
+        if c.get("key") == tarot_key
+    ]
+    text = f"[GROWS-XMULT] starts at X1 | {source}: {count} in your deck"
+    if tarots:
+        text += f", {tarots[0]} available"
+    return text + (" | SOURCE PRESENT" if count or tarots else " | no source yet")
+
+
 def owns_hologram(G: dict[str, Any]) -> bool:
     """Hologram grows with every card added, so extra playing cards help."""
     return any(j.get("key") == "j_hologram" for j in _area_cards(G, "jokers"))
@@ -1471,13 +1501,18 @@ def suggest_targets(G: dict[str, Any], consumable: dict[str, Any]) -> list[int]:
     if key == "c_death":
         if len(visible) < 2:
             return []
-        # Copy a sealed card first, then a face card (Flush: MAIN_SUIT only),
-        # then what MAIN_HAND wants.
+        # Copy only a modified card (seal, enhancement or edition; Flush:
+        # MAIN_SUIT only): sealed first, then what MAIN_HAND wants.
+        modified = [
+            i
+            for i in visible
+            if (hand[i]["seal"] or hand[i]["enh"] or hand[i]["ed"])
+            and (not flush or i in on_suit)
+        ]
         ranked = sorted(
-            visible,
+            modified,
             key=lambda i: (
-                (not flush or i in on_suit) and hand[i]["seal"] is not None,
-                (not flush or i in on_suit) and hand[i]["rank"] in FACE_RANKS,
+                hand[i]["seal"] is not None,
                 0 if flush else rc[hand[i]["rank"]],
                 hand[i]["enh"] is not None,
                 i in on_suit,
@@ -1487,7 +1522,11 @@ def suggest_targets(G: dict[str, Any], consumable: dict[str, Any]) -> list[int]:
         )
         # Death turns the LEFT selected card into a copy of the RIGHT one, so
         # the junk card must sit at a lower index than the card to copy.
-        plain = [i for i in visible if not hand[i]["seal"] and not hand[i]["enh"]]
+        plain = [
+            i
+            for i in visible
+            if not hand[i]["seal"] and not hand[i]["enh"] and not hand[i]["ed"]
+        ]
         for best in ranked:
             junk = [
                 i
@@ -2139,6 +2178,7 @@ TEMPLATE_GLOBALS = {
     "boss_impact": boss_impact,
     "suggest_targets": suggest_targets,
     "joker_order": joker_order,
+    "grows_xmult": grows_xmult,
     "joker_tag": knowledge.joker_tag,
     "consumable_tag": knowledge.consumable_tag,
     "voucher_tag": knowledge.voucher_tag,

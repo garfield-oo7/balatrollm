@@ -291,14 +291,16 @@ class TestPlanAndStatus:
         assert analysis.suggest_targets(G, {"key": "c_strength"}) == [2, 5]
         assert analysis.suggest_targets(G, {"key": "c_hanged_man"}) == [3, 6]
         assert analysis.suggest_targets(G, {"key": "c_sun"}) == []
+        assert analysis.suggest_targets(G, {"key": "c_death"}) == []  # nothing modified
+        G["hand"]["cards"][5]["modifier"] = {"enhancement": "GLASS"}
         left, right = analysis.suggest_targets(G, {"key": "c_death"})
-        assert left < right  # Death copies the RIGHT card onto the LEFT one
+        assert left < right and right == 5  # copies the RIGHT card onto the LEFT one
 
-    def test_death_copies_sealed_then_face_card(self) -> None:
+    def test_death_copies_only_modified_cards(self) -> None:
         G = make_state("S_4 H_4 D_7 C_3 H_8 C_K H_2 S_6")
         G["ante_num"] = 3
-        # face card beats a rank you already hold twice; junk is the lowest plain card
-        assert analysis.suggest_targets(G, {"key": "c_death"}) == [3, 5]
+        # a plain face card is no longer copied: Death waits for a modified card
+        assert analysis.suggest_targets(G, {"key": "c_death"}) == []
         G["hand"]["cards"][6]["modifier"] = {"seal": "RED"}
         assert analysis.suggest_targets(G, {"key": "c_death"}) == [3, 6]
         G["hand"]["cards"][3]["modifier"] = {"enhancement": "BONUS"}  # keep upgrades
@@ -310,9 +312,29 @@ class TestPlanAndStatus:
         G["ante_num"] = 3
         plan = analysis.main_hand_plan(G)
         assert plan["hand"] == "Flush"
+        G["hand"]["cards"][6]["modifier"] = {"seal": "RED"}  # off-suit King
+        assert analysis.suggest_targets(G, {"key": "c_death"}) == []
+        G["hand"]["cards"][7]["modifier"] = {"enhancement": "BONUS"}  # Heart 8
         left, right = analysis.suggest_targets(G, {"key": "c_death"})
         suit = G["hand"]["cards"][right]["value"]["suit"]
         assert suit == plan["suit"] and left < right
+
+    def test_grows_xmult_needs_a_source(self) -> None:
+        G = make_state("S_4 H_4 D_7 C_3 H_8 C_K H_2 S_6", state="SHOP")
+        glass = joker("j_glass", "Glass Joker")
+        assert analysis.grows_xmult(G, glass).endswith("no source yet")
+        G["shop"] = {"cards": [{"key": "c_justice", "label": "Justice", "set": "TAROT"}]}
+        assert "Justice available | SOURCE PRESENT" in analysis.grows_xmult(G, glass)
+        G["shop"] = {"cards": []}
+        G["hand"]["cards"][0]["modifier"] = {"enhancement": "GLASS"}
+        assert "1 in your deck | SOURCE PRESENT" in analysis.grows_xmult(G, glass)
+        holo = joker("j_hologram", "Hologram")
+        assert analysis.grows_xmult(G, holo).endswith("SOURCE PRESENT")
+        assert analysis.grows_xmult(G, joker("j_joker", "Joker")) == ""
+
+    def test_magician_is_good(self) -> None:
+        magician = {"key": "c_magician", "set": "TAROT", "label": "The Magician"}
+        assert knowledge.consumable_tag(magician, "Pair").startswith("[GOOD]")
 
     def test_hermit_skipped_with_forty_dollars(self) -> None:
         hermit = {"key": "c_hermit", "set": "TAROT", "label": "The Hermit"}
