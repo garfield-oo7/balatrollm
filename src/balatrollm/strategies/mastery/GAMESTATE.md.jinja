@@ -138,7 +138,7 @@
 {%- elif card.set in ["TAROT", "PLANET", "SPECTRAL"] -%}
 {%- set tg = consumable_targets(card.key) %}
 {%- set sug = suggest_targets(G, card) -%}
-- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) {% if death_skip and card.label == "Death" %}[SKIP] no sealed, enhanced or edition card in hand to copy{% if pk.hanged %}: take The Hanged Man instead{% endif %}{% else %}{{ consumable_tag(card, S.main_hand, S.blue_seals, S.deck_total, S.constellation) }}{% endif %}
+- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) {% if death_skip and card.label == "Death" %}[SKIP] no sealed, enhanced or edition card in hand to copy{% if pk.hanged %}: take The Hanged Man instead{% endif %}{% elif card.label == "Immolate" and pk.modified %}[AVOID] a sealed or enhanced card is in hand: Immolate may destroy it{% else %}{{ consumable_tag(card, S.main_hand, S.blue_seals, S.deck_total, S.constellation) }}{% endif %}
 {%- if tg %} | needs {{ tg[0] }}-{{ tg[1] }} target cards{% if sug %}. Suggested targets: {{ sug }}{% else %}. No good targets: do not pick{% endif %}{% endif %}
 {%- else -%}
 - {{ loop.index0 }}: {{ card_line(card) }} (playing card){% if card.modifier and card.modifier.seal == "BLUE" %}{% if S.blue_seals and not S.hologram %} [SKIP: you already own a Blue Seal card]{% elif S.blue_seals %} [OK: Hologram grows with every card added]{% else %} [PICK: Blue Seal, you have none]{% endif %}{% endif %}
