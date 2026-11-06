@@ -1,6 +1,8 @@
 """Data collection and statistics for BalatroLLM runs."""
 
+import hashlib
 import json
+import subprocess
 import statistics
 from collections import Counter
 from dataclasses import asdict, dataclass, field
@@ -52,6 +54,31 @@ def _generate_run_dir(task: Task, base_dir: Path) -> Path:
         / model
         / dir_name
     )
+
+
+def code_version(strategy: str) -> dict[str, Any]:
+    """Git commit of this package and a hash of the strategy folder's files."""
+    here = Path(__file__).resolve().parent
+    commit, dirty = "", None
+    try:
+        commit = subprocess.run(
+            ["git", "-C", str(here), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5, check=True,
+        ).stdout.strip()
+        dirty = bool(
+            subprocess.run(
+                ["git", "-C", str(here), "status", "--porcelain", "--", "."],
+                capture_output=True, text=True, timeout=5, check=True,
+            ).stdout.strip()
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+    digest = hashlib.sha256()
+    folder = here / "strategies" / strategy
+    for f in sorted(folder.glob("*")) if folder.is_dir() else []:
+        if f.is_file():
+            digest.update(f.name.encode() + f.read_bytes())
+    return {"commit": commit, "dirty": dirty, "strategy_hash": digest.hexdigest()[:12]}
 
 
 @dataclass
@@ -191,6 +218,7 @@ class Collector:
             "deck": task.deck,
             "stake": task.stake,
             "strategy": task.strategy,
+            "code": code_version(task.strategy),
         }
         manifest = StrategyManifest.from_file(task.strategy)
         with (self.run_dir / "task.json").open("w") as f:
