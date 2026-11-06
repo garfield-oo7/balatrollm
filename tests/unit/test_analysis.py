@@ -420,11 +420,62 @@ class TestPlanAndStatus:
         magician = {"key": "c_magician", "set": "TAROT", "label": "The Magician"}
         assert knowledge.consumable_tag(magician, "Pair").startswith("[GOOD]")
 
-    def test_hermit_skipped_with_forty_dollars(self) -> None:
+    def test_hermit_has_no_money_cap(self) -> None:
         hermit = {"key": "c_hermit", "set": "TAROT", "label": "The Hermit"}
-        assert knowledge.consumable_tag(hermit, "Pair", 0, 39).startswith("[GOOD]")
-        assert "Death" in knowledge.consumable_tag(hermit, "Pair", 0, 40)
         assert knowledge.consumable_tag(hermit, "Pair").startswith("[GOOD]")
+        assert knowledge.consumable_tag(hermit, "Pair", 0, 52).startswith("[GOOD]")
+
+    def test_constellation_feeds_on_any_planet(self) -> None:
+        venus = {"key": "c_venus", "set": "PLANET", "label": "Venus"}
+        assert "[FEED]" not in knowledge.consumable_tag(venus, "Pair")
+        assert knowledge.consumable_tag(venus, "Pair", 0, 52, True).startswith("[FEED]")
+        priestess = {"key": "c_high_priestess", "set": "TAROT", "label": "The High Priestess"}
+        assert "Constellation" in knowledge.consumable_tag(priestess, "Pair", 0, 52, True)
+
+    def test_magic_trick_only_with_hologram(self) -> None:
+        trick = {"key": "v_magic_trick", "set": "VOUCHER", "label": "Magic Trick"}
+        assert knowledge.voucher_tag(trick).startswith("[NEVER]")
+        assert knowledge.voucher_tag(trick, True).startswith("[GOOD]")
+
+    def test_loyalty_card_is_a_trap(self) -> None:
+        loyalty = joker("j_loyalty_card", "Loyalty Card")
+        assert "[TRAP]" in knowledge.joker_tag(loyalty, "Pair", 1)
+
+    def test_misprint_and_bloodstone_count_their_average_in_the_shop(self) -> None:
+        G = make_state("H_K H_K S_2 D_3 C_5 D_7 C_8 S_9", [joker("j_misprint", "Misprint")])
+        hand = G["hand"]["cards"]
+        floor = analysis.estimate_play(G, hand[:2], hand[2:])["score"]
+        shop = analysis.estimate_play(G, hand[:2], hand[2:], expected=True)["score"]
+        assert shop > floor
+        G = make_state("H_K H_K S_2 D_3 C_5 D_7 C_8 S_9", [joker("j_bloodstone", "Bloodstone")])
+        hand = G["hand"]["cards"]
+        floor = analysis.estimate_play(G, hand[:2], hand[2:])["score"]
+        avg = analysis.estimate_play(G, hand[:2], hand[2:], expected=True)["score"]
+        assert avg > floor
+        G["jokers"]["cards"].append(joker("j_oops", "Oops! All 6s"))
+        oops = analysis.estimate_play(G, hand[:2], hand[2:], expected=True)["score"]
+        assert oops > avg
+
+    def test_mail_in_rank_is_discarded_first(self) -> None:
+        mail = joker(
+            "j_mail",
+            "Mail-In Rebate",
+            "Earn $5 for each discarded Jack, rank changes every round",
+        )
+        G = make_state("H_2 S_3 D_J C_7 D_8 C_9 S_Q H_4", [mail])
+        assert analysis.mail_rank(G) == "J"
+        plan = analysis.main_hand_plan(G)
+        assert 2 in analysis.suggested_discard(G, plan)
+
+    def test_square_joker_pads_the_play_to_four_cards(self) -> None:
+        G = make_state(
+            "H_K S_K D_2 C_3 D_5 C_7 S_8 H_9",
+            [joker("j_square", "Square Joker", "+0 Chips")],
+            discards_left=0,
+        )
+        action = analysis.play_advice(G)["action"]
+        assert action["tool"] == "play" and len(action["cards"]) == 4
+        assert {0, 1} <= set(action["cards"])
 
     def test_interest_spare_and_hologram(self) -> None:
         G = make_state("H_2", state="SHOP")
@@ -615,6 +666,8 @@ class TestBlueSealAndEconomy:
         trance = {"key": "c_trance", "set": "SPECTRAL", "label": "Trance"}
         assert knowledge.consumable_tag(trance, "Two Pair", 0).startswith("[GOOD]")
         assert "already own" in knowledge.consumable_tag(trance, "Two Pair", 1)
+        assert knowledge.consumable_tag(trance, "Pair", 0, 46).startswith("[GOOD]")
+        assert "Immolate" in knowledge.consumable_tag(trance, "Pair", 0, 52)
 
     def test_econ_ok_window(self) -> None:
         scoring = [joker("j_joker", "Joker"), joker("j_jolly", "Jolly Joker")]

@@ -71,3 +71,27 @@ async def test_failed_sell_does_not_buy() -> None:
     game.call.side_effect = [BalatroError(400, "nope", {"name": "BAD_REQUEST"}), {"state": "SHOP"}]
     await _bot(game)._execute_tool_call(_buy(0), _full_shop())
     assert [c.args[0] for c in game.call.call_args_list] == ["sell", "gamestate"]
+
+
+def _blind_select(ante: int, small_tag: str, small: str = "SELECT") -> dict[str, Any]:
+    return {
+        "state": "BLIND_SELECT",
+        "ante_num": ante,
+        "blinds": {
+            "small": {"status": small, "type": "SMALL", "name": "Small Blind", "tag_name": small_tag},
+            "big": {"status": "UPCOMING" if small == "SELECT" else "SELECT", "type": "BIG", "name": "Big Blind", "tag_name": "Juggle Tag"},
+            "boss": {"status": "UPCOMING", "type": "BOSS", "name": "The Hook", "tag_name": ""},
+        },
+    }
+
+
+def test_skip_only_for_investment_tag_in_ante_one() -> None:
+    bot = _bot(AsyncMock())
+    bot.harness = {"skip_blind_tags": {"Investment Tag": 1}}
+    assert bot._skip_for_tag(_blind_select(1, "Investment Tag"))
+    assert not bot._skip_for_tag(_blind_select(2, "Investment Tag"))
+    assert not bot._skip_for_tag(_blind_select(1, "Juggle Tag"))
+    # Small already skipped: the Big blind's own tag decides
+    assert not bot._skip_for_tag(_blind_select(1, "Investment Tag", small="SKIPPED"))
+    bot.harness = {}
+    assert not bot._skip_for_tag(_blind_select(1, "Investment Tag"))
