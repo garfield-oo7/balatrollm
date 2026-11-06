@@ -273,6 +273,19 @@ class TestLookAheadAndRefusals:
         power = analysis.power_check(G)
         assert power["boss_make_rate"] < power["make_rate"]
 
+    def test_reroll_cap_and_stencil(self) -> None:
+        G = make_state("H_2", state="SHOP")
+        G["ante_num"] = 4
+        G["money"] = 60
+        G["hands"]["Pair"].update(chips=500, mult=50, level=20)  # ON TRACK
+        assert analysis.validate_action(G, "reroll", {}, shop_rerolls=1) is None
+        assert "limit 2" in analysis.validate_action(G, "reroll", {}, shop_rerolls=2)
+        G["ante_num"] = 1
+        assert "Ante 1" in analysis.validate_action(G, "reroll", {}, shop_rerolls=0)
+        G["jokers"] = {"count": 5, "limit": 5, "cards": [joker("j_joker", "Joker")] * 5}
+        G["shop"] = {"cards": [{**joker("j_stencil", "Joker Stencil"), "cost": {"buy": 8}}]}
+        assert "Stencil" in analysis.validate_action(G, "buy", {"card": 0})
+
     def test_power_check_inside_the_psychic_is_not_zero(self) -> None:
         G = make_state("H_2", state="SELECTING_HAND")
         for k in ("small", "big"):
@@ -554,7 +567,7 @@ class TestPlanAndStatus:
         G["ante_num"] = 4
         status = analysis.run_status(G, [], [])
         texts = [g["text"] for g in status["goals"]]
-        assert texts[0].startswith("5 jokers")
+        assert texts[0].startswith("5 scoring jokers")
         assert any("XMULT" in t for t in texts) and any("SCALE" in t for t in texts)
         assert status["priority"] == "fill empty joker slots with scoring jokers"
 

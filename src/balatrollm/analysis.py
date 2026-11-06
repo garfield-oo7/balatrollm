@@ -1745,14 +1745,23 @@ def ante_goals(
     hands = G.get("hands") or {}
     level = int((hands.get(plan["hand"]) or {}).get("level", 1))
     scale = sum(1 for i in infos if i["category"] == "SCALE")
-    filler = sum(1 for i in infos if i["category"] in ("ECON", "CHIPS", "TRAP"))
+    weakest = (shop_impact(G).get("weakest") or {}).get("label") if count else None
+    # A [CHIPS] joker is filler only when it is also WEAKEST (Blue Joker can carry a run).
+    filler = sum(
+        1
+        for j in _area_cards(G, "jokers")
+        if (cat := (knowledge.joker_info(j.get("label")) or {}).get("category"))
+        in ("ECON", "TRAP")
+        or (cat == "CHIPS" and j.get("label") == weakest)
+    )
+    useful = sum(1 for i in infos if i["category"] not in ("UTIL", "TRAP"))
     want_jokers = {1: 2, 2: 4}.get(ante, limit)
     want_xmult = 0 if ante <= 3 else (1 if ante <= 5 else 2)
     want_level = max(1, ante - 1) if ante >= 3 else 1
     goals = [
         {
-            "text": f"{want_jokers} jokers (have {count})",
-            "done": count >= want_jokers,
+            "text": f"{want_jokers} scoring jokers (have {useful})",
+            "done": useful >= want_jokers or count >= limit,
             "action": "fill empty joker slots with scoring jokers",
         },
     ]
@@ -2458,10 +2467,23 @@ def _first_shop_veto(G: dict[str, Any], index: Any) -> str | None:
     )
 
 
+def reroll_cap(G: dict[str, Any]) -> int:
+    """Rerolls allowed per shop visit (STRATEGY shop rule 8)."""
+    ante = int(G.get("ante_num") or 1)
+    if ante <= 1:
+        return 0
+    if run_status(G)["status"] == "TOO WEAK":
+        return 3
+    return 2 if ante >= 4 else 1
+
+
 def validate_action(
-    G: dict[str, Any], method: str, params: dict[str, Any]
+    G: dict[str, Any], method: str, params: dict[str, Any], shop_rerolls: int = 0
 ) -> str | None:
-    """Return an error message for illegal or strictly bad actions, else None."""
+    """Return an error message for illegal or strictly bad actions, else None.
+
+    ``shop_rerolls`` is how many rerolls the bot already made in this shop visit.
+    """
     jokers = G.get("jokers") or {}
     full = int(jokers.get("count", 0)) >= int(jokers.get("limit", 5))
     cards = params.get("cards")
@@ -2493,6 +2515,23 @@ def validate_action(
         and (veto := _first_shop_veto(G, params["card"]))
     ):
         return veto
+    if method == "reroll" and shop_rerolls >= (cap := reroll_cap(G)):
+        return (
+            "Reroll refused: no rerolls in Ante 1."
+            if cap == 0
+            else f"Reroll refused: you already rerolled {shop_rerolls} times in this "
+            f"shop (limit {cap}). Buy something useful or call next_round."
+        )
+    if method == "buy" and "card" in params and G.get("state") == "SHOP" and full:
+        try:
+            card = _area_cards(G, "shop")[int(params["card"])]
+        except (IndexError, TypeError, ValueError):
+            card = {}
+        if card.get("key") == "j_stencil" and _norm(card)["ed"] != "NEGATIVE":
+            return (
+                "Joker Stencil refused: it gives X1 per EMPTY joker slot and yours are "
+                "full, so it adds nothing. Buy something else or call next_round."
+            )
     if method == "reroll":
         money = int(G.get("money") or 0)
         cost = int((G.get("round") or {}).get("reroll_cost", 5) or 0)

@@ -65,6 +65,7 @@ class Bot:
         # Harness guards (only active when enabled in the strategy manifest)
         self._consecutive_vetoes: int = 0
         self._consecutive_rearranges: int = 0
+        self._shop_rerolls: int = 0
 
         # Finish reason tracking
         self._finish_reason: FinishReason | None = None
@@ -417,8 +418,10 @@ class Bot:
         ################################################################################
 
         veto: str | None = None
+        if before.get("state") != "SHOP":
+            self._shop_rerolls = 0
         if self.harness.get("validate_actions") and before:
-            veto = validate_action(before, fn_name, params)
+            veto = validate_action(before, fn_name, params, self._shop_rerolls)
         max_rearranges = int(self.harness.get("max_consecutive_rearranges", 0) or 0)
         if fn_name == "rearrange":
             self._consecutive_rearranges += 1
@@ -431,6 +434,8 @@ class Bot:
             self._consecutive_rearranges = 0
         if veto is not None:
             return await self._handle_veto(veto)
+        if fn_name == "reroll":
+            self._shop_rerolls += 1
 
         swap_note = ""
         if self.harness.get("auto_swap_jokers") and before:
