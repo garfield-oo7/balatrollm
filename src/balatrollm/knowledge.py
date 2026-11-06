@@ -353,6 +353,25 @@ PLANET_HAND = {
     "Eris": "Flush Five",
 }
 
+# Uncommon jokers (rarity 2 in the game's centers data), for Baseball Card.
+UNCOMMON_JOKERS = frozenset(
+    {
+        "j_acrobat", "j_arrowhead", "j_astronomer", "j_blackboard", "j_bloodstone",
+        "j_bootstraps", "j_bull", "j_burglar", "j_card_sharp", "j_cartomancer",
+        "j_castle", "j_ceremonial", "j_certificate", "j_cloud_9", "j_constellation",
+        "j_diet_cola", "j_dusk", "j_erosion", "j_fibonacci", "j_flash",
+        "j_flower_pot", "j_four_fingers", "j_gift", "j_glass", "j_hack", "j_hiker",
+        "j_hologram", "j_idol", "j_loyalty_card", "j_luchador", "j_lucky_cat",
+        "j_madness", "j_marble", "j_matador", "j_merry_andy", "j_midas_mask",
+        "j_mime", "j_mr_bones", "j_onyx_agate", "j_oops", "j_pareidolia", "j_ramen",
+        "j_ring_master", "j_rocket", "j_rough_gem", "j_satellite", "j_seance",
+        "j_seeing_double", "j_selzer", "j_shortcut", "j_sixth_sense", "j_smeared",
+        "j_sock_and_buskin", "j_space", "j_steel_joker", "j_stencil", "j_stone",
+        "j_throwback", "j_to_the_moon", "j_trading", "j_troubadour", "j_trousers",
+        "j_turtle_bean", "j_vampire",
+    }
+)
+
 # Tarot / Spectral: name -> (verdict, hint)
 #   verdict: GOOD | SITUATIONAL | AVOID
 CONSUMABLES: dict[str, tuple[str, str]] = {
@@ -504,7 +523,7 @@ SMALL_PLAY_MAINS = {"High Card", "Pair", "Three of a Kind"}  # Half Joker: <= 3 
 
 FLUSH_ONLY_TAROTS = {"The Star", "The Moon", "The Sun", "The World", "The Lovers"}
 PAIR_FIXER_TAROTS = {"Strength", "The Hanged Man", "Death", "Cryptid"}
-TRANCE_MAX_DECK = 46  # Trance only on a thinned deck; otherwise Immolate first
+TRANCE_MAX_DECK = 50  # Trance only on a (slightly) thinned deck; otherwise Immolate first
 # Jokers that start at X1 Mult and grow -> (enhancement that grows it, Tarot
 # key that makes it, source text); no enhancement = grows on its own.
 GROWS_XMULT: dict[str, tuple[str | None, str | None, str]] = {

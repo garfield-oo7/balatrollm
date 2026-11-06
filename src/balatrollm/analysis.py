@@ -436,8 +436,8 @@ def _hand_base(G: dict[str, Any], htype: str, boss: str) -> tuple[float, float]:
     if boss == "The Arm" and int(hand.get("level", 1)) > 1:
         dc, dm = LEVEL_UP.get(htype, (0, 0))
         chips, mult = chips - dc, mult - dm
-    if boss == "The Flint":
-        chips, mult = max(chips // 2, 0), max(mult // 2, 1)
+    if boss == "The Flint":  # halves, rounding half up
+        chips, mult = max(int(chips / 2 + 0.5), 0), max(int(mult / 2 + 0.5), 1)
     return chips, mult
 
 
@@ -477,6 +477,9 @@ def _joker_effect(
         return 0, 0, 1
     if key == "j_half":
         return (0, 20, 1) if ctx["n_played"] <= 3 else (0, 0, 1)
+    if key == "j_fortune_teller":  # "(Currently +N)" has no "Mult" after it
+        m = re.search(r"Currently\s*\+(\d+)", effect)
+        return (0, float(m.group(1)), 1) if m else (0, 0, 1)
     if key == "j_misprint":
         # random 0..23: the floor estimate counts 0, the shop its average
         return (0, 10, 1) if ctx.get("expected") else (0, 0, 1)
@@ -692,6 +695,7 @@ def estimate_play(
         "expected": expected,
     }
     unknown: list[str] = []
+    baseball = keys.count("j_baseball")
     for idx, j in enumerate(jokers):
         edition = (j.get("modifier") or {}).get("edition")
         if edition == "FOIL":
@@ -705,7 +709,9 @@ def estimate_play(
         elif key == "j_brainstorm":
             target = jokers[0] if jokers and jokers[0] is not j else {}
         tkey = target.get("key", "")
-        if target and tkey not in ("j_blueprint", "j_brainstorm"):
+        if tkey == "j_baseball":
+            pass  # applied below, after each Uncommon joker
+        elif target and tkey not in ("j_blueprint", "j_brainstorm"):
             if tkey in PER_CARD_JOKERS or tkey in STRUCTURAL_JOKERS:
                 if target is not j:
                     unknown.append(f"{j.get('label', key)} (copy)")
@@ -722,6 +728,9 @@ def estimate_play(
                     mult *= dx
         if edition == "POLYCHROME":
             mult *= 1.5
+        # Baseball Card: X1.5 as each Uncommon joker is evaluated
+        if baseball and key in knowledge.UNCOMMON_JOKERS:
+            mult *= 1.5**baseball
 
     score = 0 if blocked else int(chips * mult * x_total)
     return {
@@ -979,6 +988,14 @@ def money_floor(G: dict[str, Any]) -> int:
     return MONEY_FLOOR.get(min(max(ante, 1), 8), 0)
 
 
+RESERVE = 10  # soft money reserve from Ante 2 (owner: "try to reserve $10")
+
+
+def reserve(G: dict[str, Any]) -> int:
+    """Soft minimum money to keep even for score buys (rerolls never go below)."""
+    return RESERVE if int(G.get("ante_num") or 1) >= 2 else 0
+
+
 def interest(money: int) -> int:
     """Interest earned at end of next round (vanilla cap $5)."""
     return max(0, min(int(money) // 5, 5))
@@ -1210,7 +1227,9 @@ def main_suit(G: dict[str, Any]) -> str:
 
 TWO_PAIR_JOKERS = {"j_trousers", "j_mad", "j_clever"}
 OPEN_ANTES = 1  # Ante 1: chase Flush/Straight draws; from Ante 2 build MAIN_HAND
-FLUSH_ENGINES = {"j_tribe", "j_smeared", "j_four_fingers"}
+# Owner: Flush only when the jokers point there (Smeared Joker / Four Fingers);
+# a lone Tribe or suit-Mult jokers of mixed suits do not make Flush reliable.
+FLUSH_ENGINES = {"j_smeared", "j_four_fingers"}
 SUIT_SHARE_FOR_FLUSH = 0.5  # deck this concentrated in one suit makes Flush reliable
 
 
@@ -1229,20 +1248,15 @@ def main_hand_plan(G: dict[str, Any]) -> dict[str, Any]:
     a Pair ~89% of the time with no discard and ~99% with one, versus ~44% for
     a Flush with one discard. Two Pair only with a Two Pair joker. The
     hand never dies to suit bosses, and it grows into Full House. Flush is
-    chosen only when the run has made it consistent (a Flush engine joker, a
-    flush-joker core with no pair jokers, or a deck half one suit). In the
+    chosen only when the run has made it consistent (Smeared Joker or Four
+    Fingers, or a deck half one suit). In the
     OPEN antes, Flush/Straight are still taken when dealt (``open``).
     """
-    infos = _owned_joker_infos(G)
     keys = set(_joker_keys(G))
     ante = int(G.get("ante_num") or 1)
-    pair_jokers = sum(1 for i in infos if i["family"] == "pair")
-    flush_jokers = sum(1 for i in infos if i["family"] == "flush")
     suit = main_suit(G)
     if keys & FLUSH_ENGINES:
-        hand, reason = "Flush", "you own a Flush engine joker, so Flush is consistent"
-    elif flush_jokers >= 2 and pair_jokers == 0:
-        hand, reason = "Flush", "your jokers are flush jokers and none are pair jokers"
+        hand, reason = "Flush", "you own Smeared Joker or Four Fingers, so Flush is consistent"
     elif _suit_share(G, suit) >= SUIT_SHARE_FOR_FLUSH:
         hand, reason = "Flush", "half your deck is one suit"
     elif "j_half" in keys:
@@ -1801,30 +1815,31 @@ def run_status(
     xmult = xmult_owned(G, plan)
     floor = money_floor(G)
 
-    # Power check: hands needed for the next blind at the recent scoring pace.
+    # Power check from the current deck, jokers and hand levels (not from past
+    # scores: those miss scaling jokers' growth and count junk/filler hands).
     scores = _play_scores(history)[-3:]
     nxt = next_blind(G) or current_blind(G) or {}
     nxt_target = int(nxt.get("score") or 0)
-    hands_needed = None
-    status = "UNKNOWN"
-    if scores and nxt_target:
-        avg = sum(scores) / len(scores)
-        hands_needed = -(-nxt_target // max(int(avg), 1))
-        status = "ON TRACK" if hands_needed <= 3 else "TOO WEAK"
-    elif rounds:
-        status = "ON TRACK" if int(rounds[-1].get("hands_left", 0)) >= 1 else "TOO WEAK"
-    # Look ahead to this ante's boss (in the shop it is always UPCOMING): if it
-    # needs too many hands at the current pace, spend on score now.
     boss = (G.get("blinds") or {}).get("boss") or {}
     boss_name = str(boss.get("name") or "")
     boss_target = int(boss.get("score") or 0)
+    power = power_check(G, plan)
+    hands_needed = None
     boss_hands = None
-    if scores and boss_target:
-        pace = sum(scores) / len(scores) * BOSS_PACE.get(boss_name, 1.0)
-        boss_hands = -(-boss_target // max(int(pace), 1))
-        if boss_hands > BOSS_HANDS.get(boss_name, BOSS_HANDS_DEFAULT):
+    status = "UNKNOWN"
+    if power["per_hand"] and nxt_target:
+        per = power["boss_per_hand"] if nxt.get("kind") == "boss" else power["per_hand"]
+        hands_needed = -(-nxt_target // max(int(per), 1))
+        status = "ON TRACK" if hands_needed <= 3 else "TOO WEAK"
+    if power["boss_per_hand"] and boss_target:
+        boss_hands = -(-boss_target // max(int(power["boss_per_hand"]), 1))
+        if boss_hands > power["boss_hands_allowed"]:
             status = "TOO WEAK"
-    effective_floor = 0 if status == "TOO WEAK" else floor
+    if status == "UNKNOWN" and rounds:
+        status = "ON TRACK" if int(rounds[-1].get("hands_left", 0)) >= 1 else "TOO WEAK"
+    # TOO WEAK no longer frees all money: rerolls and routine buys keep FLOOR;
+    # only score buys may go down to RESERVE (see "score_spendable").
+    effective_floor = floor
 
     econ = sum(1 for i in infos if i["category"] == "ECON")
     scoring = sum(
@@ -1866,6 +1881,17 @@ def run_status(
         "boss_target": boss_target,
         "boss_hands": boss_hands,
         "boss_halved": boss_name in BOSS_PACE,
+        "boss_hands_allowed": power["boss_hands_allowed"],
+        "typical": power["typical"],
+        "per_hand": power["per_hand"],
+        "make_rate": power["make_rate"],
+        "boss_make_rate": power["boss_make_rate"],
+        "boss_per_hand": power["boss_per_hand"],
+        "reserve": reserve(G),
+        # money a score buy may use: a joker filling an empty slot (Antes 1-3),
+        # a joker with SCORE +50% or more, an [XMULT] joker, a [MAIN] planet,
+        # a Buffoon pack with a free slot, or anything scoring while TOO WEAK
+        "score_spendable": max(money - reserve(G), 0),
         "recent_scores": scores,
         "next_target": nxt_target,
         "milestone": milestone,
@@ -2056,6 +2082,113 @@ def typical_plays(
         return [same[i : i + 5] for i in starts]
     play = typical_play(G, plan)
     return [play] if play else []
+
+
+# Chance to make the hand in one hand with (0 discards, ~1 discard per hand):
+# measured over 20,000 deals of an unmodified 52-card deck, 8 cards in hand
+# (research/07). Four of a Kind and the Four Fingers/Smeared Flush rows are
+# starting guesses, to calibrate.
+MAKE_RATE = {
+    "High Card": (1.0, 1.0),
+    "Pair": (0.89, 0.99),
+    "Two Pair": (0.44, 0.78),
+    "Three of a Kind": (0.12, 0.35),
+    "Full House": (0.06, 0.28),
+    "Four of a Kind": (0.01, 0.05),
+    "Flush": (0.07, 0.44),
+    "Straight": (0.10, 0.30),
+}
+FLUSH_HELP_RATE = (0.25, 0.75)  # guess: Four Fingers or Smeared Joker owned
+BOSS_DEBUFF_FACES = {"The Plant"}
+
+
+def _hands_per_round(G: dict[str, Any]) -> int:
+    vouchers = {str(v) for v in (G.get("used_vouchers") or {})}
+    hands = 4 + ("v_grabber" in vouchers) + ("v_nacho_tong" in vouchers)
+    return max(hands - ("v_hieroglyph" in vouchers), 1)
+
+
+def _mean_score(G: dict[str, Any], plays: list[list[dict[str, Any]]], hand: str) -> int:
+    scores = [
+        est["score"]
+        for p in plays
+        if (est := estimate_play(G, p, [], expected=True))["hand"] == hand
+    ]
+    return int(sum(scores) / len(scores)) if scores else 0
+
+
+def _debuffed(card: dict[str, Any]) -> dict[str, Any]:
+    return {**card, "state": {**(card.get("state") or {}), "debuff": True}}
+
+
+def power_check(G: dict[str, Any], plan: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Expected MAIN_HAND score per hand now and against this ante's boss.
+
+    Starts from the TYPICAL MAIN_HAND score of the current deck, jokers (at
+    their current, grown values) and hand levels, then weights it by how often
+    the hand is actually made (missing it falls back to a typical Pair). The
+    boss is applied to the estimate itself: The Flint/The Arm through the
+    scorer, suit bosses and The Plant by debuffing those cards, The Water by
+    the 0-discard make rate, The Needle by allowing one hand.
+    """
+    plan = plan or main_hand_plan(G)
+    hand = plan["hand"]
+    G_owned = _with_jokers(G, _area_cards(G, "jokers"))
+    plays = typical_plays(G, plan)
+    typical = _mean_score(G_owned, plays, hand)
+    fallback = 0
+    if hand != "Pair":
+        pair_plan = {**plan, "hand": "Pair", "family": "pair", "suit": None}
+        fallback = _mean_score(G_owned, typical_plays(G, pair_plan), "Pair")
+    keys = set(_joker_keys(G))
+    rates = MAKE_RATE.get(hand, (0.5, 0.8))
+    if hand == "Flush" and keys & {"j_four_fingers", "j_smeared"}:
+        rates = FLUSH_HELP_RATE
+    rate = rates[1]
+    per_hand = int(rate * typical + (1 - rate) * fallback) if typical else 0
+
+    boss = (G.get("blinds") or {}).get("boss") or {}
+    name = str(boss.get("name") or "")
+    allowed = 1 if name == "The Needle" else _hands_per_round(G)
+    boss_rate = rates[0] if name == "The Water" else rate
+    blinds = {k: dict(v or {}) for k, v in (G.get("blinds") or {}).items()}
+    for k, v in blinds.items():
+        v["status"] = "CURRENT" if k == "boss" else "DEFEATED"
+    G_boss = {**G_owned, "blinds": blinds}
+    suit = knowledge.SUIT_BOSSES.get(name)
+
+    def under_boss(play: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        out = []
+        for c in play:
+            n = _norm(c)
+            hit = (suit and n["suit"] == suit and n["enh"] != "WILD") or (
+                name in BOSS_DEBUFF_FACES and n["rank"] in FACE_RANKS
+            )
+            out.append(_debuffed(c) if hit else c)
+        return out
+
+    if name in ("The Psychic", "The Eye", "The Mouth"):
+        G_boss = G_owned  # padding / one hand type keeps the typical score
+    boss_typical = _mean_score(G_boss, [under_boss(p) for p in plays], hand)
+    boss_fallback = 0
+    if hand != "Pair":
+        pair_plan = {**plan, "hand": "Pair", "family": "pair", "suit": None}
+        boss_fallback = _mean_score(
+            G_boss, [under_boss(p) for p in typical_plays(G, pair_plan)], "Pair"
+        )
+    boss_per_hand = (
+        int(boss_rate * boss_typical + (1 - boss_rate) * boss_fallback)
+        if boss_typical or boss_fallback
+        else 0
+    )
+    return {
+        "typical": typical,
+        "make_rate": rate,
+        "per_hand": per_hand,
+        "boss_make_rate": boss_rate,
+        "boss_per_hand": boss_per_hand,
+        "boss_hands_allowed": allowed,
+    }
 
 
 def _with_jokers(G: dict[str, Any], jokers: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2317,6 +2450,15 @@ def validate_action(
                     f"Discard refused: cards {winners[0]['cards']} already make a "
                     f"{winners[0]['hand']} that WINS the blind. Play it instead."
                 )
+    if method == "reroll":
+        money = int(G.get("money") or 0)
+        cost = int((G.get("round") or {}).get("reroll_cost", 5) or 0)
+        keep = reserve(G)
+        if cost and money - cost < keep:
+            return (
+                f"Reroll refused: it costs ${cost} and would leave ${money - cost}, "
+                f"below the ${keep} RESERVE. Buy something useful or call next_round."
+            )
     if method == "sell" and "joker" in params and G.get("state") == "SHOP":
         try:
             target = _area_cards(G, "jokers")[int(params["joker"])]

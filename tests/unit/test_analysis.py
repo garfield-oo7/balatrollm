@@ -212,17 +212,50 @@ class TestLookAheadAndRefusals:
             "big": {"status": "UPCOMING", "score": 3000},
             "boss": {"status": "UPCOMING", "score": 4000, "name": "The Flint"},
         }
-        history = [{"method": "play", "score": 1100}] * 3
+        # Power comes from the deck, jokers and levels: big past scores do not help
+        history = [{"method": "play", "score": 100000}] * 3
         S = analysis.run_status(G, [], history)
-        # Big Blind: 3 hands at 1,100. The Flint at 60% pace: 4000 / 660 = 7 hands
-        assert S["hands_needed"] == 3 and S["boss_hands"] == 7
-        assert S["status"] == "TOO WEAK"
-        G["blinds"]["boss"]["name"] = "The Wall"  # 6000 / 1100 = 6 hands > 4
-        G["blinds"]["boss"]["score"] = 6000
-        assert analysis.run_status(G, [], history)["status"] == "TOO WEAK"
-        G["blinds"]["boss"]["score"] = 4000  # 4 hands: the 4 you have
-        assert analysis.run_status(G, [], history)["status"] == "ON TRACK"
+        assert S["status"] == "TOO WEAK" and S["hands_needed"] > 3
+        G["hands"]["Pair"].update(chips=600, mult=20, level=20)
+        S = analysis.run_status(G, [], [])
+        assert S["status"] == "ON TRACK" and S["hands_needed"] == 1
+        # The Flint halves the base: the boss estimate is lower than the normal one
+        assert S["boss_per_hand"] < S["per_hand"]
+        G["blinds"]["boss"]["name"] = "The Needle"
+        assert analysis.run_status(G, [], [])["boss_hands_allowed"] == 1
         assert "spend money" in analysis.boss_impact({**G, "blinds": {"boss": {"name": "The Ox"}}})["prep"]
+
+    def test_reroll_never_goes_below_the_reserve(self) -> None:
+        G = make_state("H_2", state="SHOP")
+        G["ante_num"] = 4
+        G["money"] = 14
+        G["round"]["reroll_cost"] = 5
+        assert "RESERVE" in analysis.validate_action(G, "reroll", {})
+        G["money"] = 15
+        assert analysis.validate_action(G, "reroll", {}) is None
+
+    def test_fortune_teller_baseball_and_flint_rounding(self) -> None:
+        teller = joker("j_fortune_teller", "Fortune Teller", "+1 Mult per Tarot card used this run (Currently +3)")
+        G = make_state("H_K S_K D_2 C_3 D_5 C_7 S_8 H_9", [teller])
+        hand = G["hand"]["cards"]
+        est = analysis.estimate_play(G, hand[:2], hand[2:])
+        assert est["unknown"] == [] and est["mult"] == 5  # Pair x2 + 3
+        base = analysis.estimate_play(make_state("H_K S_K D_2 C_3 D_5 C_7 S_8 H_9", [joker("j_cloud_9", "Cloud 9")]), hand[:2], hand[2:])
+        G = make_state(
+            "H_K S_K D_2 C_3 D_5 C_7 S_8 H_9",
+            [joker("j_cloud_9", "Cloud 9"), joker("j_baseball", "Baseball Card")],
+        )
+        est = analysis.estimate_play(G, hand[:2], hand[2:])
+        assert est["unknown"] == [] and est["score"] == int(base["score"] * 1.5)
+        G = make_state("H_K S_K S_7 D_2 C_3 D_5 C_8 H_9", boss="The Flint", boss_current=True)
+        G["hands"]["Three of a Kind"].update(chips=30, mult=3)
+        assert analysis._hand_base(G, "Three of a Kind", "The Flint") == (15, 2)
+
+    def test_the_water_lowers_the_flush_make_rate(self) -> None:
+        G = make_state("H_2", [joker("j_four_fingers", "Four Fingers")], state="SHOP")
+        G["blinds"]["boss"]["name"] = "The Water"
+        power = analysis.power_check(G)
+        assert power["boss_make_rate"] < power["make_rate"]
 
 
 class TestRetriggerSynergies:
@@ -337,10 +370,15 @@ class TestPlanAndStatus:
         assert analysis.main_hand_plan(G)["hand"] == "Flush"
 
     def test_flush_jokers_without_pair_jokers(self) -> None:
+        # Flush only with Smeared Joker / Four Fingers (owner); flush-joker cores,
+        # a lone Tribe or mixed-suit Mult jokers stay on Pair
         jokers = [joker("j_droll", "Droll Joker"), joker("j_crafty", "Crafty Joker")]
-        assert analysis.main_hand_plan(make_state("H_2", jokers))["hand"] == "Flush"
-        jokers.append(joker("j_jolly", "Jolly Joker"))
         assert analysis.main_hand_plan(make_state("H_2", jokers))["hand"] == "Pair"
+        mixed = [joker("j_greedy_joker", "Greedy Joker"), joker("j_gluttenous_joker", "Gluttonous Joker")]
+        assert analysis.main_hand_plan(make_state("H_2", mixed))["hand"] == "Pair"
+        assert analysis.main_hand_plan(make_state("H_2", [joker("j_tribe", "The Tribe")]))["hand"] == "Pair"
+        jokers.append(joker("j_four_fingers", "Four Fingers"))
+        assert analysis.main_hand_plan(make_state("H_2", jokers))["hand"] == "Flush"
 
     def test_two_pair_needs_a_two_pair_joker(self) -> None:
         G = make_state("H_2", [joker("j_trousers", "Spare Trousers")])
@@ -384,7 +422,7 @@ class TestPlanAndStatus:
         assert analysis.suggest_targets(G, {"key": "c_death"}) == [2, 6]
 
     def test_death_flush_copies_main_suit_not_off_suit_face(self) -> None:
-        jokers = [joker("j_droll", "Droll Joker"), joker("j_crafty", "Crafty Joker")]
+        jokers = [joker("j_droll", "Droll Joker"), joker("j_smeared", "Smeared Joker")]
         G = make_state("C_3 H_9 H_4 H_7 D_2 H_5 S_K H_8", jokers)
         G["ante_num"] = 3
         plan = analysis.main_hand_plan(G)
@@ -500,15 +538,19 @@ class TestPlanAndStatus:
         G = make_state("H_2", boss="The Eye")
         assert "AFFECTS MAIN_HAND" in analysis.boss_impact(G)["impact"]
 
-    def test_power_check_uses_recent_scores(self) -> None:
+    def test_power_check_ignores_recent_scores(self) -> None:
         G = make_state("H_2", state="SHOP")
         G["blinds"]["small"]["status"] = "DEFEATED"
         G["blinds"]["big"]["status"] = "SELECT"
-        history = [{"method": "play", "score": 100}] * 3
-        status = analysis.run_status(G, [], history)
-        assert status["hands_needed"] == 5
-        assert status["status"] == "TOO WEAK"
-        assert status["effective_floor"] == 0
+        G["hands"]["Pair"].update(chips=200, mult=10, level=10)
+        low = [{"method": "play", "score": 100}] * 3
+        status = analysis.run_status(G, [], low)
+        assert status["status"] == "ON TRACK"  # junk past hands do not count
+        G["ante_num"] = 3
+        status = analysis.run_status(G, [], low)
+        # TOO WEAK keeps FLOOR; score buys may go down to the $10 RESERVE
+        assert status["effective_floor"] == status["floor"]
+        assert status["reserve"] == 10
 
     def test_joker_order_puts_xmult_right(self) -> None:
         G = make_state("H_2")
