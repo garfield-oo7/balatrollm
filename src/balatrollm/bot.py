@@ -160,12 +160,13 @@ class Bot:
             self._finish_reason = "connection_abort"
             raise BotError(f"Failed to connect to Balatro: {e}") from e
 
-        # RANDOM: start without a seed and report the run under a private label;
+        # RANDOM: generate a seed, record it under a private label, start on it;
         # SEED-<label>: replay a recorded seed (see seeds.py).
         start_args: dict[str, Any] = {"deck": self.task.deck, "stake": self.task.stake}
         random_start = seeds.is_random(self.task.seed)
         if random_start:
-            self.task = dataclasses.replace(self.task, seed=seeds.allocate())
+            label, start_args["seed"] = seeds.new_random()
+            self.task = dataclasses.replace(self.task, seed=label)
         elif seeds.is_label(self.task.seed):
             start_args["seed"] = seeds.resolve(self.task.seed)
         else:
@@ -181,8 +182,10 @@ class Bot:
             await self._balatro.call("menu")
             await self._wait_for_menu()
             gamestate = await self._balatro.call("start", start_args)
-            if random_start:
-                seeds.record(self.task.seed, str(gamestate.get("seed") or ""))
+            if random_start and not seeds.started_on(start_args["seed"], gamestate):
+                self._finish_reason = "unexpected_error"
+                logger.error(f"Game did not start on the seed generated for {self.task.seed}")
+                raise BotError(f"Game did not start on the seed generated for {self.task.seed}")
             await self._run_game_loop(gamestate)
         except BotError:
             logger.error("Game ended due to bot error")
