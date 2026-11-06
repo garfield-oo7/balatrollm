@@ -34,8 +34,12 @@
 - Observatory owned: HOLD MAIN_HAND planets instead of using them.
 {%- endif %}
 {%- if boss.name %}
+{%- if G.state == "SELECTING_HAND" and ((G.blinds or {}).boss or {}).status != "CURRENT" %}
+- Boss this ante (a LATER blind, NOT this one: its rules do not apply now): {{ boss.name }} ({{ boss.score | fmt_num }}): {{ boss.effect }}
+{%- else %}
 - Boss this ante: {{ boss.name }} ({{ boss.score | fmt_num }}): {{ boss.effect }}{% if boss.counter %}. Counter: {{ boss.counter }}{% endif %}
-{%- if boss.impact %}
+{%- endif %}
+{%- if boss.impact and not (G.state == "SELECTING_HAND" and ((G.blinds or {}).boss or {}).status != "CURRENT") %}
 - Boss impact: {{ boss.impact }}
 {%- endif %}
 {%- if boss.prep and G.state in ["SHOP", "SMODS_BOOSTER_OPENED"] %}
