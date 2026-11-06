@@ -273,6 +273,14 @@ class TestLookAheadAndRefusals:
         power = analysis.power_check(G)
         assert power["boss_make_rate"] < power["make_rate"]
 
+    def test_power_check_inside_the_psychic_is_not_zero(self) -> None:
+        G = make_state("H_2", state="SELECTING_HAND")
+        for k in ("small", "big"):
+            G["blinds"][k]["status"] = "DEFEATED"
+        G["blinds"]["boss"].update(name="The Psychic", status="CURRENT")
+        power = analysis.power_check(G)
+        assert power["typical"] > 0 and power["boss_per_hand"] > 0
+
 
 class TestRetriggerSynergies:
     def test_hanging_chad_retriggers_photograph(self) -> None:

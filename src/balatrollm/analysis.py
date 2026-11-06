@@ -2134,6 +2134,12 @@ def power_check(G: dict[str, Any], plan: dict[str, Any] | None = None) -> dict[s
     plan = plan or main_hand_plan(G)
     hand = plan["hand"]
     G_owned = _with_jokers(G, _area_cards(G, "jokers"))
+    # The typical score is boss-free (in a boss round the CURRENT boss would
+    # otherwise zero it, e.g. The Psychic on 2-card plays); bosses come below.
+    G_owned["blinds"] = {
+        k: {**v, "status": "UPCOMING"} if v.get("status") == "CURRENT" else v
+        for k, v in (G.get("blinds") or {}).items()
+    }
     plays = typical_plays(G, plan)
     typical = _mean_score(G_owned, plays, hand)
     fallback = 0
