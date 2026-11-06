@@ -1891,7 +1891,7 @@ def run_status(
         # money a score buy may use: a joker filling an empty slot (Antes 1-3),
         # a joker with SCORE +50% or more, an on-plan [XMULT] joker, a [MAIN]
         # planet, a Buffoon pack with a free slot, or a SCORE > 0 joker while TOO WEAK
-        "score_spendable": max(money - reserve(G), 0),
+        "score_spendable": max(money - reserve(G), money - effective_floor, 0),
         "recent_scores": scores,
         "next_target": nxt_target,
         "milestone": milestone,
@@ -2425,6 +2425,33 @@ def _sell_veto(G: dict[str, Any], joker: dict[str, Any], full: bool) -> str | No
     return None
 
 
+def _first_shop_veto(G: dict[str, Any], index: Any) -> str | None:
+    """First shop: a Buffoon pack beats a joker that adds +0 now (not xMult/econ)."""
+    try:
+        i = int(index)
+        card = _area_cards(G, "shop")[i]
+    except (IndexError, TypeError, ValueError):
+        return None
+    if card.get("set") != "JOKER":
+        return None
+    info = knowledge.joker_info(card.get("label")) or {}
+    if info.get("category") in ("XMULT", "ECON"):
+        return None
+    money = int(G.get("money") or 0)
+    buffoon = [
+        p
+        for p in _area_cards(G, "packs")
+        if "buffoon" in str(p.get("label", "")).lower()
+        and int((p.get("cost") or {}).get("buy") or 0) <= money
+    ]
+    if not buffoon or not str(shop_impact(G)["shop"].get(i, "")).startswith("+0 per hand"):
+        return None
+    return (
+        f"First shop: {card.get('label')} adds +0 to your hand now. Open the "
+        "Buffoon pack instead: it offers a choice of jokers that score now."
+    )
+
+
 def validate_action(
     G: dict[str, Any], method: str, params: dict[str, Any]
 ) -> str | None:
@@ -2450,6 +2477,16 @@ def validate_action(
                     f"Discard refused: cards {winners[0]['cards']} already make a "
                     f"{winners[0]['hand']} that WINS the blind. Play it instead."
                 )
+    if (
+        method == "buy"
+        and "card" in params
+        and G.get("state") == "SHOP"
+        and int(G.get("ante_num") or 1) == 1
+        and int(G.get("round_num") or 1) == 1
+        and not full
+        and (veto := _first_shop_veto(G, params["card"]))
+    ):
+        return veto
     if method == "reroll":
         money = int(G.get("money") or 0)
         cost = int((G.get("round") or {}).get("reroll_cost", 5) or 0)
