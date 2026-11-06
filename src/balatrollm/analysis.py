@@ -2212,8 +2212,9 @@ def power_check(G: dict[str, Any], plan: dict[str, Any] | None = None) -> dict[s
 BOSS_REROLL_COST = 10
 BOSS_REROLL_ALWAYS = {"Violet Vessel", "The Wall", "The Needle"}
 FIVE_CARD_HANDS = {"Flush", "Straight", "Full House"}
-# Retcon could reroll forever: stop after this many rerolls in one ante
-BOSS_REROLL_MAX_PER_ANTE = 3
+# Retcon rerolls again and again until the boss is fine or money is under $10;
+# this only guards against a runaway loop
+BOSS_REROLL_MAX_PER_ANTE = 10
 
 
 def boss_reroll_available(G: dict[str, Any]) -> bool:

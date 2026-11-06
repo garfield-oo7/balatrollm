@@ -126,7 +126,7 @@ async def test_harness_boss_reroll_off_or_capped() -> None:
     bot._boss_rerolls = {}
     assert await bot._reroll_boss(blind_select("The Wall")) is None
     bot.harness = {"reroll_boss": True}
-    bot._boss_rerolls = {1: 3}
+    bot._boss_rerolls = {1: 10}
     assert await bot._reroll_boss(blind_select("The Wall")) is None
     game.call.assert_not_called()
 
@@ -140,3 +140,29 @@ async def test_failed_boss_reroll_falls_back_to_select() -> None:
     bot.harness = {"reroll_boss": True}
     bot._boss_rerolls = {}
     assert await bot._reroll_boss(blind_select("The Wall")) is None
+
+
+async def test_retcon_keeps_rerolling_until_the_boss_is_fine() -> None:
+    from .test_analysis import blind_select
+
+    def retcon(boss: str, money: int) -> dict[str, Any]:
+        G = blind_select(boss)
+        G["used_vouchers"] = {"v_directors_cut": "", "v_retcon": ""}
+        G["round"]["boss_rerolled"] = True
+        G["money"] = money
+        return G
+
+    game = AsyncMock()
+    game.call.side_effect = [retcon("The Needle", 30), retcon("The Eye", 20), retcon("The Hook", 10)]
+    bot = _bot(game)
+    bot.harness = {"reroll_boss": True}
+    bot._boss_rerolls = {}
+    G = retcon("The Wall", 40)
+    names = []
+    while (after := await bot._reroll_boss(G)) is not None:
+        G = after
+        names.append(G["blinds"]["boss"]["name"])
+    assert names == ["The Needle", "The Eye", "The Hook"]
+    assert bot._boss_rerolls == {1: 3}
+    # Out of money: no reroll even for a bad boss
+    assert await bot._reroll_boss(retcon("The Wall", 9)) is None
