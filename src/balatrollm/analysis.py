@@ -12,8 +12,11 @@ Fairness: the remaining deck (``G.cards``) is only ever summarised as counts,
 never in draw order, and face-down cards are never revealed.
 """
 
+import hashlib
+import json
+import random
 import re
-from collections import Counter
+from collections import Counter, OrderedDict
 from collections.abc import Iterable
 from itertools import combinations
 from math import comb
@@ -152,6 +155,8 @@ STRUCTURAL_JOKERS = {
     "j_shoot_the_moon",
     "j_raised_fist",
 }
+# Held-card jokers whose Blueprint / Brainstorm copies the scorer counts
+HELD_COPIED = {"j_baron", "j_mime", "j_shoot_the_moon"}
 NO_SCORE_JOKERS = {
     "j_credit_card",
     "j_chaos",
@@ -202,8 +207,9 @@ NO_SCORE_JOKERS = {
     "j_ceremonial",
     "j_madness",
 }
+# Square Joker writes "(Currently 0 Chips)" with no sign: read it as "+"
 CURRENTLY = re.compile(
-    r"Currently\s*([+X×x])\s*\$?(\d+(?:\.\d+)?)\s*(Mult|Chips)", re.IGNORECASE
+    r"Currently\s*([+X×x]?)\s*\$?(\d+(?:\.\d+)?)\s*(Mult|Chips)", re.IGNORECASE
 )
 FIRST_PLUS = re.compile(r"\+(\d+(?:\.\d+)?)\s*(Mult|Chips)", re.IGNORECASE)
 
@@ -534,6 +540,25 @@ def _joker_effect(
     return None
 
 
+def copied_keys(G: dict[str, Any]) -> list[str]:
+    """Keys of the jokers Blueprint (the joker to its right) and Brainstorm
+    (the leftmost joker) copy, in joker order."""
+    jokers = [
+        j for j in _area_cards(G, "jokers") if not (j.get("state") or {}).get("debuff")
+    ]
+    out = []
+    for idx, j in enumerate(jokers):
+        key = j.get("key", "")
+        target: dict[str, Any] = {}
+        if key == "j_blueprint" and idx + 1 < len(jokers):
+            target = jokers[idx + 1]
+        elif key == "j_brainstorm" and jokers and jokers[0] is not j:
+            target = jokers[0]
+        if target.get("key") not in (None, "", "j_blueprint", "j_brainstorm"):
+            out.append(str(target.get("key")))
+    return out
+
+
 def estimate_play(
     G: dict[str, Any],
     played_raw: list[dict[str, Any]],
@@ -661,8 +686,12 @@ def estimate_play(
                 elif k == "j_photograph" and pos == first_face_pos:
                     mult *= 2
 
-    # Held-in-hand effects
-    mime = keys.count("j_mime")
+    # Held-in-hand effects (Blueprint / Brainstorm copies of Baron, Mime and
+    # Shoot the Moon count as extra copies)
+    copied = copied_keys(G)
+    mime = keys.count("j_mime") + copied.count("j_mime")
+    barons = keys.count("j_baron") + copied.count("j_baron")
+    moons = keys.count("j_shoot_the_moon") + copied.count("j_shoot_the_moon")
     for c in held:
         if c["debuff"] or c["hidden"]:
             continue
@@ -671,10 +700,10 @@ def estimate_play(
             if c["enh"] == "STEEL":
                 mult *= 1.5
             if c["rank"] == "K":
-                for _k in range(keys.count("j_baron")):
+                for _k in range(barons):
                     mult *= 1.5
             if c["rank"] == "Q":
-                mult += 13 * keys.count("j_shoot_the_moon")
+                mult += 13 * moons
     if "j_raised_fist" in keyset:
         ranks = [c for c in held if c["rank"] and not c["debuff"] and not c["hidden"]]
         if ranks:
@@ -713,7 +742,7 @@ def estimate_play(
             pass  # applied below, after each Uncommon joker
         elif target and tkey not in ("j_blueprint", "j_brainstorm"):
             if tkey in PER_CARD_JOKERS or tkey in STRUCTURAL_JOKERS:
-                if target is not j:
+                if target is not j and tkey not in HELD_COPIED:
                     unknown.append(f"{j.get('label', key)} (copy)")
             elif tkey in SUIT_MULT_JOKERS or tkey in NO_SCORE_JOKERS:
                 pass
