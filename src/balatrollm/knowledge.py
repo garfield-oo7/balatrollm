@@ -159,7 +159,7 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
         None,
         "x3 if this hand type was already played this round",
     ),
-    "Red Card": ("SCALE", "C", "C", None, "grows when skipping packs"),
+    "Red Card": ("UTIL", "C", "C", None, "+3 Mult only per booster pack you SKIP; weak unless you skip many packs (owner sold it)"),
     "Madness": ("TRAP", "T", "B", None, "destroys a random joker each blind"),
     "Square Joker": (
         "SCALE",
