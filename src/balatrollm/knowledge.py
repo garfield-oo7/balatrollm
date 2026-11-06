@@ -19,12 +19,12 @@ from typing import Any
 ################################################################################
 
 JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
-    "Joker": ("MULT", "A", "C", None, "+4 Mult, cheap filler"),
+    "Joker": ("MULT", "C", "C", None, "+4 Mult, little value after Ante 1: buy only with no scoring joker (e.g. the Buffoon pack missed)"),
     "Greedy Joker": ("MULT", "B", "C", "flush", "+3 Mult per Diamond scored"),
     "Lusty Joker": ("MULT", "B", "C", "flush", "+3 Mult per Heart scored"),
     "Wrathful Joker": ("MULT", "B", "C", "flush", "+3 Mult per Spade scored"),
     "Gluttonous Joker": ("MULT", "B", "C", "flush", "+3 Mult per Club scored"),
-    "Jolly Joker": ("MULT", "A", "C", "pair", "+8 Mult if hand contains a Pair"),
+    "Jolly Joker": ("MULT", "B", "C", "pair", "+8 Mult if hand contains a Pair; flat, fades after Ante 2: buy only when short of scoring jokers"),
     "Zany Joker": ("MULT", "B", "C", "pair", "+12 Mult with Three of a Kind"),
     "Mad Joker": ("MULT", "A", "C", "pair", "+10 Mult with Two Pair"),
     "Crazy Joker": ("MULT", "B", "C", "straight", "+12 Mult with a Straight"),
