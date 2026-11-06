@@ -412,7 +412,7 @@ CONSUMABLES: dict[str, tuple[str, str]] = {
     "Hex": ("AVOID", "destroys all other jokers"),
     "Trance": ("GOOD", "Blue Seal on a card: a free Planet every round"),
     "Medium": ("GOOD", "Purple Seal on a junk card you discard"),
-    "Cryptid": ("GOOD", "2 copies of your best card"),
+    "Cryptid": ("SITUATIONAL", "2 copies of a chosen card: only when one is worth copying (seal, enhancement, main rank); it adds 2 cards to the deck"),
     "The Soul": ("GOOD", "LEGENDARY joker (needs an empty joker slot)"),
     "Black Hole": ("GOOD", "+1 level to every hand; use now"),
 }
