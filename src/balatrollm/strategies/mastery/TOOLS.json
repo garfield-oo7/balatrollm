@@ -372,6 +372,26 @@
           ]
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "reroll_boss",
+        "strict": false,
+        "description": "Reroll the upcoming boss blind for $10 (needs Director's Cut, once per ante, or Retcon). The harness normally does this for you.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "reasoning": {
+              "type": "string",
+              "description": "Write this FIRST, 1-3 short sentences: the STATUS facts you used (NEED/PER_HAND or SPENDABLE/MAIN_HAND), what you will do and why. Name cards as 'King of Hearts', not only indices."
+            }
+          },
+          "required": [
+            "reasoning"
+          ]
+        }
+      }
     }
   ],
   "SMODS_BOOSTER_OPENED": [

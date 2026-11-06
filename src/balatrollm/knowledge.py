@@ -418,7 +418,7 @@ CONSUMABLES: dict[str, tuple[str, str]] = {
 }
 
 # Vouchers: name -> (verdict, hint). BUY = first pick (extra hand, discard, hand size,
-# joker slot); GOOD = after BUY; both only with price <= SPENDABLE. NEVER.
+# joker slot, boss reroll insurance); GOOD = after BUY; both only with price <= SPENDABLE. NEVER.
 VOUCHERS: dict[str, tuple[str, str]] = {
     "Grabber": ("BUY", "+1 hand per round"),
     "Nacho Tong": ("BUY", "+1 hand per round"),
@@ -444,8 +444,14 @@ VOUCHERS: dict[str, tuple[str, str]] = {
     "Money Tree": ("NEVER", "interest cap $20"),
     "Hieroglyph": ("NEVER", "-1 hand per round"),
     "Petroglyph": ("NEVER", "-1 discard per round"),
-    "Director's Cut": ("NEVER", "boss reroll is not available to you"),
-    "Retcon": ("NEVER", "boss reroll is not available to you"),
+    "Director's Cut": (
+        "BUY",
+        "insurance: you never know when it might come in handy. Lets the harness reroll a bad boss ($10, once per ante)",
+    ),
+    "Retcon": (
+        "BUY",
+        "insurance: like Director's Cut but rerolls the boss as often as needed ($10 each)",
+    ),
     "Tarot Merchant": ("NEVER", "fewer jokers in shop"),
     "Tarot Tycoon": ("NEVER", "fewer jokers in shop"),
     "Planet Merchant": ("NEVER", "fewer jokers in shop"),

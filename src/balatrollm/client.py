@@ -69,3 +69,7 @@ class BalatroClient:
             )
 
         return data["result"]
+
+    async def reroll_boss(self) -> Any:
+        """Reroll the upcoming boss (BLIND_SELECT; Director's Cut or Retcon, $10)."""
+        return await self.call("reroll_boss")

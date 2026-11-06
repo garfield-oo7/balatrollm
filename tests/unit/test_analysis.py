@@ -886,3 +886,87 @@ class TestShopImpact:
         G["jokers"]["limit"] = len(G["jokers"]["cards"])
         text = sm.render_gamestate(G, rounds=[], history=[], flags={})
         assert "WEAKEST: 0 Jolly Joker" in text
+
+
+def blind_select(boss: str, on_deck: str = "small", **kw: Any) -> dict[str, Any]:
+    """BLIND_SELECT state with Director's Cut owned and $20."""
+    G = make_state("H_2", state="BLIND_SELECT", boss=boss, **kw)
+    G["hand"]["cards"] = []
+    order = ["small", "big", "boss"]
+    for i, key in enumerate(order):
+        here = order.index(on_deck)
+        G["blinds"][key]["status"] = (
+            "DEFEATED" if i < here else "SELECT" if i == here else "UPCOMING"
+        )
+    G["money"] = 20
+    G["used_vouchers"] = {"v_directors_cut": ""}
+    G["round"]["boss_rerolled"] = False
+    return G
+
+
+class TestBossReroll:
+    @pytest.mark.parametrize("boss", ["Violet Vessel", "The Wall", "The Needle"])
+    def test_always_reroll_bosses(self, boss: str) -> None:
+        assert analysis.boss_reroll_reason(blind_select(boss)) is not None
+
+    @pytest.mark.parametrize("boss", ["The Eye", "The Mouth", "The Psychic"])
+    def test_bosses_that_shut_off_a_pair_main_hand(self, boss: str) -> None:
+        G = blind_select(boss)
+        assert analysis.main_hand_plan(G)["hand"] == "Pair"
+        assert analysis.boss_reroll_reason(G) is not None
+
+    def test_psychic_kept_for_a_five_card_main_hand(self) -> None:
+        G = blind_select("The Psychic")
+        G["jokers"] = {
+            "count": 1,
+            "limit": 5,
+            "cards": [joker("j_smeared", "Smeared Joker")],
+        }
+        assert analysis.main_hand_plan(G)["hand"] == "Flush"
+        assert analysis.boss_reroll_reason(G) is None
+
+    def test_harmless_boss_is_kept(self) -> None:
+        assert analysis.boss_reroll_reason(blind_select("The Hook")) is None
+
+    def test_strength_check_only_when_boss_is_on_deck(self) -> None:
+        early = blind_select("The Hook")
+        early["blinds"]["boss"]["score"] = 10_000_000
+        assert analysis.boss_reroll_reason(early) is None
+        on_deck = blind_select("The Hook", on_deck="boss")
+        on_deck["blinds"]["boss"]["score"] = 10_000_000
+        reason = analysis.boss_reroll_reason(on_deck)
+        assert reason is not None and "hands" in reason
+
+    def test_strong_build_keeps_boss_on_deck(self) -> None:
+        G = blind_select("The Hook", on_deck="boss")
+        G["blinds"]["boss"]["score"] = 1
+        assert analysis.boss_reroll_reason(G) is None
+
+    def test_not_available_without_voucher_money_or_after_use(self) -> None:
+        G = blind_select("The Wall")
+        G["used_vouchers"] = {}
+        assert analysis.boss_reroll_reason(G) is None
+        G = blind_select("The Wall")
+        G["money"] = 9
+        assert analysis.boss_reroll_reason(G) is None
+        G = blind_select("The Wall")
+        G["round"]["boss_rerolled"] = True
+        assert analysis.boss_reroll_reason(G) is None
+        # Retcon ignores the once-per-ante flag
+        G["used_vouchers"] = {"v_directors_cut": "", "v_retcon": ""}
+        assert analysis.boss_reroll_reason(G) is not None
+
+    def test_validate_reroll_boss(self) -> None:
+        G = blind_select("The Hook")
+        assert analysis.validate_action(G, "reroll_boss", {}) is None
+        G["round"]["boss_rerolled"] = True
+        assert "refused" in (analysis.validate_action(G, "reroll_boss", {}) or "")
+        shop = blind_select("The Hook")
+        shop["state"] = "SHOP"
+        assert analysis.validate_action(shop, "reroll_boss", {}) is not None
+
+    def test_vouchers_are_insurance_buys(self) -> None:
+        for name in ("Director's Cut", "Retcon"):
+            verdict, hint = knowledge.VOUCHERS[name]
+            assert verdict == "BUY"
+            assert "insurance" in hint

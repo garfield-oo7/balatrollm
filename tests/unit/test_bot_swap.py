@@ -96,3 +96,47 @@ def test_skip_only_for_investment_tag_in_ante_one() -> None:
     assert not bot._skip_for_tag(_blind_select(1, "Investment Tag", small="SKIPPED"))
     bot.harness = {}
     assert not bot._skip_for_tag(_blind_select(1, "Investment Tag"))
+
+
+async def test_harness_rerolls_bad_boss_once() -> None:
+    from .test_analysis import blind_select
+
+    game = AsyncMock()
+    after = blind_select("The Hook")
+    after["round"]["boss_rerolled"] = True
+    game.call.return_value = after
+    bot = _bot(game)
+    bot.harness = {"reroll_boss": True}
+    bot._boss_rerolls = {}
+    result = await bot._reroll_boss(blind_select("The Wall"))
+    assert result is after
+    assert [c.args[0] for c in game.call.call_args_list] == ["reroll_boss"]
+    assert bot._history[-1]["method"] == "reroll_boss"
+    assert "The Wall -> The Hook" in bot._history[-1]["result"]
+    # The new boss is fine: no second reroll
+    assert await bot._reroll_boss(after) is None
+
+
+async def test_harness_boss_reroll_off_or_capped() -> None:
+    from .test_analysis import blind_select
+
+    game = AsyncMock()
+    bot = _bot(game)
+    bot.harness = {}
+    bot._boss_rerolls = {}
+    assert await bot._reroll_boss(blind_select("The Wall")) is None
+    bot.harness = {"reroll_boss": True}
+    bot._boss_rerolls = {1: 3}
+    assert await bot._reroll_boss(blind_select("The Wall")) is None
+    game.call.assert_not_called()
+
+
+async def test_failed_boss_reroll_falls_back_to_select() -> None:
+    from .test_analysis import blind_select
+
+    game = AsyncMock()
+    game.call.side_effect = BalatroError(-32003, "nope", {"name": "NOT_ALLOWED"})
+    bot = _bot(game)
+    bot.harness = {"reroll_boss": True}
+    bot._boss_rerolls = {}
+    assert await bot._reroll_boss(blind_select("The Wall")) is None

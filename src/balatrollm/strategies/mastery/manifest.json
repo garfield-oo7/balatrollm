@@ -18,6 +18,7 @@
     "auto_swap_jokers": true,
     "skip_blind_tags": {
       "Investment Tag": 1
-    }
+    },
+    "reroll_boss": true
   }
 }
