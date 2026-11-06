@@ -2255,7 +2255,11 @@ def boss_reroll_reason(G: dict[str, Any]) -> str | None:
         power = power_check(G, plan)
         target = int(boss.get("score") or 0)
         per_hand = int(power["boss_per_hand"] or 0)
-        if target and per_hand:
+        # Reroll only when THIS boss is the problem: with a boss that does not
+        # cut the score, the same target must be beatable. Otherwise every new
+        # boss fails too and Retcon would spend all the money for nothing.
+        neutral_ok = -(-target // max(int(power["per_hand"] or 0), 1)) <= _hands_per_round(G)
+        if target and per_hand and neutral_ok:
             hands = -(-target // per_hand)
             if hands > power["boss_hands_allowed"]:
                 return (

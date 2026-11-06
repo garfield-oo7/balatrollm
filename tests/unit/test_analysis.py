@@ -928,14 +928,29 @@ class TestBossReroll:
     def test_harmless_boss_is_kept(self) -> None:
         assert analysis.boss_reroll_reason(blind_select("The Hook")) is None
 
+    def _flint_on_deck(self) -> dict[str, Any]:
+        """The Flint halves the score: pick a target only a neutral boss allows."""
+        G = blind_select("The Flint", on_deck="boss")
+        power = analysis.power_check(G)
+        assert power["boss_per_hand"] < power["per_hand"]
+        G["blinds"]["boss"]["score"] = power["per_hand"] * 3
+        return G
+
     def test_strength_check_only_when_boss_is_on_deck(self) -> None:
-        early = blind_select("The Hook")
-        early["blinds"]["boss"]["score"] = 10_000_000
-        assert analysis.boss_reroll_reason(early) is None
-        on_deck = blind_select("The Hook", on_deck="boss")
-        on_deck["blinds"]["boss"]["score"] = 10_000_000
+        on_deck = self._flint_on_deck()
         reason = analysis.boss_reroll_reason(on_deck)
         assert reason is not None and "hands" in reason
+        early = self._flint_on_deck()
+        early["blinds"]["big"]["status"] = "SELECT"
+        early["blinds"]["boss"]["status"] = "UPCOMING"
+        assert analysis.boss_reroll_reason(early) is None
+
+    def test_too_weak_build_does_not_reroll(self) -> None:
+        """A build too weak for ANY boss keeps the boss (Retcon would drain money)."""
+        G = blind_select("The Hook", on_deck="boss")
+        G["used_vouchers"] = {"v_directors_cut": "", "v_retcon": ""}
+        G["blinds"]["boss"]["score"] = 10_000_000
+        assert analysis.boss_reroll_reason(G) is None
 
     def test_strong_build_keeps_boss_on_deck(self) -> None:
         G = blind_select("The Hook", on_deck="boss")
