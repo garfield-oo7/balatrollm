@@ -181,4 +181,7 @@
 {%- endif %}
 {%- if G.used_vouchers %}
 - Vouchers owned: {{ G.used_vouchers.keys() | join(", ") }}
+{%- if "v_retcon" in G.used_vouchers or "v_directors_cut" in G.used_vouchers %}
+- Boss reroll: {% if "v_retcon" in G.used_vouchers %}Retcon, as often as needed{% elif (G.round or {}).boss_rerolled %}Director's Cut already used this ante{% else %}Director's Cut, 1 left this ante{% endif %} ($10 each; the harness rerolls a bad boss at blind select, keep $10 for it)
+{%- endif %}
 {%- endif %}

@@ -2206,6 +2206,64 @@ def power_check(G: dict[str, Any], plan: dict[str, Any] | None = None) -> dict[s
     }
 
 
+# Boss reroll (Director's Cut: once per ante, Retcon: unlimited; $10 each).
+# Owner rule: always reroll these bosses; also reroll a boss that shuts off
+# MAIN_HAND, or one the current build cannot beat by the strength check.
+BOSS_REROLL_COST = 10
+BOSS_REROLL_ALWAYS = {"Violet Vessel", "The Wall", "The Needle"}
+FIVE_CARD_HANDS = {"Flush", "Straight", "Full House"}
+# Retcon could reroll forever: stop after this many rerolls in one ante
+BOSS_REROLL_MAX_PER_ANTE = 3
+
+
+def boss_reroll_available(G: dict[str, Any]) -> bool:
+    """True when the game would let you reroll the boss now (voucher, flag, $10)."""
+    vouchers = set(G.get("used_vouchers") or {})
+    rerolled = bool((G.get("round") or {}).get("boss_rerolled"))
+    owned = "v_retcon" in vouchers or ("v_directors_cut" in vouchers and not rerolled)
+    boss = (G.get("blinds") or {}).get("boss") or {}
+    return (
+        owned
+        and int(G.get("money") or 0) >= BOSS_REROLL_COST
+        and boss.get("status") in ("UPCOMING", "SELECT")
+    )
+
+
+def boss_reroll_reason(G: dict[str, Any]) -> str | None:
+    """Why the upcoming boss should be rerolled (None: keep it or cannot reroll).
+
+    The named bosses and the ones that shut off MAIN_HAND are rerolled at the
+    first blind select of the ante, so the shops can still prepare for the new
+    boss. The strength check waits until the boss is on deck (the build is final).
+    """
+    if not boss_reroll_available(G):
+        return None
+    boss = (G.get("blinds") or {}).get("boss") or {}
+    name = str(boss.get("name") or "")
+    plan = main_hand_plan(G)
+    if name in BOSS_REROLL_ALWAYS:
+        return f"{name} is a boss to always reroll"
+    if name in ("The Eye", "The Mouth"):
+        return f"{name} shuts off your MAIN_HAND {plan['hand']}"
+    if name == "The Psychic" and plan["hand"] not in FIVE_CARD_HANDS:
+        return f"The Psychic needs 5-card plays and your MAIN_HAND is {plan['hand']}"
+    suit = knowledge.SUIT_BOSSES.get(name)
+    if suit and plan["hand"] == "Flush" and plan.get("suit") == suit:
+        return f"{name} debuffs your Flush suit"
+    if boss.get("status") == "SELECT":
+        power = power_check(G, plan)
+        target = int(boss.get("score") or 0)
+        per_hand = int(power["boss_per_hand"] or 0)
+        if target and per_hand:
+            hands = -(-target // per_hand)
+            if hands > power["boss_hands_allowed"]:
+                return (
+                    f"{name} ({fmt_num(target)}) needs about {hands} hands at "
+                    f"{fmt_num(per_hand)} per hand; you have {power['boss_hands_allowed']}"
+                )
+    return None
+
+
 def _with_jokers(G: dict[str, Any], jokers: list[dict[str, Any]]) -> dict[str, Any]:
     area = dict(G.get("jokers") or {})
     area["cards"] = jokers
@@ -2584,6 +2642,14 @@ def validate_action(
                 return (
                     "You already own a Blue Seal card: pick a different card or skip."
                 )
+    if method == "reroll_boss":
+        if G.get("state") != "BLIND_SELECT":
+            return "reroll_boss only works on the blind select screen."
+        if not boss_reroll_available(G):
+            return (
+                "Boss reroll refused: it needs Director's Cut (once per ante) or "
+                f"Retcon and ${BOSS_REROLL_COST}. Select the blind instead."
+            )
     if method == "use":
         cons = _area_cards(G, "consumables")
         try:

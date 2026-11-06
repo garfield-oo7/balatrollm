@@ -11,7 +11,10 @@ from typing import Any
 import httpx
 from openai.types.chat import ChatCompletion
 
+from . import seeds
 from .analysis import (
+    BOSS_REROLL_MAX_PER_ANTE,
+    boss_reroll_reason,
     estimate_play,
     joker_order,
     round_record,
@@ -27,7 +30,6 @@ from .collector import (
     FinishReason,
     Stats,
 )
-from . import seeds
 from .config import Config, Task, get_model_config
 from .llm import LLMClient, LLMClientError, LLMTimeoutError
 from .strategy import StrategyManager, StrategyManifest
@@ -68,6 +70,8 @@ class Bot:
         self._consecutive_vetoes: int = 0
         self._consecutive_rearranges: int = 0
         self._shop_rerolls: int = 0
+        # Harness boss rerolls per ante (Retcon has no game limit)
+        self._boss_rerolls: dict[int, int] = {}
 
         # Finish reason tracking
         self._finish_reason: FinishReason | None = None
@@ -240,9 +244,13 @@ class Bot:
                         self._last_hand_state = None
                     gamestate = await self._balatro.call("cash_out")
                 case "BLIND_SELECT":
-                    # Selects every blind, except a skip for a tag the strategy
+                    # Rerolls a bad boss first (harness ``reroll_boss``), then
+                    # selects every blind, except a skip for a tag the strategy
                     # opted into (harness ``skip_blind_tags``: tag -> last ante)
-                    if self._skip_for_tag(gamestate):
+                    rerolled = await self._reroll_boss(gamestate)
+                    if rerolled is not None:
+                        gamestate = rerolled
+                    elif self._skip_for_tag(gamestate):
                         gamestate = await self._balatro.call("skip")
                     else:
                         gamestate = await self._balatro.call("select")
@@ -253,6 +261,44 @@ class Bot:
                 case _:
                     await asyncio.sleep(1)
                     gamestate = await self._balatro.call("gamestate")
+
+    async def _reroll_boss(self, gamestate: dict[str, Any]) -> dict[str, Any] | None:
+        """Reroll the boss when the strategy opted in and the boss is a bad one.
+
+        Returns the new gamestate, or None when no reroll was made.
+        """
+        assert self._balatro is not None
+        if not self.harness.get("reroll_boss"):
+            return None
+        ante = int(gamestate.get("ante_num") or 1)
+        if self._boss_rerolls.get(ante, 0) >= BOSS_REROLL_MAX_PER_ANTE:
+            return None
+        reason = boss_reroll_reason(gamestate)
+        if reason is None:
+            return None
+        self._boss_rerolls[ante] = self._boss_rerolls.get(ante, 0) + 1
+        old = ((gamestate.get("blinds") or {}).get("boss") or {}).get("name", "")
+        try:
+            after = await self._balatro.call("reroll_boss")
+        except BalatroError as e:
+            logger.warning(f"Boss reroll failed: {e}")
+            return None
+        new = ((after.get("blinds") or {}).get("boss") or {}).get("name", "")
+        logger.info(f"Harness rerolled boss {old} -> {new} ({reason})")
+        self._history.append(
+            {
+                "method": "reroll_boss",
+                "params": {},
+                "reasoning": f"harness: {reason}",
+                "state": "BLIND_SELECT",
+                "ante": gamestate.get("ante_num"),
+                "round": gamestate.get("round_num"),
+                "result": f"harness rerolled the boss for $10: {old} -> {new}",
+                "score": None,
+                "estimate": None,
+            }
+        )
+        return after
 
     def _skip_for_tag(self, gamestate: dict[str, Any]) -> bool:
         """True when the blind on deck offers a tag the strategy skips for."""
