@@ -428,8 +428,8 @@ VOUCHERS: dict[str, tuple[str, str]] = {
     "Blank": ("NEVER", "does nothing by itself"),
     "Clearance Sale": ("GOOD", "25% off (Antes 1-4)"),
     "Liquidation": ("GOOD", "50% off"),
-    "Overstock": ("GOOD", "3 shop slots, more jokers"),
-    "Overstock Plus": ("GOOD", "4 shop slots"),
+    "Overstock": ("BUY", "permanent: every shop and every reroll shows 3 cards instead of 2 (2 rerolls with it see as much as 3 without), so it pays for itself in later shops"),
+    "Overstock Plus": ("BUY", "permanent: 4 cards per shop and per reroll"),
     "Telescope": ("GOOD", "Celestial packs give MAIN_HAND planet"),
     "Observatory": (
         "GOOD",
