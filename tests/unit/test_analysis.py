@@ -234,6 +234,22 @@ class TestLookAheadAndRefusals:
         G["money"] = 15
         assert analysis.validate_action(G, "reroll", {}) is None
 
+    def test_first_shop_prefers_buffoon_over_a_zero_joker(self) -> None:
+        G = make_state("H_2", state="SHOP")
+        G["money"] = 9
+        G["shop"] = {"cards": [{**joker("j_ride_the_bus", "Ride the Bus", "(Currently +0 Mult)"), "cost": {"buy": 6}}]}
+        G["packs"] = {"cards": [{"key": "p_buffoon_normal_1", "label": "Buffoon Pack", "set": "BOOSTER", "cost": {"buy": 4}}]}
+        assert "Buffoon" in analysis.validate_action(G, "buy", {"card": 0})
+        G["round_num"] = 2
+        assert analysis.validate_action(G, "buy", {"card": 0}) is None
+
+    def test_score_spendable_never_below_spendable(self) -> None:
+        G = make_state("H_2", state="SHOP")
+        G["ante_num"] = 2
+        G["money"] = 14
+        S = analysis.run_status(G, [], [])
+        assert S["spendable"] == 14 and S["score_spendable"] == 14
+
     def test_fortune_teller_baseball_and_flint_rounding(self) -> None:
         teller = joker("j_fortune_teller", "Fortune Teller", "+1 Mult per Tarot card used this run (Currently +3)")
         G = make_state("H_K S_K D_2 C_3 D_5 C_7 S_8 H_9", [teller])
