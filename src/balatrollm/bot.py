@@ -228,8 +228,12 @@ class Bot:
                         self._last_hand_state = None
                     gamestate = await self._balatro.call("cash_out")
                 case "BLIND_SELECT":
-                    # NOTE: This bot always selects and never skips blinds
-                    gamestate = await self._balatro.call("select")
+                    # Selects every blind, except a skip for a tag the strategy
+                    # opted into (harness ``skip_blind_tags``: tag -> last ante)
+                    if self._skip_for_tag(gamestate):
+                        gamestate = await self._balatro.call("skip")
+                    else:
+                        gamestate = await self._balatro.call("select")
                 case "GAME_OVER":
                     self._finish_reason = "lost"
                     logger.info("Game over!")
@@ -237,6 +241,18 @@ class Bot:
                 case _:
                     await asyncio.sleep(1)
                     gamestate = await self._balatro.call("gamestate")
+
+    def _skip_for_tag(self, gamestate: dict[str, Any]) -> bool:
+        """True when the blind on deck offers a tag the strategy skips for."""
+        wanted = self.harness.get("skip_blind_tags") or {}
+        ante = int(gamestate.get("ante_num") or 1)
+        for blind in (gamestate.get("blinds") or {}).values():
+            if blind.get("status") == "SELECT" and blind.get("type") != "BOSS":
+                last_ante = wanted.get(blind.get("tag_name"))
+                if last_ante is not None and ante <= int(last_ante):
+                    logger.info(f"Skipping {blind.get('name')} for {blind.get('tag_name')}")
+                    return True
+        return False
 
     async def _get_llm_response(self, gamestate: dict[str, Any]) -> ChatCompletion:
         """Get LLM response for current game state."""

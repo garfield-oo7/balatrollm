@@ -73,7 +73,7 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
     ),
     "Mystic Summit": ("MULT", "B", "C", None, "+15 Mult only when 0 discards left"),
     "Marble Joker": ("UTIL", "C", "C", None, "adds Stone cards; hurts flushes"),
-    "Loyalty Card": ("XMULT", "B", "B", None, "x4 only every 6th hand; unreliable"),
+    "Loyalty Card": ("TRAP", "T", "T", None, "x4 only every 6th hand; never worth a slot"),
     "8 Ball": ("UTIL", "C", "C", None, "Tarot from scored 8s"),
     "Misprint": ("MULT", "A", "C", None, "+0..23 Mult random (avg 11)"),
     "Dusk": ("UTIL", "C", "B", None, "retrigger cards on last hand"),
@@ -161,7 +161,13 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
     ),
     "Red Card": ("SCALE", "C", "C", None, "grows when skipping packs"),
     "Madness": ("TRAP", "T", "B", None, "destroys a random joker each blind"),
-    "Square Joker": ("SCALE", "C", "C", None, "grows on exactly-4-card hands"),
+    "Square Joker": (
+        "SCALE",
+        "B",
+        "C",
+        None,
+        "+4 Chips per exactly-4-card hand: buy early, not after Ante 5; never sell it",
+    ),
     "Seance": ("UTIL", "C", "C", None, "situational, low value"),
     "Riff-raff": ("UTIL", "B", "C", None, "creates 2 Common jokers if slots free"),
     "Vampire": ("SCALE", "C", "B", None, "eats enhancements for xMult"),
@@ -199,10 +205,10 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
     "Reserved Parking": ("ECON", "C", "C", "face", "situational, low value"),
     "Mail-In Rebate": (
         "ECON",
-        "C",
+        "B",
         "C",
         None,
-        "$5 per discarded card of a named rank",
+        "$5 per discarded card of the named rank: discard that rank",
     ),
     "To the Moon": (
         "ECON",
@@ -359,10 +365,10 @@ CONSUMABLES: dict[str, tuple[str, str]] = {
     "The Lovers": ("SITUATIONAL", "Wild on 1 off-suit card (Flush)"),
     "The Chariot": ("SITUATIONAL", "Steel on 1 card you HOLD (not play)"),
     "Justice": ("GOOD", "Glass (x2) on 1 card you play (grows Glass Joker)"),
-    "The Hermit": ("GOOD", "doubles money (max +$20); use at $10-$39"),
+    "The Hermit": ("GOOD", "doubles money (max +$20); worth it at $10+"),
     "The Wheel of Fortune": ("SITUATIONAL", "1 in 4 edition on a joker; free gamble"),
     "Strength": ("SITUATIONAL", "+1 rank on up to 2 cards (makes pairs)"),
-    "The Hanged Man": ("SITUATIONAL", "destroy up to 2 junk cards (thins the deck)"),
+    "The Hanged Man": ("GOOD", "destroy up to 2 junk cards (thins the deck)"),
     "Death": ("GOOD", "2 cards: LEFT card becomes copy of RIGHT card"),
     "Temperance": ("GOOD", "money = jokers' sell value (max $50)"),
     "The Devil": ("SITUATIONAL", "Gold on 1 card you HOLD"),
@@ -377,11 +383,11 @@ CONSUMABLES: dict[str, tuple[str, str]] = {
     "Incantation": ("GOOD", "adds 4 enhanced number cards"),
     "Talisman": ("GOOD", "Gold Seal on a card you play"),
     "Aura": ("GOOD", "edition on your best played card"),
-    "Wraith": ("AVOID", "rare joker but money -> $0; only if broke"),
+    "Wraith": ("AVOID", "rare joker but money -> $0; only with $1 or less"),
     "Sigil": ("SITUATIONAL", "hand -> one random suit"),
     "Ouija": ("AVOID", "-1 hand size"),
     "Ectoplasm": ("AVOID", "-1 hand size"),
-    "Immolate": ("SITUATIONAL", "destroy 5 cards in hand, +$20"),
+    "Immolate": ("GOOD", "destroys 5 random cards in hand (thins the deck), +$20"),
     "Ankh": ("AVOID", "destroys all other jokers"),
     "Deja Vu": ("GOOD", "Red Seal (retrigger) on a card you play"),
     "Hex": ("AVOID", "destroys all other jokers"),
@@ -392,12 +398,13 @@ CONSUMABLES: dict[str, tuple[str, str]] = {
     "Black Hole": ("GOOD", "+1 level to every hand; use now"),
 }
 
-# Vouchers: name -> (verdict, hint). BUY = buy even below FLOOR; GOOD = above FLOOR; NEVER.
+# Vouchers: name -> (verdict, hint). BUY = first pick (extra hand, discard, hand size,
+# joker slot); GOOD = after BUY; both only with price <= SPENDABLE. NEVER.
 VOUCHERS: dict[str, tuple[str, str]] = {
     "Grabber": ("BUY", "+1 hand per round"),
-    "Nacho Tong": ("GOOD", "+1 hand per round"),
+    "Nacho Tong": ("BUY", "+1 hand per round"),
     "Paint Brush": ("BUY", "+1 hand size"),
-    "Palette": ("GOOD", "+1 hand size"),
+    "Palette": ("BUY", "+1 hand size"),
     "Antimatter": ("BUY", "+1 joker slot"),
     "Blank": ("NEVER", "does nothing by itself"),
     "Clearance Sale": ("GOOD", "25% off (Antes 1-4)"),
@@ -409,10 +416,10 @@ VOUCHERS: dict[str, tuple[str, str]] = {
         "GOOD",
         "held planets give x1.5 to their hand: HOLD MAIN_HAND planets",
     ),
-    "Wasteful": ("GOOD", "+1 discard"),
-    "Recyclomancy": ("GOOD", "+1 discard"),
+    "Wasteful": ("BUY", "+1 discard"),
+    "Recyclomancy": ("BUY", "+1 discard"),
     "Crystal Ball": ("GOOD", "+1 consumable slot"),
-    "Reroll Surplus": ("GOOD", "rerolls $2 cheaper"),
+    "Reroll Surplus": ("GOOD", "rerolls $2 cheaper; only if you plan to reroll"),
     "Reroll Glut": ("GOOD", "rerolls $2 cheaper"),
     "Seed Money": ("NEVER", "interest cap $10; rarely reached"),
     "Money Tree": ("NEVER", "interest cap $20"),
@@ -424,7 +431,7 @@ VOUCHERS: dict[str, tuple[str, str]] = {
     "Tarot Tycoon": ("NEVER", "fewer jokers in shop"),
     "Planet Merchant": ("NEVER", "fewer jokers in shop"),
     "Planet Tycoon": ("NEVER", "fewer jokers in shop"),
-    "Magic Trick": ("NEVER", "playing cards in shop"),
+    "Magic Trick": ("NEVER", "playing cards in shop; only worth it with Hologram"),
     "Illusion": ("NEVER", "playing cards in shop"),
     "Omen Globe": ("NEVER", "no scoring value"),
     "Hone": ("NEVER", "no scoring value"),
@@ -497,7 +504,7 @@ SMALL_PLAY_MAINS = {"High Card", "Pair", "Three of a Kind"}  # Half Joker: <= 3 
 
 FLUSH_ONLY_TAROTS = {"The Star", "The Moon", "The Sun", "The World", "The Lovers"}
 PAIR_FIXER_TAROTS = {"Strength", "The Hanged Man", "Death", "Cryptid"}
-HERMIT_MAX_MONEY = 40  # at this much money, Death / The Hanged Man come first
+TRANCE_MAX_DECK = 46  # Trance only on a thinned deck; otherwise Immolate first
 # Jokers that start at X1 Mult and grow -> (enhancement that grows it, Tarot
 # key that makes it, source text); no enhancement = grows on its own.
 GROWS_XMULT: dict[str, tuple[str | None, str | None, str]] = {
@@ -594,27 +601,32 @@ def consumable_tag(
     card: dict[str, Any],
     main_hand: str | None,
     blue_seals: int | None = None,
-    money: int | None = None,
+    deck_size: int | None = None,
+    constellation: bool = False,
 ) -> str:
     """Render a short verdict for a Tarot / Planet / Spectral card dict."""
     label = card.get("label")
     n = _norm_name(label)
     if n == "trance" and blue_seals:
         return "[SITUATIONAL] you already own a Blue Seal card: skip"
-    if n == "thehermit" and money is not None and money >= HERMIT_MAX_MONEY:
+    if n == "trance" and deck_size and deck_size > TRANCE_MAX_DECK:
         return (
-            f"[SITUATIONAL] you already have ${HERMIT_MAX_MONEY}+: "
-            "prefer Death or The Hanged Man"
+            f"[SITUATIONAL] deck has {deck_size} cards (Trance only at "
+            f"{TRANCE_MAX_DECK} or fewer): take Immolate first"
         )
     if n in _PLANET_N:
         hand = _PLANET_N[n]
         if main_hand and hand == main_hand:
             return f"[MAIN] levels {hand} (your MAIN_HAND): use now"
+        if constellation:
+            return f"[FEED] levels {hand}: grows Constellation, take it"
         return f"levels {hand} (not MAIN_HAND)"
     hit = _CONS_N.get(n)
     if not hit:
         return ""
     verdict, hint = hit[1]
+    if hit[0] == "The High Priestess" and constellation:
+        return "[GOOD] 2 random Planets: each one grows Constellation"
     if HAND_FAMILY.get(main_hand or "") == "pair":
         if hit[0] in FLUSH_ONLY_TAROTS:
             return "[AVOID] changes suits; useless for a Pair-family MAIN_HAND"
@@ -623,12 +635,14 @@ def consumable_tag(
     return f"[{verdict}] {hint}"
 
 
-def voucher_tag(card: dict[str, Any]) -> str:
+def voucher_tag(card: dict[str, Any], hologram: bool = False) -> str:
     """Render a short verdict for a voucher card dict."""
     hit = _VOUCH_N.get(_norm_name(card.get("label")))
     if not hit:
         return ""
     verdict, hint = hit[1]
+    if hit[0] == "Magic Trick" and hologram:
+        return "[GOOD] playing cards in shop: buy them to grow Hologram"
     return f"[{verdict}] {hint}"
 
 

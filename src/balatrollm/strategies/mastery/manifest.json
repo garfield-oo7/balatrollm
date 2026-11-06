@@ -15,6 +15,9 @@
     "auto_reorder_jokers": true,
     "max_consecutive_rearranges": 2,
     "suggest_action": true,
-    "auto_swap_jokers": true
+    "auto_swap_jokers": true,
+    "skip_blind_tags": {
+      "Investment Tag": 1
+    }
   }
 }

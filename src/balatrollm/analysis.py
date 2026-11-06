@@ -478,7 +478,8 @@ def _joker_effect(
     if key == "j_half":
         return (0, 20, 1) if ctx["n_played"] <= 3 else (0, 0, 1)
     if key == "j_misprint":
-        return 0, 0, 1  # random 0..23: floor estimate counts 0
+        # random 0..23: the floor estimate counts 0, the shop its average
+        return (0, 10, 1) if ctx.get("expected") else (0, 0, 1)
     if key == "j_gros_michel":
         return 0, 15, 1
     if key == "j_cavendish":
@@ -542,8 +543,9 @@ def estimate_play(
     right (with per-card jokers and retriggers) -> held cards -> jokers left to
     right. This is a FLOOR estimate: random effects (Misprint, Lucky cards,
     Bloodstone) count as zero and unknown jokers are skipped and listed in
-    ``unknown``. ``expected=True`` counts a Lucky card at its average
-    (+4 Mult per trigger) for valuing jokers in the shop.
+    ``unknown``. ``expected=True`` counts them at their average (Lucky card
+    +4 Mult per trigger, Misprint +10 Mult, Bloodstone x1.25 per Heart) for
+    valuing jokers in the shop.
     """
     keys = _joker_keys(G)
     keyset = set(keys)
@@ -647,7 +649,10 @@ def estimate_play(
                     mult += 7
                 elif k == "j_rough_gem" and suit_match(c, "D"):
                     money += 1
-                # Bloodstone (1 in 2 for x1.5) counts x1 in the floor estimate
+                # Bloodstone (1 in 2 for x1.5) counts x1 in the floor estimate;
+                # the shop counts its average (always x1.5 with Oops! All 6s)
+                elif k == "j_bloodstone" and expected and suit_match(c, "H"):
+                    mult *= 1.5 if "j_oops" in keyset else 1.25
                 elif k == "j_triboulet" and c["rank"] in ("K", "Q"):
                     mult *= 2
                 elif k == "j_photograph" and pos == first_face_pos:
@@ -684,6 +689,7 @@ def estimate_play(
         "held": [c for c in held if not c["hidden"]],
         "scored": scored_cards,
         "keys": keys,
+        "expected": expected,
     }
     unknown: list[str] = []
     for idx, j in enumerate(jokers):
@@ -747,9 +753,15 @@ def _hypergeom_at_least(total: int, outs: int, draws: int, need: int) -> float:
 
 
 def _discard_choice(
-    hand: list[dict[str, Any]], keep: Iterable[int], limit: int
+    hand: list[dict[str, Any]],
+    keep: Iterable[int],
+    limit: int,
+    first_rank: str | None = None,
 ) -> list[int]:
-    """Pick up to ``limit`` cards to discard, lowest value first, never ``keep``."""
+    """Pick up to ``limit`` cards to discard, lowest value first, never ``keep``.
+
+    Cards of ``first_rank`` (Mail-In Rebate pays $5 each) go first.
+    """
     keep = set(keep)
     candidates = [
         i
@@ -758,6 +770,7 @@ def _discard_choice(
     ]
     candidates.sort(
         key=lambda i: (
+            first_rank is None or hand[i]["rank"] != first_rank,
             hand[i]["enh"] is not None or hand[i]["ed"] is not None,
             CHIP_VALUE.get(hand[i]["rank"] or "", 0),
         )
@@ -1165,6 +1178,11 @@ def grows_xmult(G: dict[str, Any], card: dict[str, Any]) -> str:
     return text + (" | SOURCE PRESENT" if count else " | no source yet")
 
 
+def owns_joker(G: dict[str, Any], key: str) -> bool:
+    """True when a joker with this key is in the joker area."""
+    return any(j.get("key") == key for j in _area_cards(G, "jokers"))
+
+
 def owns_hologram(G: dict[str, Any]) -> bool:
     """Hologram grows with every card added, so extra playing cards help."""
     return any(j.get("key") == "j_hologram" for j in _area_cards(G, "jokers"))
@@ -1278,6 +1296,27 @@ def _filler(
     return pool[:count]
 
 
+MAIL_RANK_NAMES = {
+    "Ace": "A",
+    "King": "K",
+    "Queen": "Q",
+    "Jack": "J",
+    "10": "T",
+    **{str(n): str(n) for n in range(2, 10)},
+}
+
+
+def mail_rank(G: dict[str, Any]) -> str | None:
+    """Rank Mail-In Rebate pays $5 for when discarded this round, if owned."""
+    for j in _area_cards(G, "jokers"):
+        if j.get("key") == "j_mail":
+            effect = (j.get("value") or {}).get("effect", "") or ""
+            m = re.search(r"discarded (\w+)", effect)
+            if m:
+                return MAIL_RANK_NAMES.get(m.group(1))
+    return None
+
+
 def suggested_discard(
     G: dict[str, Any], plan: dict[str, Any], protect: Iterable[int] = ()
 ) -> list[int]:
@@ -1307,7 +1346,7 @@ def suggested_discard(
         keep = {i for i, c in enumerate(hand) if c["rank"] and rc[c["rank"]] >= 2}
     keep |= protect
     keep |= {i for i, c in enumerate(hand) if c["stone"] and plan["hand"] != "Flush"}
-    return _discard_choice(hand, keep, limit)
+    return _discard_choice(hand, keep, limit, mail_rank(G))
 
 
 def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
@@ -1389,6 +1428,12 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
 
     action: dict[str, Any]
     blue_in_hand = {i for i, c in enumerate(hand) if c["seal"] == "BLUE"}
+    # Square Joker grows on exactly-4-card hands (not against The Psychic/Tooth)
+    square = (
+        "j_square" in _joker_keys(G)
+        and _active_boss(G) not in ("The Psychic", "The Tooth")
+        and "j_half" not in _joker_keys(G)
+    )
     if winners:
         # A Blue Seal card makes the Planet of the LAST played hand only while
         # it is HELD: win without playing it, ideally with MAIN_HAND.
@@ -1403,7 +1448,11 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         why = f"{best['hand']} WINS"
         if blue_in_hand and not (blue_in_hand & set(best["cards"])):
             why += " and keeps the Blue Seal card in hand"
-        action = {"tool": "play", "cards": best["cards"], "why": why}
+        cards = list(best["cards"])
+        if square and len(cards) < 4:
+            cards = sorted(cards + _filler(hand, cards, plan, 4 - len(cards)))
+            why += "; 4 cards grow Square Joker"
+        action = {"tool": "play", "cards": cards, "why": why}
     elif discards > 0 and discard and chase_draw:
         action = {
             "tool": "discard",
@@ -1429,7 +1478,9 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         need = 0
         if boss == "The Psychic":
             need = 5 - len(cards)
-        elif _pad_allowed(G) and len(cards) < 5:
+        elif square and len(cards) < 4:
+            need = 4 - len(cards)  # Square Joker grows only on 4-card hands
+        elif _pad_allowed(G) and len(cards) < 5 and not square:
             need = 5 - len(cards)
         if need > 0:
             cards = sorted(cards + _filler(hand, cards, plan, need))
@@ -1823,6 +1874,9 @@ def run_status(
         "econ_ok": econ_ok,
         "blue_seals": blue_seal_count(G),
         "hologram": owns_hologram(G),
+        "constellation": owns_joker(G, "j_constellation"),
+        "square": owns_joker(G, "j_square"),
+        "deck_total": len(_area_cards(G, "cards")) + len(_area_cards(G, "hand")),
         # most you can spend without lowering next round's interest
         "interest_spare": max(money - 5 * interest(money), 0),
         "consumable_slots_free": max(

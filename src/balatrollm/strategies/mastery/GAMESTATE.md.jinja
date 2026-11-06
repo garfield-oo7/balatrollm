@@ -98,9 +98,9 @@
 {%- elif card.set == "JOKER" %}
 - {{ loop.index0 }}: {{ card.label }} ${{ card.cost.buy }} {{ joker_tag(card, S.main_hand, S.ante) }}{% set gx = grows_xmult(G, card) %}{% if gx %} {{ gx }}{% endif %}{% if card.modifier and card.modifier.edition %} ({{ card.modifier.edition }}){% endif %}{% if I and I.shop[loop.index0] %} | SCORE {{ I.shop[loop.index0] }}{% endif %} | effect: {{ card.value.effect }}
 {%- elif card.set in ["TAROT", "PLANET", "SPECTRAL"] %}
-- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) ${{ card.cost.buy }} {% if card.label == "Death" and not sk.modified %}[SKIP] no sealed, enhanced or edition card in your deck to copy{% if sk.hanged %}: take The Hanged Man instead{% endif %}{% else %}{{ consumable_tag(card, S.main_hand, S.blue_seals, S.money) }}{% endif %}{% if I and I.shop[loop.index0] %} | SCORE {{ I.shop[loop.index0] }}{% endif %}
+- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) ${{ card.cost.buy }} {% if card.label == "Death" and not sk.modified %}[SKIP] no sealed, enhanced or edition card in your deck to copy{% if sk.hanged %}: take The Hanged Man instead{% endif %}{% else %}{{ consumable_tag(card, S.main_hand, S.blue_seals, S.deck_total, S.constellation) }}{% endif %}{% if I and I.shop[loop.index0] %} | SCORE {{ I.shop[loop.index0] }}{% endif %}
 {%- else %}
-- {{ loop.index0 }}: {{ card_line(card) }} (playing card) ${{ card.cost.buy }}
+- {{ loop.index0 }}: {{ card_line(card) }} (playing card) ${{ card.cost.buy }}{% if S.hologram %} [OK: Hologram grows with every card added]{% else %} [SKIP]{% endif %}
 {%- endif %}
 {%- endfor %}
 {%- else %}
@@ -111,7 +111,7 @@
 
 ## Vouchers (use buy with `voucher`)
 {% for v in G.vouchers.cards -%}
-- {{ loop.index0 }}: {{ v.label }} ${{ v.cost.buy }} {% if S.ante == 1 %}[NEVER] no vouchers in Ante 1: money goes to jokers{% else %}{{ voucher_tag(v) }}{% endif %}
+- {{ loop.index0 }}: {{ v.label }} ${{ v.cost.buy }} {% if S.ante == 1 %}[NEVER] no vouchers in Ante 1: money goes to jokers{% else %}{{ voucher_tag(v, S.hologram) }}{% endif %}
 {% endfor %}
 {%- endif %}
 {%- if G.packs and G.packs.cards %}
@@ -138,7 +138,7 @@
 {%- elif card.set in ["TAROT", "PLANET", "SPECTRAL"] -%}
 {%- set tg = consumable_targets(card.key) %}
 {%- set sug = suggest_targets(G, card) -%}
-- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) {% if death_skip and card.label == "Death" %}[SKIP] no sealed, enhanced or edition card in hand to copy{% if pk.hanged %}: take The Hanged Man instead{% endif %}{% else %}{{ consumable_tag(card, S.main_hand, S.blue_seals, S.money) }}{% endif %}
+- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) {% if death_skip and card.label == "Death" %}[SKIP] no sealed, enhanced or edition card in hand to copy{% if pk.hanged %}: take The Hanged Man instead{% endif %}{% else %}{{ consumable_tag(card, S.main_hand, S.blue_seals, S.deck_total, S.constellation) }}{% endif %}
 {%- if tg %} | needs {{ tg[0] }}-{{ tg[1] }} target cards{% if sug %}. Suggested targets: {{ sug }}{% else %}. No good targets: do not pick{% endif %}{% endif %}
 {%- else -%}
 - {{ loop.index0 }}: {{ card_line(card) }} (playing card){% if card.modifier and card.modifier.seal == "BLUE" %}{% if S.blue_seals and not S.hologram %} [SKIP: you already own a Blue Seal card]{% elif S.blue_seals %} [OK: Hologram grows with every card added]{% else %} [PICK: Blue Seal, you have none]{% endif %}{% endif %}
@@ -161,7 +161,7 @@
 # CONSUMABLES ({{ G.consumables.count }}/{{ G.consumables.limit }})
 {% for c in G.consumables.cards -%}
 {%- set sug = suggest_targets(G, c) if G.state == "SELECTING_HAND" else [] -%}
-- {{ loop.index0 }}: {{ c.label }} {{ consumable_tag(c, S.main_hand, S.blue_seals) }}{% if consumable_targets(c.key) %}{% if sug %} | Suggested targets: {{ sug }}{% elif G.state == "SELECTING_HAND" %} | no good targets now{% else %} | needs cards in hand: use it during a round{% endif %}{% endif %}
+- {{ loop.index0 }}: {{ c.label }} {{ consumable_tag(c, S.main_hand, S.blue_seals, S.deck_total, S.constellation) }}{% if consumable_targets(c.key) %}{% if sug %} | Suggested targets: {{ sug }}{% elif G.state == "SELECTING_HAND" %} | no good targets now{% else %} | needs cards in hand: use it during a round{% endif %}{% endif %}
 {% else -%}
 - none
 {% endfor %}
