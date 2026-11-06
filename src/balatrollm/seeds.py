@@ -1,18 +1,24 @@
 """Private seed labels: runs are reported as "SEED-A", "SEED-B", ... while the
 real game seeds live only in a private JSON map.
 
-A task seed of ``RANDOM`` starts a game without a seed (the game picks one); the
-bot then allocates the next free label and records the real seed after start.
+A task seed of ``RANDOM`` gets a fresh seed generated here (the game's own
+seedless start repeats under the bot: its seed comes from the cursor position and
+a frame-counted timer, both constant). The seed is recorded under the next free
+label BEFORE the game starts, and the bot checks the game started on it.
 A task seed of ``SEED-<label>`` replays a recorded game by its label.
 """
 
 import json
 import os
+import secrets
 from pathlib import Path
 from typing import Any
 
 RANDOM = "RANDOM"
 PREFIX = "SEED-"
+# Balatro's own seed alphabet (random_string in functions/misc_functions.lua): no 0, no O.
+ALPHABET = "123456789ABCDEFGHIJKLMNPQRSTUVWXYZ"
+SEED_LENGTH = 8
 DEFAULT_MAP = Path.home() / "personal_projects" / "luna-notes" / "private" / "seed_labels.json"
 
 
@@ -53,20 +59,30 @@ def is_label(seed: str) -> bool:
     return seed.upper().startswith(PREFIX)
 
 
-def allocate() -> str:
-    """Reserve the next free label (seed filled in by ``record``)."""
+def generate(existing: set[str]) -> str:
+    """A random seed from the game's alphabet that is not in ``existing``."""
+    while True:
+        seed = "".join(secrets.choice(ALPHABET) for _ in range(SEED_LENGTH))
+        if seed not in existing:
+            return seed
+
+
+def new_random() -> tuple[str, str]:
+    """Generate a fresh seed, record it under the next free label, and return
+    ``(SEED-<label>, seed)``. Recorded before the game starts."""
     data = _load()
     labels = data.setdefault("labels", {})
+    used = {str(v.get("seed")) for v in labels.values() if v.get("seed")}
+    seed = generate(used)
     label = _label_name(len(labels))
-    labels[label] = {"seed": None}
+    labels[label] = {"seed": seed}
     _save(data)
-    return PREFIX + label
+    return PREFIX + label, seed
 
 
-def record(task_seed: str, seed: str) -> None:
-    data = _load()
-    data.setdefault("labels", {})[task_seed[len(PREFIX) :]] = {"seed": seed}
-    _save(data)
+def started_on(seed: str, gamestate: dict[str, Any]) -> bool:
+    """True if the gamestate returned by ``start`` is on ``seed``."""
+    return str(gamestate.get("seed") or "") == seed
 
 
 def resolve(task_seed: str) -> str:
