@@ -1889,8 +1889,8 @@ def run_status(
         "boss_per_hand": power["boss_per_hand"],
         "reserve": reserve(G),
         # money a score buy may use: a joker filling an empty slot (Antes 1-3),
-        # a joker with SCORE +50% or more, an [XMULT] joker, a [MAIN] planet,
-        # a Buffoon pack with a free slot, or anything scoring while TOO WEAK
+        # a joker with SCORE +50% or more, an on-plan [XMULT] joker, a [MAIN]
+        # planet, a Buffoon pack with a free slot, or a SCORE > 0 joker while TOO WEAK
         "score_spendable": max(money - reserve(G), 0),
         "recent_scores": scores,
         "next_target": nxt_target,
