@@ -18,6 +18,7 @@ def _bot(game: AsyncMock) -> Bot:
     bot._collector = MagicMock()
     bot._history = []
     bot._consecutive_rearranges = 0
+    bot._shop_rerolls = 0
     bot._consecutive_vetoes = 0
     bot._consecutive_errors = 0
     bot._consecutive_faileds = 0
