@@ -1785,7 +1785,7 @@ def ante_goals(
             {
                 "text": f"no [ECON]/[CHIPS] filler jokers (have {filler})",
                 "done": filler == 0 or count < limit,
-                "action": "sell an [ECON]/[CHIPS] joker to make room for [XMULT]/[SCALE]",
+                "action": "when the shop offers an [XMULT]/[SCALE] joker, buy it in place of an [ECON]/[CHIPS] joker; never sell a joker without a replacement",
             }
         )
     if 4 <= ante <= 6:
