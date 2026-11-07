@@ -280,6 +280,36 @@ def ended_game_over(run: Path) -> bool:
     return bool(last) and json.loads(last).get("state") == "GAME_OVER"
 
 
+LESSON_ID = re.compile(r"\[([A-Za-z]+\d+)\]")
+DEFAULT_LESSONS = Path(__file__).resolve().parents[1] / "src" / "balatrollm" / "strategies" / "mastery" / "lessons.json"
+
+
+def lesson_follow(ds: list[dict[str, Any]], lessons_path: Path = DEFAULT_LESSONS) -> dict[str, dict[str, int]]:
+    """E4: per shown lesson id, how often its check was followed or ignored
+    (followed: the decision's tool matches the check when expect is "do", or
+    differs when expect is "avoid")."""
+    try:
+        data = json.loads(lessons_path.read_text())
+    except (OSError, ValueError):
+        data = {}
+    checks = {x["id"]: x.get("check") or {} for x in (data.get("lessons", []) if isinstance(data, dict) else data)}
+    out: dict[str, dict[str, int]] = {}
+    for d in ds:
+        for text in d["lessons"]:
+            m = LESSON_ID.search(text)
+            if not m:
+                continue
+            row = out.setdefault(m.group(1), {"shown": 0, "followed": 0, "ignored": 0})
+            row["shown"] += 1
+            check = checks.get(m.group(1))
+            if not check or not check.get("action"):
+                continue
+            did = d["action"] == check["action"]
+            ok = did if check.get("expect") == "do" else not did
+            row["followed" if ok else "ignored"] += 1
+    return out
+
+
 def digest(run: Path) -> dict[str, Any]:
     task = json.loads((run / "task.json").read_text())
     stats = json.loads((run / "stats.json").read_text()) if (run / "stats.json").exists() else {}
@@ -322,6 +352,7 @@ def digest(run: Path) -> dict[str, Any]:
         "rerolls_below_25_ante2_3": sum(v["rerolls_below_25"] for v in visits if v["ante"] in (2, 3)),
         "repeated_dips": dip_flag(visits),
         "harness": hl,
+        "lessons": lesson_follow(ds),
         "blinds": [{"ante": b[0], "blind": b[1], "hands_left": b[4], "margin": round(b[2] / max(b[3], 1), 2)} for b in blinds],
         "vetoes": sum(len(v["vetoes"]) for v in visits),
         "refusals_logged": hl["refusals"],

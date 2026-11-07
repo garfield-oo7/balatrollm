@@ -20,6 +20,7 @@ from collections import Counter, OrderedDict
 from collections.abc import Iterable
 from itertools import combinations
 from math import comb
+from pathlib import Path
 from typing import Any
 
 from . import knowledge
@@ -3854,6 +3855,17 @@ def round_record(
     }
 
 
+LESSONS_FILE = Path(__file__).parent / "strategies" / "mastery" / "lessons.json"
+
+
+def past_lessons(G: dict[str, Any], status: str | None, path: str | None = None) -> list[str]:
+    """E4: prompt lines for at most 2 matching trial/kept lessons."""
+    from . import lessons
+
+    found = lessons.match(G, status, lessons.load(Path(path) if path else LESSONS_FILE))
+    return [lessons.line(x) for x in found]
+
+
 TEMPLATE_GLOBALS = {
     "suit_pays": suit_pays,
     "analyze_hand": analyze_hand,
@@ -3875,6 +3887,7 @@ TEMPLATE_GLOBALS = {
     "suggest_targets": suggest_targets,
     "joker_order": joker_order,
     "grows_xmult": grows_xmult,
+    "past_lessons": past_lessons,
     "clash_note": clash_note,
     "joker_tag": knowledge.joker_tag,
     "consumable_tag": knowledge.consumable_tag,
