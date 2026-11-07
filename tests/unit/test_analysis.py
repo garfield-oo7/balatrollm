@@ -204,23 +204,64 @@ class TestLookAheadAndRefusals:
         G["round"]["discards_left"] = 0
         assert "No discards left" in analysis.validate_action(G, "discard", {"cards": [7]})
 
-    def test_boss_look_ahead_turns_status_too_weak(self) -> None:
+    def test_status_looks_one_blind_ahead(self) -> None:
+        """Owner (pass 1): STATUS judges the next blind only; the boss has its own line."""
         G = make_state("H_2", state="SHOP")
         G["ante_num"] = 3
         G["blinds"] = {
             "small": {"status": "DEFEATED", "score": 2000},
-            "big": {"status": "UPCOMING", "score": 3000},
+            "big": {"status": "UPCOMING", "score": 3000, "name": "Big Blind"},
             "boss": {"status": "UPCOMING", "score": 4000, "name": "The Flint"},
         }
         # Power comes from the deck, jokers and levels: big past scores do not help
         history = [{"method": "play", "score": 100000}] * 3
         S = analysis.run_status(G, [], history)
-        assert S["status"] == "TOO WEAK" and S["hands_needed"] > 3
+        assert S["status"] == "SHORT" and S["hands_needed"] > 4
+        assert S["next_kind"] == "big"
         G["hands"]["Pair"].update(chips=600, mult=20, level=20)
         S = analysis.run_status(G, [], [])
-        assert S["status"] == "ON TRACK" and S["hands_needed"] == 1
+        assert S["status"] == "COMFORTABLE" and S["hands_needed"] == 1
         # The Flint halves the base: the boss estimate is lower than the normal one
         assert S["boss_per_hand"] < S["per_hand"]
+        assert S["boss_check"]["name"] == "The Flint"
+
+    def test_boss_counts_only_when_it_is_next(self) -> None:
+        G = make_state("H_2", state="SHOP")
+        G["blinds"]["small"]["status"] = "DEFEATED"
+        G["blinds"]["big"]["status"] = "UPCOMING"
+        G["blinds"]["boss"].update(name="The Needle", score=10_000_000)
+        S = analysis.run_status(G, [], [])
+        assert S["status"] == "COMFORTABLE"  # Big Blind 450 is easy
+        assert not S["boss_check"]["ok"] and S["boss_check"]["allowed"] == 1
+        G["blinds"]["big"]["status"] = "DEFEATED"
+        assert analysis.run_status(G, [], [])["status"] == "SHORT"
+
+    def test_safety_net_never_on_a_boss(self) -> None:
+        G = make_state("H_2", state="SHOP")
+        G["blinds"]["small"]["status"] = "DEFEATED"
+        G["blinds"]["big"].update(status="UPCOMING", score=10_000_000)
+        easy = [{"hands_left": 2}, {"hands_left": 3}]
+        S = analysis.run_status(G, easy, [])
+        assert S["status"] == "COMFORTABLE" and S["safety_net"]
+        assert analysis.run_status(G, [{"hands_left": 1}, {"hands_left": 3}], [])["status"] == "SHORT"
+        G["blinds"]["big"]["status"] = "DEFEATED"
+        G["blinds"]["boss"]["score"] = 10_000_000
+        assert analysis.run_status(G, easy, [])["status"] == "SHORT"
+
+    def test_last_blind_won_on_its_final_hand_is_thin(self) -> None:
+        G = make_state("H_2", state="SHOP")
+        G["blinds"]["small"]["status"] = "DEFEATED"
+        G["blinds"]["big"]["status"] = "UPCOMING"
+        G["hands"]["Pair"].update(chips=600, mult=20, level=20)
+        assert analysis.run_status(G, [{"hands_left": 0}], [])["status"] == "THIN"
+
+    def test_needle_boss_line_always_shown(self) -> None:
+        G = make_state("H_2", state="SHOP")
+        G["blinds"]["small"]["status"] = "SELECT"
+        G["blinds"]["boss"].update(name="The Needle", score=300)
+        G["hands"]["Pair"].update(chips=600, mult=20, level=20)
+        text = StrategyManager("mastery").render_gamestate(G, rounds=[], history=[], flags={})
+        assert "BOSS CHECK: The Needle" in text and "ONE hand only" in text
         G["blinds"]["boss"]["name"] = "The Needle"
         assert analysis.run_status(G, [], [])["boss_hands_allowed"] == 1
         assert "spend money" in analysis.boss_impact({**G, "blinds": {"boss": {"name": "The Ox"}}})["prep"]
@@ -628,12 +669,7 @@ class TestPlanAndStatus:
         G["hands"]["Pair"].update(chips=200, mult=10, level=10)
         low = [{"method": "play", "score": 100}] * 3
         status = analysis.run_status(G, [], low)
-        assert status["status"] == "ON TRACK"  # junk past hands do not count
-        G["ante_num"] = 3
-        status = analysis.run_status(G, [], low)
-        # TOO WEAK keeps FLOOR; score buys may go down to the $10 RESERVE
-        assert status["effective_floor"] == status["floor"]
-        assert status["reserve"] == 10
+        assert status["status"] == "COMFORTABLE"  # junk past hands do not count
 
     def test_joker_order_puts_xmult_right(self) -> None:
         G = make_state("H_2")
