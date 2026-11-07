@@ -171,6 +171,7 @@ def test_digest_pass2_fields(tmp_path: Path) -> None:
     assert d["rerolls_by_ante"] == {1: 0, 2: 1} and d["rerolls_below_25_ante2_3"] == 1
     assert d["most_played"] == "Pair"  # High Card not counted (H4)
     assert d["too_weak_share_ante1_2"] == 0.4  # 2 of 5 shop decisions SHORT
+    assert d["shop_visits"][0]["hands_needed_in"] == 2
     h = d["harness"]
     assert h["boss_rerolls"] == 1 and h["boss_reroll_cost"] == 10 and h["boss_reroll_list"] == [["The Wall", "The Hook"]]
     assert h["refusals"] == 1 and h["tag_skip_list"] == ["Investment Tag"]
@@ -183,3 +184,39 @@ def test_digest_dip_flag() -> None:
     assert digest.dip_flag([v(2, 10), v(2, 5), v(3, 20)])
     assert not digest.dip_flag([v(2, 10), v(2, 30), v(3, 20)])
     assert digest.dip_flag([v(4, 10), v(4, 30), v(5, 5)])
+
+
+def test_digest_status_reads_hands_needed_in_both_vocabularies() -> None:
+    digest = _digest_module()
+    old = "- STATUS: TOO WEAK (next blind 1,200 needs about 6 hands at 200 per hand)"
+    new = "- STATUS: SHORT for the next blind (Big Blind): 1,200 needs about 5 of 4 hands at about 240 per hand"
+    for line, word, n in ((old, "TOO WEAK", 6), (new, "SHORT", 5)):
+        m = digest.STATUS.search("x\n" + line + "\ny")
+        assert m.group(1) == word and int(digest.NEEDS.search(m.group(2)).group(1)) == n
+
+
+def test_validators_use_the_displayed_status() -> None:
+    """The reroll line follows the STATUS Luna sees (computed with the run's
+    rounds), not a rounds-free recomputation."""
+    from unittest.mock import AsyncMock
+
+    from balatrollm import analysis
+
+    from .test_analysis import make_state
+    from .test_bot_swap import _bot
+
+    G = make_state("H_2", state="SHOP")
+    G["ante_num"] = 4
+    G["money"] = 20
+    G["hands"]["Pair"].update(chips=500, mult=50, level=20)
+    bot = _bot(AsyncMock())
+    bot._rounds = [{"hands_left": 0}]  # last blind won on its final hand: THIN
+    bot._history = []
+    bot._pending_tags = []
+    bot._annotate(G)
+    assert G["luna"]["status"] == "THIN"
+    assert analysis.run_status(G, [], [])["status"] == "COMFORTABLE"  # without rounds
+    assert analysis.validate_action(G, "reroll", {}) is None  # $10 line (THIN), not $25
+    key_with = analysis._state_key(G, "x")
+    G["luna"].pop("status")
+    assert analysis._state_key(G, "x") == key_with

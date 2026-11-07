@@ -851,7 +851,6 @@ def _hypergeom_at_least(total: int, outs: int, draws: int, need: int) -> float:
     return good / comb(total, draws)
 
 
-FACE_RANKS = {"J", "Q", "K"}
 HACK_RANKS = {"2", "3", "4", "5"}
 
 
@@ -1123,8 +1122,9 @@ def reserve(G: dict[str, Any], status: str | None = None, boss_short: bool = Fal
     """Money a SCORE buy must leave (P2-8, owner S2/F1).
 
     Ante 1: $0. Ante 2 while THIN/SHORT: $0 (S2: spend to ~$0 for survival).
-    Ante 3: $0 only when SHORT for the boss. From Ante 4: one buy may take money
-    below $10 (F1), after which the harness locks the shop. Otherwise $10.
+    Ante 3: $0 only when SHORT for the boss. From Ante 4: $0, because one buy
+    may take money below $10 (F1) and the harness then locks the shop.
+    Otherwise (Ante 2 COMFORTABLE, Ante 3 not SHORT for the boss) $10.
     """
     ante = int(G.get("ante_num") or 1)
     if ante <= 1:
@@ -1883,6 +1883,16 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         action = {"tool": "play", "cards": cards, "why": f"best play ({best['hand']})"}
     else:
         action = {"tool": "discard", "cards": discard, "why": "no visible play"}
+    # The House (P2, owner row 128): with jokers that lose value on every
+    # discard, the suggestion is to play the face-down cards blind
+    blind = house_blind_play(G)
+    if blind and not winners and _discard_hurts(G):
+        action = {
+            "tool": "play",
+            "cards": blind["cards"],
+            "why": f"The House: your jokers lose value with every discard; play face-down cards blind "
+            f"(they still score, typically about {fmt_num(blind['typical'])})",
+        }
     # A Tarot with suggested targets costs no hand or discard: use it first
     for i, c in enumerate(_area_cards(G, "consumables")):
         if c.get("set") == "TAROT" and (targets := suggest_targets(G, c)):
@@ -1905,7 +1915,7 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         "suit_pays": suit_pays(G),
         "discard_costs": discard_costs(G),
         "mail_rank": mail_rank(G),
-        "blind_play": house_blind_play(G),
+        "blind_play": blind,
         "repeats": repeat_note(G),
         "acrobat": "j_acrobat" in (set(_joker_keys(G)) | set(copied_keys(G))),
         "hand_suits": analysis_["hand_suits"],
@@ -2668,6 +2678,9 @@ _CACHE_MAX = 64
 
 
 def _state_key(G: dict[str, Any], *extra: Any) -> str:
+    luna = G.get("luna")
+    if isinstance(luna, dict) and "status" in luna:  # derived from G: not part of the key
+        G = {**G, "luna": {k: v for k, v in luna.items() if k != "status"}}
     raw = json.dumps([G, extra], sort_keys=True, default=str)
     return hashlib.md5(raw.encode()).hexdigest()
 
@@ -3503,7 +3516,7 @@ def swap_plan(
         )
     sell = int(swap["index"])
     grows = card.get("key") in GROWING or label in knowledge.GROWS_XMULT
-    status = run_status(G)["status"]
+    status = (G.get("luna") or {}).get("status") or run_status(G)["status"]
     if label in knowledge.GROWS_XMULT and status in ("THIN", "SHORT"):
         contrib = {
             i: int(str(t).split()[1].replace(",", ""))
@@ -3658,7 +3671,7 @@ def reroll_veto(G: dict[str, Any], rerolls: int) -> str | None:
     money = int(G.get("money") or 0)
     cost = int((G.get("round") or {}).get("reroll_cost", 5) or 0)
     after = money - cost
-    status = run_status(G)["status"]
+    status = (G.get("luna") or {}).get("status") or run_status(G)["status"]
     defining = bool(main_hand_plan(G).get("commit"))
     if ante <= 3:
         line = 10 if status in ("THIN", "SHORT") or not defining else 25

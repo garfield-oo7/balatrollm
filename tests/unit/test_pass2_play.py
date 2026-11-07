@@ -44,6 +44,16 @@ def test_p2_the_house_blind_play() -> None:
     A = analysis.play_advice(G)
     assert A["blind_play"] and A["blind_play"]["n"] == 5 and A["blind_play"]["typical"] > 0
     assert "Playing 5 face-down cards blind" in render(G)
+    assert A["action"]["tool"] == "discard"  # no discard-cost joker: Luna's choice, dig suggested
+
+
+def test_p2_the_house_blind_play_suggested_with_discard_costs() -> None:
+    G = make_state("S_K H_K D_2 C_3 H_5 C_7 S_8 D_9", [joker("j_banner", "Banner")], boss="The House", boss_current=True)
+    for c in G["hand"]["cards"]:
+        c["state"] = {"hidden": True}
+    A = analysis.play_advice(G)
+    assert A["action"]["tool"] == "play" and A["action"]["cards"] == [0, 1, 2, 3, 4]
+    assert "The House" in A["action"]["why"]
 
 
 def test_p4_card_sharp_marks_repeats() -> None:
