@@ -483,11 +483,38 @@ class TestPlanAndStatus:
         assert plan["hand"] == "Pair"
         assert plan["open"] and plan["draw_kinds"] == {"Flush", "Straight"}
 
-    def test_open_phase_ends_at_ante_two(self) -> None:
+    def test_open_until_a_joker_calls(self) -> None:
+        """Owner (pass 1): no "Pair from hand 1"; MAIN_HAND stays OPEN with no deadline."""
         G = make_state("H_2")
-        G["ante_num"] = 2
+        G["ante_num"] = 3
         plan = analysis.main_hand_plan(G)
-        assert not plan["open"] and plan["draw_kinds"] == {"Pair"}
+        assert plan["open"] and plan["hand"] == "Pair" and plan["commit"] is None
+        G["hands"]["Flush"].update(level=3)
+        assert analysis.main_hand_plan(G)["hand"] == "Flush"  # leaning = levelled most
+        G["jokers"]["cards"] = [joker("j_trousers", "Spare Trousers")]
+        plan = analysis.main_hand_plan(G)
+        assert not plan["open"] and plan["hand"] == "Two Pair" and "Spare Trousers" in plan["reason"]
+
+    def test_commit_is_sticky_against_joker_loss_not_new_jokers(self) -> None:
+        G = make_state("H_2", [joker("j_trousers", "Spare Trousers")])
+        commit = analysis.main_commit(G, None)
+        G["jokers"]["cards"] = []  # Trousers sold
+        G["luna"] = {"main_commit": commit}
+        assert analysis.main_hand_plan(G)["hand"] == "Two Pair"
+        G["jokers"]["cards"] = [joker("j_baron", "Baron")]  # owner's Mars -> Baron run
+        assert analysis.main_hand_plan(G)["hand"] == "Pair"
+
+    def test_card_sharp_commits_to_the_leaning_hand(self) -> None:
+        G = make_state("H_2", [joker("j_card_sharp", "Card Sharp")])
+        G["hands"]["Two Pair"].update(level=2)
+        assert analysis.main_hand_plan(G)["hand"] == "Two Pair"
+
+    def test_open_main_hand_has_no_off_plan_tags(self) -> None:
+        G = make_state("H_2", state="SHOP")
+        G["shop"] = {"cards": [{**joker("j_trousers", "Spare Trousers"), "cost": {"buy": 6}}]}
+        text = StrategyManager("mastery").render_gamestate(G, rounds=[], history=[], flags={})
+        line = next(x for x in text.splitlines() if "Spare Trousers $6" in x)
+        assert "OFF-PLAN" not in line and "MAIN_HAND: OPEN" in text
 
     def test_flush_engine_switches_to_flush(self) -> None:
         G = make_state("H_2", [joker("j_four_fingers", "Four Fingers")])
@@ -500,7 +527,8 @@ class TestPlanAndStatus:
         assert analysis.main_hand_plan(make_state("H_2", jokers))["hand"] == "Pair"
         mixed = [joker("j_greedy_joker", "Greedy Joker"), joker("j_gluttenous_joker", "Gluttonous Joker")]
         assert analysis.main_hand_plan(make_state("H_2", mixed))["hand"] == "Pair"
-        assert analysis.main_hand_plan(make_state("H_2", [joker("j_tribe", "The Tribe")]))["hand"] == "Pair"
+        # owner F5: The Tribe supports a Flush build
+        assert analysis.main_hand_plan(make_state("H_2", [joker("j_tribe", "The Tribe")]))["hand"] == "Flush"
         jokers.append(joker("j_four_fingers", "Four Fingers"))
         assert analysis.main_hand_plan(make_state("H_2", jokers))["hand"] == "Flush"
 
@@ -516,13 +544,14 @@ class TestPlanAndStatus:
         G = make_state("H_2", [joker("j_trio", "The Trio")])
         assert analysis.main_hand_plan(G)["hand"] == "Three of a Kind"
 
-    def test_flush_draw_not_chased_after_open_phase(self) -> None:
+    def test_flush_draw_not_chased_after_ante_one(self) -> None:
+        """CHASE (keep discarding toward a draw) stays an Ante 1 rule; later the
+        draw is only listed while MAIN_HAND is OPEN."""
         G = make_state("S_K H_9 H_7 D_7 H_4 C_Q H_2 S_3")
         G["ante_num"] = 3
         advice = analysis.play_advice(G)
-        assert advice["draws"] == []
-        assert advice["action"]["tool"] == "discard"
-        assert {2, 3} & set(advice["action"]["cards"]) == set()  # keeps the 7s
+        assert not any(d["chase"] for d in advice["draws"])
+        assert "chase" not in advice["action"]["why"].lower()
 
     def test_pair_tarot_targets(self) -> None:
         G = make_state("S_K H_K D_7 C_3 H_8 C_Q H_2 S_6")
@@ -746,7 +775,7 @@ class TestMasteryStrategy:
             + sm.render_memory([], G=G, rounds=[], flags=flags)
         )
         assert "# STATUS" in text and "# DECIDE NOW" in text
-        assert "MAIN_HAND: Pair" in text and "GOALS for Ante 1" in text
+        assert "MAIN_HAND: OPEN (leaning Pair)" in text and "GOALS for Ante 1" in text
         assert len(text) < 16000  # ~4k tokens budget
 
     def test_default_strategy_still_renders(self) -> None:
@@ -793,8 +822,8 @@ class TestAnteOneChase:
         G = make_state("S_J D_Q C_K H_A H_3 S_4 C_4 D_2", self.JOKER)
         G["ante_num"] = 2
         advice = analysis.play_advice(G)
-        assert advice["draws"] == []
-        assert "chase" not in advice["action"]["why"]
+        assert not any(d["chase"] for d in advice["draws"])
+        assert "chase" not in advice["action"]["why"].lower()
 
     def test_exact_win_without_jokers(self) -> None:
         # No jokers: the estimate is exact, so 300 vs 300 needed WINS.
@@ -1102,3 +1131,16 @@ class TestSuitJokers:
         sm = StrategyManager("mastery")
         text = sm.render_gamestate(self._seed_m(), rounds=[], history=[], flags={})
         assert "Ancient Joker: Hearts this round, X1.5 Mult per Heart scored" in text
+
+
+class TestPass2Planets:
+    def test_open_planets_are_ok_and_satellite_feeds(self) -> None:
+        tag = knowledge.consumable_tag({"label": "Venus", "set": "PLANET"}, "Pair", ok_hands=["Three of a Kind"])
+        assert tag.startswith("[OK]")
+        assert knowledge.consumable_tag({"label": "Venus", "set": "PLANET"}, "Pair").startswith("levels")
+        G = make_state("H_2", [joker("j_satellite", "Satellite")], state="SHOP")
+        assert analysis.run_status(G, [], [])["constellation"]
+
+    def test_committed_hand_has_no_ok_planets(self) -> None:
+        G = make_state("H_2", [joker("j_trousers", "Spare Trousers")], state="SHOP")
+        assert analysis.run_status(G, [], [])["ok_hands"] is None

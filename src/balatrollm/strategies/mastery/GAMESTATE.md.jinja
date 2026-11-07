@@ -15,14 +15,14 @@
 {%- endmacro -%}
 {%- macro joker_line(j) -%}
 {%- if j.state and j.state.hidden -%}face-down joker
-{%- else -%}{{ j.label }} {{ joker_tag(j, S.main_hand, S.ante) }}{% if j.modifier and j.modifier.edition %} ({{ j.modifier.edition }}){% endif %}
+{%- else -%}{{ j.label }} {{ joker_tag(j, S.tag_hand, S.ante) }}{% if j.modifier and j.modifier.edition %} ({{ j.modifier.edition }}){% endif %}
 {%- if j.value and j.value.effect %} | effect: {{ j.value.effect }}{% endif %}
 {%- if j.state and j.state.debuff %} | DEBUFFED{% endif %}
 {%- endif -%}
 {%- endmacro -%}
 # STATUS
 - Ante {{ S.ante }}/8, round {{ G.round_num }}, money ${{ S.money }}
-- MAIN_HAND: {{ S.main_hand }}{% if S.main_suit %} (MAIN_SUIT: {{ S.main_suit }}){% endif %} - {{ S.main_reason }}
+- MAIN_HAND: {{ S.main_label }}{% if S.main_suit %} (MAIN_SUIT: {{ S.main_suit }}){% endif %} - {{ S.main_reason }}
 - Jokers {{ S.jokers }}/{{ S.joker_limit }}, SLOTS_FREE {{ S.slots_free }}, XMULT_OWNED {{ S.xmult_owned }}
 - FLOOR ${{ S.effective_floor }}, SPENDABLE ${{ S.spendable }} (interest next round ${{ S.interest }}){% if G.state == "SHOP" %} | SCORE_SPENDABLE ${{ S.score_spendable }}{% if S.score_spendable > S.spendable %} (keeps RESERVE ${{ S.reserve }}){% else %} (same as SPENDABLE){% endif %} for a score buy: a joker filling an empty slot in Antes 1-3, a joker with SCORE +50% or more, an on-plan [XMULT] joker (not [OFF-PLAN]), a [MAIN] Planet, a Buffoon pack with SLOTS_FREE > 0{% if S.status in ["THIN", "SHORT"] %}, or any joker with SCORE above +0 ({{ S.status }}){% endif %}{% endif %}
 - ECON_OK {{ "YES" if S.econ_ok else "NO" }} (economy jokers owned {{ S.econ_owned }}) | BLUE_SEALS {{ S.blue_seals }}{% if not S.blue_seals %} (none yet: Standard packs and Blue Seal cards are wanted){% endif %}{% if S.hologram %} | HOLOGRAM owned (every card added helps){% endif %}
@@ -112,9 +112,9 @@
 {%- if card.state and card.state.hidden %}
 - {{ loop.index0 }}: face-down card
 {%- elif card.set == "JOKER" %}
-- {{ loop.index0 }}: {{ card.label }} ${{ card.cost.buy }} {{ joker_tag(card, S.main_hand, S.ante) }}{% set gx = grows_xmult(G, card) %}{% if gx %} {{ gx }}{% endif %}{% if card.modifier and card.modifier.edition %} ({{ card.modifier.edition }}){% endif %}{% if I and I.shop[loop.index0] %} | SCORE {{ I.shop[loop.index0] }}{% endif %} | effect: {{ card.value.effect }}
+- {{ loop.index0 }}: {{ card.label }} ${{ card.cost.buy }} {{ joker_tag(card, S.tag_hand, S.ante) }}{% set gx = grows_xmult(G, card) %}{% if gx %} {{ gx }}{% endif %}{% if card.modifier and card.modifier.edition %} ({{ card.modifier.edition }}){% endif %}{% if I and I.shop[loop.index0] %} | SCORE {{ I.shop[loop.index0] }}{% endif %} | effect: {{ card.value.effect }}
 {%- elif card.set in ["TAROT", "PLANET", "SPECTRAL"] %}
-- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) ${{ card.cost.buy }} {% if card.label == "Death" and not sk.modified %}[SKIP] no sealed, enhanced or edition card in your deck to copy{% if sk.hanged %}: take The Hanged Man instead{% endif %}{% else %}{{ consumable_tag(card, S.main_hand, S.blue_seals, S.deck_total, S.constellation) }}{% endif %}{% if I and I.shop[loop.index0] %} | SCORE {{ I.shop[loop.index0] }}{% endif %}
+- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) ${{ card.cost.buy }} {% if card.label == "Death" and not sk.modified %}[SKIP] no sealed, enhanced or edition card in your deck to copy{% if sk.hanged %}: take The Hanged Man instead{% endif %}{% else %}{{ consumable_tag(card, S.main_hand, S.blue_seals, S.deck_total, S.constellation, S.ok_hands) }}{% endif %}{% if I and I.shop[loop.index0] %} | SCORE {{ I.shop[loop.index0] }}{% endif %}
 {%- else %}
 - {{ loop.index0 }}: {{ card_line(card) }} (playing card) ${{ card.cost.buy }}{% if S.hologram %} [OK: Hologram grows with every card added]{% else %} [SKIP]{% endif %}
 {%- endif %}
@@ -149,12 +149,12 @@
 {%- set death_skip = pk.death and not pk.modified %}
 {% for card in G.pack.cards -%}
 {%- if card.set == "JOKER" -%}
-{%- set jt = joker_tag(card, S.main_hand, S.ante) -%}
+{%- set jt = joker_tag(card, S.tag_hand, S.ante) -%}
 - {{ loop.index0 }}: {{ card.label }} (Joker) {{ jt }}{% set gx = grows_xmult(G, card) %}{% if gx %} {{ gx }}{% endif %}{% if card.modifier and card.modifier.edition %} ({{ card.modifier.edition }}){% endif %}{% if I and I.pack[loop.index0] %} | SCORE {{ I.pack[loop.index0] }}{% endif %} | effect: {{ card.value.effect }} | sells for ${{ card.cost.sell }}{% if S.slots_free and ('tier T' in jt or '[TRAP]' in jt) %} [CASH ONLY: take it if nothing better, then sell it in the shop]{% endif %}
 {%- elif card.set in ["TAROT", "PLANET", "SPECTRAL"] -%}
 {%- set tg = consumable_targets(card.key) %}
 {%- set sug = suggest_targets(G, card) -%}
-- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) {% if death_skip and card.label == "Death" %}[SKIP] no sealed, enhanced or edition card in hand to copy{% if pk.hanged %}: take The Hanged Man instead{% endif %}{% elif card.label == "Immolate" and pk.modified %}[AVOID] a sealed or enhanced card is in hand: Immolate may destroy it{% else %}{{ consumable_tag(card, S.main_hand, S.blue_seals, S.deck_total, S.constellation) }}{% endif %}
+- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) {% if death_skip and card.label == "Death" %}[SKIP] no sealed, enhanced or edition card in hand to copy{% if pk.hanged %}: take The Hanged Man instead{% endif %}{% elif card.label == "Immolate" and pk.modified %}[AVOID] a sealed or enhanced card is in hand: Immolate may destroy it{% else %}{{ consumable_tag(card, S.main_hand, S.blue_seals, S.deck_total, S.constellation, S.ok_hands) }}{% endif %}
 {%- if tg %} | needs {{ tg[0] }}-{{ tg[1] }} target cards{% if sug %}. Suggested targets: {{ sug }}{% else %}. No good targets: do not pick{% endif %}{% endif %}
 {%- else -%}
 - {{ loop.index0 }}: {{ card_line(card) }} (playing card){% if card.modifier and card.modifier.seal == "BLUE" %}{% if S.blue_seals and not S.hologram %} [SKIP: you already own a Blue Seal card]{% elif S.blue_seals %} [OK: Hologram grows with every card added]{% else %} [PICK: Blue Seal, you have none]{% endif %}{% endif %}
@@ -170,14 +170,14 @@
 
 # JOKERS (left to right){% if I and I.weakest and not S.slots_free %}. WEAKEST: {{ I.weakest.index }} {{ I.weakest.label }} (adds {{ I.weakest.gain | fmt_num }} per hand){% endif %}
 {% for j in G.jokers.cards -%}
-- {{ loop.index0 }}: {{ joker_line(j) }}{% if I and I.owned[loop.index0] %} | {{ I.owned[loop.index0] }}{% endif %} | sells for ${{ j.cost.sell }}{% set jt = joker_tag(j, S.main_hand, S.ante) %}{% if G.state == 'SHOP' and ('tier T' in jt or '[TRAP]' in jt) %} [SELL NOW: it hurts your run]{% endif %}
+- {{ loop.index0 }}: {{ joker_line(j) }}{% if I and I.owned[loop.index0] %} | {{ I.owned[loop.index0] }}{% endif %} | sells for ${{ j.cost.sell }}{% set jt = joker_tag(j, S.tag_hand, S.ante) %}{% if G.state == 'SHOP' and ('tier T' in jt or '[TRAP]' in jt) %} [SELL NOW: it hurts your run]{% endif %}
 {% else -%}
 - none (empty slots lose runs: buy scoring jokers)
 {% endfor %}
 # CONSUMABLES ({{ G.consumables.count }}/{{ G.consumables.limit }})
 {% for c in G.consumables.cards -%}
 {%- set sug = suggest_targets(G, c) if G.state == "SELECTING_HAND" else [] -%}
-- {{ loop.index0 }}: {{ c.label }} {{ consumable_tag(c, S.main_hand, S.blue_seals, S.deck_total, S.constellation) }}{% if consumable_targets(c.key) %}{% if sug %} | Suggested targets: {{ sug }}{% elif G.state == "SELECTING_HAND" %} | no good targets now{% else %} | needs cards in hand: use it during a round{% endif %}{% endif %}
+- {{ loop.index0 }}: {{ c.label }} {{ consumable_tag(c, S.main_hand, S.blue_seals, S.deck_total, S.constellation, S.ok_hands) }}{% if consumable_targets(c.key) %}{% if sug %} | Suggested targets: {{ sug }}{% elif G.state == "SELECTING_HAND" %} | no good targets now{% else %} | needs cards in hand: use it during a round{% endif %}{% endif %}
 {% else -%}
 - none
 {% endfor %}

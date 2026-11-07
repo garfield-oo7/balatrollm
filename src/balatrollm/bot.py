@@ -14,6 +14,7 @@ from openai.types.chat import ChatCompletion
 from . import seeds
 from .analysis import (
     BOSS_REROLL_MAX_PER_ANTE,
+    main_commit,
     boss_reroll_reason,
     estimate_play,
     joker_order,
@@ -79,6 +80,10 @@ class Bot:
         self._in_shop: bool = False
         self._shop_visits: int = 0
         self._shop_refusal_exits: int = 0
+        # Committed MAIN_HAND, carried between decisions (P2-4)
+        self._main_commit: dict[str, Any] | None = None
+        # After a buy took money below $10 from Ante 4, the shop is locked (F1)
+        self._shop_locked: bool = False
         # Harness boss rerolls per ante (Retcon has no game limit)
         self._boss_rerolls: dict[int, int] = {}
 
@@ -245,6 +250,8 @@ class Bot:
                 case "SELECTING_HAND" | "SHOP" | "SMODS_BOOSTER_OPENED":
                     if current_state == "SELECTING_HAND":
                         self._last_hand_state = gamestate
+                    self._track_shop_visit(gamestate)
+                    self._annotate(gamestate)
                     response = await self._get_llm_response(gamestate)
                     gamestate = await self._execute_tool_call(response, gamestate)
                 case "ROUND_EVAL":
@@ -622,7 +629,17 @@ class Bot:
             self._shop_visits += 1
         if not in_shop:
             self._shop_rerolls = 0
+            self._shop_locked = False
         self._in_shop = in_shop
+
+    def _annotate(self, gamestate: dict[str, Any]) -> None:
+        """Harness facts the templates and validate_action read from ``G["luna"]``."""
+        self._main_commit = main_commit(gamestate, self._main_commit)
+        gamestate["luna"] = {
+            "main_commit": self._main_commit,
+            "first_shop": self._in_shop and self._shop_visits == 1,
+            "shop_locked": self._shop_locked,
+        }
 
     async def _handle_veto(
         self, msg: str, before: dict[str, Any] | None = None
