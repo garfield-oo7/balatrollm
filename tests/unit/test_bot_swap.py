@@ -22,6 +22,8 @@ def _bot(game: AsyncMock) -> Bot:
     bot._in_shop = False
     bot._shop_visits = 0
     bot._shop_refusal_exits = 0
+    bot._main_commit = None
+    bot._shop_locked = False
     bot._consecutive_vetoes = 0
     bot._consecutive_errors = 0
     bot._consecutive_faileds = 0
@@ -209,3 +211,13 @@ def test_shop_visit_spans_an_open_pack() -> None:
     assert bot._shop_rerolls == 0
     bot._track_shop_visit({"state": "SHOP"})
     assert bot._shop_visits == 2
+
+
+def test_bot_carries_the_main_commit() -> None:
+    bot = _bot(AsyncMock())
+    G = make_state("H_2", [joker("j_trousers", "Spare Trousers")])
+    bot._annotate(G)
+    assert bot._main_commit["hand"] == "Two Pair"
+    G2 = make_state("H_2")  # Trousers sold
+    bot._annotate(G2)
+    assert G2["luna"]["main_commit"]["hand"] == "Two Pair"

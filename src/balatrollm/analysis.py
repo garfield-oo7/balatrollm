@@ -1297,7 +1297,7 @@ def main_suit(G: dict[str, Any]) -> str:
 
 
 TWO_PAIR_JOKERS = {"j_trousers", "j_mad", "j_clever"}
-OPEN_ANTES = 1  # Ante 1: chase Flush/Straight draws; from Ante 2 build MAIN_HAND
+OPEN_ANTES = 1  # Ante 1: chase Flush/Straight draws (CHASE) while discards last
 # Owner: Flush only when the jokers point there (Smeared Joker / Four Fingers);
 # a lone Tribe or suit-Mult jokers of mixed suits do not make Flush reliable.
 FLUSH_ENGINES = {"j_smeared", "j_four_fingers"}
@@ -1312,46 +1312,102 @@ def _suit_share(G: dict[str, Any], suit: str) -> float:
     return sum(1 for c in suited if c["suit"] == suit) / len(suited)
 
 
-def main_hand_plan(G: dict[str, Any]) -> dict[str, Any]:
-    """Deterministic MAIN_HAND.
+STRAIGHT_ENGINES = {"j_shortcut", "j_order"}
 
-    Default is a plain Pair (owner decision): an unmodified 8-card hand holds
-    a Pair ~89% of the time with no discard and ~99% with one, versus ~44% for
-    a Flush with one discard. Two Pair only with a Two Pair joker. The
-    hand never dies to suit bosses, and it grows into Full House. Flush is
-    chosen only when the run has made it consistent (Smeared Joker or Four
-    Fingers, or a deck half one suit). In the
-    OPEN antes, Flush/Straight are still taken when dealt (``open``).
+
+def joker_call(G: dict[str, Any]) -> tuple[str, str] | None:
+    """(hand, trigger) when the jokers or the deck call for a hand type (P2-4).
+
+    Owner (D2/F5/J4): commit by the jokers you have. Flush only with Four
+    Fingers, Smeared Joker or The Tribe (or a deck half one suit); Straight only
+    with Shortcut or The Order; Card Sharp repeats the hand levelled most.
     """
-    keys = set(_joker_keys(G))
-    ante = int(G.get("ante_num") or 1)
+    jokers = {j.get("key", ""): str(j.get("label") or j.get("key")) for j in _area_cards(G, "jokers")}
+    keys = set(jokers)
+
+    def first(*ks: str) -> str:
+        return next(jokers[k] for k in ks if k in jokers)
+
+    if keys & (FLUSH_ENGINES | {"j_tribe"}):
+        return "Flush", first("j_four_fingers", "j_smeared", "j_tribe")
+    if _suit_share(G, main_suit(G)) >= SUIT_SHARE_FOR_FLUSH:
+        return "Flush", "half your deck is one suit"
+    if keys & STRAIGHT_ENGINES:
+        return "Straight", first("j_shortcut", "j_order")
+    if "j_trio" in keys:
+        return "Three of a Kind", jokers["j_trio"]
+    if {"j_zany", "j_wily"} <= keys:
+        return "Three of a Kind", "Zany Joker + Wily Joker"
+    if keys & TWO_PAIR_JOKERS:
+        return "Two Pair", first("j_trousers", "j_mad", "j_clever")
+    if keys & {"j_baron", "j_half", "j_duo"}:
+        return "Pair", first("j_baron", "j_half", "j_duo")
+    if "j_card_sharp" in keys:
+        return leaning_hand(G), jokers["j_card_sharp"]
+    return None
+
+
+def leaning_hand(G: dict[str, Any]) -> str:
+    """While MAIN_HAND is OPEN: the hand levelled most (ties: played most,
+    then the more common hand), Pair when nothing is levelled (owner J4)."""
+    hands = G.get("hands") or {}
+    order = ["Pair", "Two Pair", "Three of a Kind", "Straight", "Flush", "Full House", "Four of a Kind", "High Card"]
+    best = max(
+        order,
+        key=lambda n: (
+            int((hands.get(n) or {}).get("level", 1)),
+            int((hands.get(n) or {}).get("played", 0)),
+            -order.index(n),
+        ),
+    )
+    return best if int((hands.get(best) or {}).get("level", 1)) > 1 or int((hands.get(best) or {}).get("played", 0)) else "Pair"
+
+
+def main_commit(G: dict[str, Any], previous: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The committed MAIN_HAND after this gamestate (the bot keeps it between
+    decisions). A new joker call re-commits; losing the joker does not
+    un-commit (sticky only against joker loss)."""
+    call = joker_call(G)
+    if call and (not previous or previous.get("hand") != call[0]):
+        return {
+            "hand": call[0],
+            "trigger": call[1],
+            "ante": int(G.get("ante_num") or 1),
+            "round": int(G.get("round_num") or 0),
+        }
+    return previous
+
+
+def main_hand_plan(G: dict[str, Any]) -> dict[str, Any]:
+    """MAIN_HAND: OPEN until jokers call for a hand, then committed (P2-4).
+
+    OPEN: the hand shown is the one levelled most ("leaning"), nothing is
+    [OFF-PLAN], and Luna plays the best hand dealt. Committed: from a joker
+    call (or the deck), kept after the joker is sold (``G["luna"]
+    ["main_commit"]``, carried by the bot), replaced by a new call.
+    """
+    commit = main_commit(G, (G.get("luna") or {}).get("main_commit"))
     suit = main_suit(G)
-    if keys & FLUSH_ENGINES:
-        hand, reason = "Flush", "you own Smeared Joker or Four Fingers, so Flush is consistent"
-    elif _suit_share(G, suit) >= SUIT_SHARE_FOR_FLUSH:
-        hand, reason = "Flush", "half your deck is one suit"
-    elif "j_half" in keys:
-        hand, reason = "Pair", "Half Joker needs plays of 3 or fewer cards"
-    elif "j_trio" in keys or {"j_zany", "j_wily"} <= keys:
-        hand, reason = "Three of a Kind", "your jokers pay for Three of a Kind"
-    elif keys & TWO_PAIR_JOKERS:
-        hand, reason = "Two Pair", "you own a Two Pair joker (Spare Trousers/Mad/Clever)"
+    ante = int(G.get("ante_num") or 1)
+    if commit:
+        hand = commit["hand"]
+        reason = f"committed: {commit['trigger']}"
+        if commit.get("round"):
+            reason += f" (round {commit['round']})"
+        is_open = False
     else:
-        hand, reason = (
-            "Pair",
-            "most consistent hand (a Pair is in ~89% of hands, ~99% after 1 discard)",
-        )
-    is_open = ante <= OPEN_ANTES and hand != "Flush"
-    if is_open:
-        reason += "; Ante 1: chase Flush/Straight draws first"
+        hand = leaning_hand(G)
+        reason = "OPEN: no joker calls for a hand yet; play the best hand dealt"
+        is_open = True
     return {
         "hand": hand,
         "family": knowledge.HAND_FAMILY.get(hand, "pair"),
         "suit": suit if hand == "Flush" else None,
         "reason": reason,
         "open": is_open,
+        "commit": commit,
         # draws worth discarding toward (shown to the model and used for advice)
-        "draw_kinds": {"Flush", "Straight"} if is_open else {hand},
+        "draw_kinds": {"Flush", "Straight"} if is_open or ante <= OPEN_ANTES else {hand},
     }
 
 
@@ -2095,7 +2151,17 @@ def run_status(
         "econ_ok": econ_ok,
         "blue_seals": blue_seal_count(G),
         "hologram": owns_hologram(G),
-        "constellation": owns_joker(G, "j_constellation"),
+        # [FEED] planets: Constellation grows, Satellite pays (owner J5)
+        "constellation": owns_joker(G, "j_constellation") or owns_joker(G, "j_satellite"),
+        "main_open": plan["open"],
+        "main_label": f"OPEN (leaning {plan['hand']})" if plan["open"] else plan["hand"],
+        "tag_hand": None if plan["open"] else plan["hand"],
+        "ok_hands": sorted(
+            {n for n, h in (G.get("hands") or {}).items() if int((h or {}).get("played", 0))}
+            | set(power.get("best_types") or [])
+        )
+        if plan["open"]
+        else None,
         "square": owns_joker(G, "j_square"),
         "deck_total": len(_area_cards(G, "cards")) + len(_area_cards(G, "hand")),
         # most you can spend without lowering next round's interest

@@ -628,6 +628,7 @@ def consumable_tag(
     blue_seals: int | None = None,
     deck_size: int | None = None,
     constellation: bool = False,
+    ok_hands: list[str] | None = None,
 ) -> str:
     """Render a short verdict for a Tarot / Planet / Spectral card dict."""
     label = card.get("label")
@@ -644,7 +645,9 @@ def consumable_tag(
         if main_hand and hand == main_hand:
             return f"[MAIN] levels {hand} (your MAIN_HAND): use now"
         if constellation:
-            return f"[FEED] levels {hand}: grows Constellation, take it"
+            return f"[FEED] levels {hand}: grows Constellation / pays with Satellite, take it"
+        if ok_hands and hand in ok_hands:
+            return f"[OK] levels {hand}, a hand you play: cheap levels are fine while MAIN_HAND is OPEN"
         return f"levels {hand} (not MAIN_HAND)"
     hit = _CONS_N.get(n)
     if not hit:
