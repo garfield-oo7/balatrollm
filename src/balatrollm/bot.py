@@ -692,6 +692,7 @@ class Bot:
             "main_commit": self._main_commit,
             "first_shop": self._in_shop and self._shop_visits == 1,
             "shop_locked": self._shop_locked,
+            "sell_in_pack": bool(self.harness.get("sell_in_pack")),
         }
 
     async def _handle_veto(

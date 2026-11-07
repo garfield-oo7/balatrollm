@@ -20,6 +20,7 @@
       "Investment Tag": 1
     },
     "reroll_boss": true,
-    "joker_phase_order": true
+    "joker_phase_order": true,
+    "sell_in_pack": true
   }
 }

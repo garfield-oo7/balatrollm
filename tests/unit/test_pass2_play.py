@@ -180,3 +180,55 @@ async def test_p2_15_bot_moves_then_restores() -> None:
     calls = len(game.call.call_args_list)
     await bot._phase_order(moved, "play", {"cards": [0, 1]})
     assert len(game.call.call_args_list) == calls  # nothing to restore twice
+
+
+def _pack_full(flag: bool) -> dict[str, Any]:
+    G = make_state("H_2", [joker("j_greedy_joker", "Greedy Joker"), joker("j_jolly", "Jolly Joker")], state="SMODS_BOOSTER_OPENED")
+    G["jokers"].update(limit=2, count=2)
+    G["hand"]["cards"] = []
+    G["pack"] = {"cards": [joker("j_duo", "The Duo"), joker("j_chaos", "Chaos the Clown")]}
+    G["luna"] = {"sell_in_pack": flag}
+    return G
+
+
+def test_p2_7_full_slot_pick_only_with_the_flag() -> None:
+    assert "slots are full" in analysis.validate_action(_pack_full(False), "pack", {"card": 0})
+    assert analysis.swap_plan(_pack_full(False), "pack", {"card": 0}) is None
+    G = _pack_full(True)
+    assert analysis.validate_action(G, "pack", {"card": 0}) is None
+    plan = analysis.swap_plan(G, "pack", {"card": 0})
+    assert isinstance(plan, dict) and plan["buy"] == "The Duo"
+    assert "would not raise" in analysis.swap_plan(G, "pack", {"card": 1})
+    assert analysis.swap_plan(G, "pack", {"skip": True}) is None
+
+
+def test_p2_7_pack_line_and_rule_follow_the_flag() -> None:
+    G = _pack_full(True)
+    sm = StrategyManager("mastery")
+    text = sm.render_gamestate(G, rounds=[], history=[], flags={"sell_in_pack": True})
+    assert "(the harness sells it for you)" in text
+    assert "the harness sells the joker named in the swap" in sm.render_strategy(G, rounds=[], history=[], flags={"sell_in_pack": True})
+    assert "If SLOTS_FREE = 0: skip." in sm.render_strategy(G, rounds=[], history=[], flags={})
+
+
+async def test_p2_7_bot_sells_weakest_then_picks() -> None:
+    from unittest.mock import AsyncMock
+
+    from .test_bot_swap import _bot
+
+    G = _pack_full(True)
+    game = AsyncMock()
+    game.call.return_value = {"state": "SMODS_BOOSTER_OPENED"}
+    bot = _bot(game)
+    bot.harness = {"validate_actions": True, "auto_swap_jokers": True, "sell_in_pack": True}
+    bot._phase_moved = False
+    plan = analysis.swap_plan(G, "pack", {"card": 0})
+    import json
+    from types import SimpleNamespace
+
+    call = SimpleNamespace(function=SimpleNamespace(name="pack", arguments=json.dumps({"card": 0, "reasoning": "x"})))
+    response = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(tool_calls=[call], content=None))])
+    await bot._execute_tool_call(response, G)
+    names = [c.args[0] for c in game.call.call_args_list]
+    assert names[:2] == ["sell", "pack"]
+    assert game.call.call_args_list[0].args[1] == {"joker": plan["sell"]}

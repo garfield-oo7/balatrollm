@@ -3239,6 +3239,7 @@ def _shop_impact(G: dict[str, Any]) -> dict[str, Any]:
         "pack": {},
         "owned": {},
         "swaps": {},
+        "pack_swaps": {},
         "weakest": None,
         "chips_sources": 0,
     }
@@ -3327,22 +3328,24 @@ def _shop_impact(G: dict[str, Any]) -> dict[str, Any]:
     if owned and int(jokers_area.get("count", len(owned))) >= int(jokers_area.get("limit", 5)):
         # W1/W2: with full slots, the best swap per shop joker over every owned
         # joker that can be swapped
-        for i, card in enumerate(_area_cards(G, "shop")):
-            if card.get("set") != "JOKER" or _norm(card)["ed"] == "NEGATIVE":
-                continue
-            best = None
-            for _g, k in candidates:
-                rest = [x for n, x in enumerate(owned) if n != k]
-                delta = score([*rest, card]) - base
-                if best is None or delta > best[0]:
-                    best = (delta, k)
-            if best is not None:
-                out["swaps"][i] = {
-                    "index": best[1],
-                    "label": owned[best[1]].get("label"),
-                    "delta": int(best[0]),
-                    "text": f"swap for {owned[best[1]].get('label')}: {signed(best[0])} per hand{pct(best[0])}",
-                }
+        # P2-7: pack jokers too (picked with full slots when sell_in_pack is on)
+        for area, slot in (("shop", "swaps"), ("pack", "pack_swaps")):
+            for i, card in enumerate(_area_cards(G, area)):
+                if card.get("set") != "JOKER" or _norm(card)["ed"] == "NEGATIVE":
+                    continue
+                best = None
+                for _g, k in candidates:
+                    rest = [x for n, x in enumerate(owned) if n != k]
+                    delta = score([*rest, card]) - base
+                    if best is None or delta > best[0]:
+                        best = (delta, k)
+                if best is not None:
+                    out[slot][i] = {
+                        "index": best[1],
+                        "label": owned[best[1]].get("label"),
+                        "delta": int(best[0]),
+                        "text": f"swap for {owned[best[1]].get('label')}: {signed(best[0])} per hand{pct(best[0])}",
+                    }
     return out
 
 
@@ -3361,6 +3364,41 @@ def live_xmult(G: dict[str, Any], card: dict[str, Any], score_text: str | None) 
     return bool(m) and int(m.group(1).replace(",", "")) > 0
 
 
+def _pack_swap(G: dict[str, Any], params: dict[str, Any]) -> dict[str, Any] | str | None:
+    """P2-7 (flag ``sell_in_pack``): a joker picked from a pack with full slots
+    replaces the owned joker whose swap raises the score most; refused when no
+    swap raises it (live xMult jokers excepted, F8)."""
+    if not (G.get("luna") or {}).get("sell_in_pack") or G.get("state") != "SMODS_BOOSTER_OPENED":
+        return None
+    if params.get("skip") or params.get("card") is None:
+        return None
+    jokers = G.get("jokers") or {}
+    if int(jokers.get("count", 0)) < int(jokers.get("limit", 5)):
+        return None
+    try:
+        idx = int(params["card"])
+        card = _area_cards(G, "pack")[idx]
+    except (IndexError, TypeError, ValueError):
+        return None
+    if card.get("set") != "JOKER" or _norm(card)["ed"] == "NEGATIVE":
+        return None
+    label = str(card.get("label") or card.get("key"))
+    impact = shop_impact(G)
+    swap = impact["pack_swaps"].get(idx)
+    if not swap:
+        return (
+            f"Your joker slots are full and every joker you own is kept (it sets MAIN_HAND, "
+            f"grows, pays money or is a synergy pair), so there is no room for {label}. "
+            "Pick another card or skip."
+        )
+    if swap["delta"] <= 0 and not live_xmult(G, card, impact["pack"].get(idx)):
+        return (
+            f"{label} would not raise your score over {swap['label']} "
+            f"({swap['text']}). Pick another card or skip."
+        )
+    return {"sell": int(swap["index"]), "label": swap["label"], "buy": label}
+
+
 def swap_plan(
     G: dict[str, Any], method: str, params: dict[str, Any]
 ) -> dict[str, Any] | str | None:
@@ -3374,6 +3412,8 @@ def swap_plan(
     bought without that test and replaces the weakest joker that is not the main
     +Mult or +Chips source.
     """
+    if method == "pack":
+        return _pack_swap(G, params)
     if method != "buy" or "card" not in params or G.get("state") != "SHOP":
         return None
     jokers = G.get("jokers") or {}
@@ -3663,8 +3703,9 @@ def validate_action(
             except (IndexError, TypeError, ValueError):
                 return None
             key = chosen.get("key", "")
+            sell_in_pack = bool((G.get("luna") or {}).get("sell_in_pack"))
             if (
-                chosen.get("set") == "JOKER"
+                (chosen.get("set") == "JOKER" and not sell_in_pack)
                 or key in ("c_judgement", "c_soul", "c_wraith")
             ) and full:
                 return "Your joker slots are full: this card would be wasted. Skip the pack or pick another card."
