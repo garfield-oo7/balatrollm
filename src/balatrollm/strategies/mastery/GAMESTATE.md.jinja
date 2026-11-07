@@ -55,6 +55,9 @@
 {%- if P.kind == "boss" and boss.counter %}
 - Boss rule now: {{ boss.counter }}
 {%- endif %}
+{%- for sp in A.suit_pays %}
+- {{ sp.label }}: {{ {"H": "Hearts", "D": "Diamonds", "C": "Clubs", "S": "Spades"}[sp.suit] }}{% if sp.label == "Ancient Joker" %} this round{% endif %}, {{ sp.gain }} per {{ {"H": "Heart", "D": "Diamond", "C": "Club", "S": "Spade"}[sp.suit] }} scored: keep those cards; a Flush in that suit scores most
+{%- endfor %}
 {%- if A.blue_in_hand %}
 - Blue Seal card in hand at {{ A.blue_in_hand }}: never play or discard it. When the blind is beaten it makes the Planet of your last played hand{% if S.consumable_slots_free %}.{% else %}, but your consumable slots are FULL: use or sell a consumable first.{% endif %}
 {%- endif %}

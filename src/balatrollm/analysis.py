@@ -540,6 +540,45 @@ def _joker_effect(
     return None
 
 
+SUIT_LETTER = {"heart": "H", "diamond": "D", "club": "C", "spade": "S"}
+
+
+SUIT_PAY_JOKERS = {  # per-scored-card suit jokers besides Ancient Joker
+    "j_greedy_joker": ("D", "+3 Mult"),
+    "j_lusty_joker": ("H", "+3 Mult"),
+    "j_wrathful_joker": ("S", "+3 Mult"),
+    "j_gluttenous_joker": ("C", "+3 Mult"),
+    "j_onyx_agate": ("C", "+7 Mult"),
+    "j_arrowhead": ("S", "+50 Chips"),
+    "j_bloodstone": ("H", "1 in 2 for X1.5 Mult"),
+    "j_rough_gem": ("D", "$1"),
+}
+
+
+def suit_pays(G: dict[str, Any]) -> list[dict[str, str]]:
+    """Owned jokers that pay per scored card of a suit: [{label, suit, gain}]."""
+    out = []
+    for j in _area_cards(G, "jokers"):
+        key = j.get("key", "")
+        if key == "j_ancient" and (suit := ancient_suit(G)):
+            out.append({"label": "Ancient Joker", "suit": suit, "gain": "X1.5 Mult"})
+        elif key in SUIT_PAY_JOKERS:
+            suit, gain = SUIT_PAY_JOKERS[key]
+            out.append({"label": str(j.get("label") or key), "suit": suit, "gain": gain})
+    return out
+
+
+def ancient_suit(G: dict[str, Any]) -> str | None:
+    """Suit Ancient Joker pays X1.5 for this round (read live from its effect)."""
+    for j in _area_cards(G, "jokers"):
+        if j.get("key") == "j_ancient":
+            effect = str((j.get("value") or {}).get("effect", ""))
+            m = re.search(r"with (Heart|Diamond|Club|Spade)", effect, re.IGNORECASE)
+            if m:
+                return SUIT_LETTER[m.group(1).lower()]
+    return None
+
+
 def copied_keys(G: dict[str, Any]) -> list[str]:
     """Keys of the jokers Blueprint (the joker to its right) and Brainstorm
     (the leftmost joker) copy, in joker order."""
@@ -596,6 +635,7 @@ def estimate_play(
     groups = _suit_groups(smeared)
     hands_left = int((G.get("round") or {}).get("hands_left", 0))
     scored_cards = [played[i] for i in scoring]
+    ancient = ancient_suit(G)
 
     def is_face(c: dict[str, Any]) -> bool:
         return not c["stone"] and (pareidolia or (c["rank"] in FACE_RANKS))
@@ -681,6 +721,8 @@ def estimate_play(
                 # the shop counts its average (always x1.5 with Oops! All 6s)
                 elif k == "j_bloodstone" and expected and suit_match(c, "H"):
                     mult *= 1.5 if "j_oops" in keyset else 1.25
+                elif k == "j_ancient" and ancient and suit_match(c, ancient):
+                    mult *= 1.5
                 elif k == "j_triboulet" and c["rank"] in ("K", "Q"):
                     mult *= 2
                 elif k == "j_photograph" and pos == first_face_pos:
@@ -1318,14 +1360,40 @@ def _pad_allowed(G: dict[str, Any]) -> bool:
     return "j_half" not in keys and _active_boss(G) != "The Tooth"
 
 
+def held_scoring_ranks(G: dict[str, Any]) -> set[str]:
+    """Ranks that score while HELD: Kings with Baron, Queens with Shoot the Moon
+    (copies by Blueprint / Brainstorm count)."""
+    keys = set(_joker_keys(G)) | set(copied_keys(G))
+    return ({"K"} if "j_baron" in keys else set()) | (
+        {"Q"} if "j_shoot_the_moon" in keys else set()
+    )
+
+
+def _classify_flags(G: dict[str, Any]) -> dict[str, bool]:
+    keyset = set(_joker_keys(G))
+    return {
+        "four_fingers": "j_four_fingers" in keyset,
+        "shortcut": "j_shortcut" in keyset,
+        "smeared": "j_smeared" in keyset,
+    }
+
+
 def _filler(
+    G: dict[str, Any],
     hand: list[dict[str, Any]],
     play: list[int],
     plan: dict[str, Any],
     count: int,
 ) -> list[int]:
-    """Lowest-value cards outside ``play`` to add as filler (never MAIN suit cards)."""
+    """Up to ``count`` lowest-value cards outside ``play`` to pad it with.
+
+    Never MAIN suit cards, Steel/Gold/Blue Seal cards or cards that score while
+    held (Kings with Baron, Queens with Shoot the Moon), and never a card that
+    changes the hand type of the play (a third 3 next to a Pair of 3s, a fifth
+    Heart next to four Hearts): the play is re-classified after each filler.
+    """
     suit = plan.get("suit")
+    keep_ranks = held_scoring_ranks(G)
     pool = [
         i
         for i, c in enumerate(hand)
@@ -1333,10 +1401,20 @@ def _filler(
         and not c["hidden"]
         and c["enh"] not in ("STEEL", "GOLD")
         and c["seal"] != "BLUE"
+        and c["rank"] not in keep_ranks
         and not (suit and (c["suit"] == suit or c["enh"] == "WILD"))
     ]
     pool.sort(key=lambda i: CHIP_VALUE.get(hand[i]["rank"] or "", 0))
-    return pool[:count]
+    flags = _classify_flags(G)
+    base = classify([hand[i] for i in play], **flags)[0]
+    out: list[int] = []
+    for i in pool:
+        if len(out) >= count:
+            break
+        trial = [hand[j] for j in [*play, *out, i]]
+        if classify(trial, **flags)[0] == base:
+            out.append(i)
+    return out
 
 
 MAIL_RANK_NAMES = {
@@ -1387,6 +1465,14 @@ def suggested_discard(
     else:
         rc = Counter(c["rank"] for c in hand if c["rank"] and not c["hidden"])
         keep = {i for i, c in enumerate(hand) if c["rank"] and rc[c["rank"]] >= 2}
+        # Cards of a suit a joker pays for (Ancient Joker X1.5, suit Mult
+        # jokers) are kept: they score more and build that suit's Flush
+        paid = {p["suit"] for p in suit_pays(G)}
+        keep |= {
+            i
+            for i, c in enumerate(hand)
+            if not c["hidden"] and (c["enh"] == "WILD" or (c["suit"] and groups[c["suit"]] in {groups[x] for x in paid}))
+        }
     keep |= protect
     keep |= {i for i, c in enumerate(hand) if c["stone"] and plan["hand"] != "Flush"}
     return _discard_choice(hand, keep, limit, mail_rank(G))
@@ -1435,8 +1521,10 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         and (bool(_joker_keys(G)) or progress.get("kind") != "boss")
     )
     draws = []
+    paid_suits = {p["suit"] for p in suit_pays(G)}
     for d in analysis_["draws"]:
-        if d["kind"] not in plan["draw_kinds"]:
+        paid_flush = d["kind"] == "Flush" and d.get("suit") in paid_suits
+        if d["kind"] not in plan["draw_kinds"] and not paid_flush:
             continue
         # chance to hit within ALL remaining discards (approximation)
         within = 1 - (1 - d["chance"]) ** max(discards, 1)
@@ -1493,7 +1581,7 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
             why += " and keeps the Blue Seal card in hand"
         cards = list(best["cards"])
         if square and len(cards) < 4:
-            cards = sorted(cards + _filler(hand, cards, plan, 4 - len(cards)))
+            cards = sorted(cards + _filler(G, hand, cards, plan, 4 - len(cards)))
             why += "; 4 cards grow Square Joker"
         action = {"tool": "play", "cards": cards, "why": why}
     elif discards > 0 and discard and chase_draw:
@@ -1526,7 +1614,15 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         elif _pad_allowed(G) and len(cards) < 5 and not square:
             need = 5 - len(cards)
         if need > 0:
-            cards = sorted(cards + _filler(hand, cards, plan, need))
+            cards = sorted(cards + _filler(G, hand, cards, plan, need))
+        if boss == "The Psychic" and len(cards) < 5:
+            # 5 cards or the play scores 0: pad with the lowest other cards
+            # even if that changes the hand type (the analyser scores both)
+            rest = sorted(
+                (i for i, c in enumerate(hand) if i not in cards and not c["hidden"]),
+                key=lambda i: (hand[i]["rank"] in held_scoring_ranks(G), CHIP_VALUE.get(hand[i]["rank"] or "", 0)),
+            )
+            cards = sorted(cards + rest[: 5 - len(cards)])
         action = {"tool": "play", "cards": cards, "why": f"best play ({best['hand']})"}
     else:
         action = {"tool": "discard", "cards": discard, "why": "no visible play"}
@@ -1549,6 +1645,7 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         "action": action,
         "strong_draw": strong_draw,
         "blue_in_hand": sorted(blue_in_hand),
+        "suit_pays": suit_pays(G),
         "hand_suits": analysis_["hand_suits"],
         "deck_size": analysis_["deck_size"],
         "deck_suits": analysis_["deck_suits"],
@@ -2589,14 +2686,7 @@ def validate_action(
             return f"You selected {len(cards)} cards; the maximum is {limit}."
         if len(set(cards)) != len(cards):
             return "Each card index may appear only once."
-        if method == "discard":
-            advice = play_advice(G)
-            winners = [p for p in advice["plays"] if p["wins"]]
-            if winners and set(cards) & set(winners[0]["cards"]):
-                return (
-                    f"Discard refused: cards {winners[0]['cards']} already make a "
-                    f"{winners[0]['hand']} that WINS the blind. Play it instead."
-                )
+        # Owner (pass 1): the harness never refuses a discard; WINS is advice.
     if (
         method == "buy"
         and "card" in params
@@ -2811,6 +2901,7 @@ def round_record(
 
 
 TEMPLATE_GLOBALS = {
+    "suit_pays": suit_pays,
     "analyze_hand": analyze_hand,
     "blind_progress": blind_progress,
     "shop_context": shop_context,

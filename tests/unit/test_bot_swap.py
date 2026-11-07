@@ -19,6 +19,9 @@ def _bot(game: AsyncMock) -> Bot:
     bot._history = []
     bot._consecutive_rearranges = 0
     bot._shop_rerolls = 0
+    bot._in_shop = False
+    bot._shop_visits = 0
+    bot._shop_refusal_exits = 0
     bot._consecutive_vetoes = 0
     bot._consecutive_errors = 0
     bot._consecutive_faileds = 0
@@ -166,3 +169,43 @@ async def test_retcon_keeps_rerolling_until_the_boss_is_fine() -> None:
     assert bot._boss_rerolls == {1: 3}
     # Out of money: no reroll even for a bad boss
     assert await bot._reroll_boss(retcon("The Wall", 9)) is None
+
+
+async def test_refusal_loop_in_shop_leaves_the_shop() -> None:
+    """Pass 1 Seed P: 5 refusals in a row ended a live run; now the harness
+    leaves the shop after 3 and the run goes on."""
+    game = AsyncMock()
+    game.call.return_value = {"state": "SHOP"}
+    bot = _bot(game)
+    G = _full_shop()
+    G["money"] = 6  # the swap is refused (not enough money)
+    for _ in range(2):
+        await bot._execute_tool_call(_buy(0), G)
+    assert "next_round" not in [c.args[0] for c in game.call.call_args_list]
+    await bot._execute_tool_call(_buy(0), G)
+    assert [c.args[0] for c in game.call.call_args_list][-1] == "next_round"
+    assert bot._consecutive_vetoes == 0 and bot._shop_refusal_exits == 1
+    assert "left the shop" in bot._history[-1]["result"]
+
+
+async def test_refusal_loop_in_pack_skips_then_leaves() -> None:
+    game = AsyncMock()
+    game.call.side_effect = lambda m, *a: {"state": "SHOP"} if m in ("pack", "next_round") else {"state": "SMODS_BOOSTER_OPENED"}
+    bot = _bot(game)
+    bot._consecutive_vetoes = 2
+    G = _full_shop()
+    G["state"] = "SMODS_BOOSTER_OPENED"
+    await bot._handle_veto("refused", G)
+    assert [c.args[0] for c in game.call.call_args_list] == ["pack", "next_round"]
+
+
+def test_shop_visit_spans_an_open_pack() -> None:
+    bot = _bot(AsyncMock())
+    bot._shop_rerolls = 2
+    bot._track_shop_visit({"state": "SHOP"})
+    bot._track_shop_visit({"state": "SMODS_BOOSTER_OPENED"})
+    assert bot._shop_rerolls == 2 and bot._shop_visits == 1
+    bot._track_shop_visit({"state": "SELECTING_HAND"})
+    assert bot._shop_rerolls == 0
+    bot._track_shop_visit({"state": "SHOP"})
+    assert bot._shop_visits == 2
