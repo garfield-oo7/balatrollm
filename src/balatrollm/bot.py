@@ -98,8 +98,10 @@ class Bot:
         self._main_commit: dict[str, Any] | None = None
         # After a buy took money below $10 from Ante 4, the shop is locked (F1)
         self._shop_locked: bool = False
-        # Harness boss rerolls per ante (Retcon has no game limit)
+        # Harness boss rerolls per ante (decision C: at most 1)
         self._boss_rerolls: dict[int, int] = {}
+        # Tags the harness skipped for that have not paid yet (M1)
+        self._pending_tags: list[dict[str, Any]] = []
 
         # Finish reason tracking
         self._finish_reason: FinishReason | None = None
@@ -342,6 +344,7 @@ class Bot:
                 last_ante = wanted.get(blind.get("tag_name"))
                 if last_ante is not None and ante <= int(last_ante):
                     logger.info(f"Skipping {blind.get('name')} for {blind.get('tag_name')}")
+                    self._pending_tags.append({"tag": blind.get("tag_name"), "ante": ante})
                     return True
         return False
 
@@ -653,7 +656,11 @@ class Bot:
     def _annotate(self, gamestate: dict[str, Any]) -> None:
         """Harness facts the templates and validate_action read from ``G["luna"]``."""
         self._main_commit = main_commit(gamestate, self._main_commit)
+        ante = int(gamestate.get("ante_num") or 1)
+        # Investment Tag pays at this ante's boss cash-out: gone once the ante moves on
+        self._pending_tags = [t for t in getattr(self, "_pending_tags", []) if t["ante"] >= ante]
         gamestate["luna"] = {
+            "pending_tags": list(self._pending_tags),
             "main_commit": self._main_commit,
             "first_shop": self._in_shop and self._shop_visits == 1,
             "shop_locked": self._shop_locked,

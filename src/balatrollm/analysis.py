@@ -1062,6 +1062,23 @@ def money_floor(G: dict[str, Any]) -> int:
 RESERVE = 10  # soft money reserve from Ante 2 (owner: "try to reserve $10")
 
 
+TAG_MONEY = {"Investment Tag": 25}  # paid at the cash-out after this ante's boss
+
+
+def pending_tag_lines(G: dict[str, Any]) -> list[str]:
+    """M1: tags the harness skipped a blind for that have not paid yet (facts only)."""
+    money = int(G.get("money") or 0)
+    lines = []
+    for t in (G.get("luna") or {}).get("pending_tags") or []:
+        pay = TAG_MONEY.get(str(t.get("tag")))
+        if pay:
+            lines.append(
+                f"{t['tag']} (harness skipped a blind for it): +${pay} after this ante's boss; "
+                f"after the boss you will have about ${money} + ${pay} = ${money + pay} plus that round's payout"
+            )
+    return lines
+
+
 def reserve(G: dict[str, Any], status: str | None = None, boss_short: bool = False) -> int:
     """Money a SCORE buy must leave (P2-8, owner S2/F1).
 
@@ -2152,6 +2169,7 @@ def run_status(
         # planet, a Buffoon pack with a free slot, or a SCORE > 0 joker while TOO WEAK
         "score_spendable": max(money - reserve(G, status, boss_short), money - effective_floor, 0),
         "shop_locked": bool((G.get("luna") or {}).get("shop_locked")),
+        "pending_tags": pending_tag_lines(G),
         "recent_scores": scores,
         "next_target": nxt_target,
         "milestone": milestone,
@@ -2851,15 +2869,27 @@ def boss_check(
     return _cached(_state_key(G, len(history or []), "boss_check"), make)
 
 
-# Boss reroll (Director's Cut: once per ante, Retcon: unlimited; $10 each).
-# Owner rule: always reroll these bosses; also reroll a boss that shuts off
-# MAIN_HAND, or one the current build cannot beat by the strength check.
+# Boss reroll (Director's Cut / Retcon; $10 each). Owner rule: always reroll
+# these bosses; also reroll a boss that shuts off MAIN_HAND, or one the
+# current build cannot beat by the strength check.
 BOSS_REROLL_COST = 10
 BOSS_REROLL_ALWAYS = {"Violet Vessel", "The Wall", "The Needle"}
 FIVE_CARD_HANDS = {"Flush", "Straight", "Full House"}
-# Retcon rerolls again and again until the boss is fine or money is under $10;
-# this only guards against a runaway loop
-BOSS_REROLL_MAX_PER_ANTE = 10
+# Decision C: one reroll per ante for Director's Cut and Retcon alike; keep
+# whatever boss comes next. From Ante 4, $10 must stay after the reroll,
+# except for the always-reroll bosses.
+BOSS_REROLL_MAX_PER_ANTE = 1
+BOSS_REROLL_KEEP_FROM_ANTE = 4
+BOSS_REROLL_KEEP = 10
+
+
+def face_build(G: dict[str, Any]) -> bool:
+    """True when an owned scoring joker works off face cards (The Plant hurts)."""
+    for j in _area_cards(G, "jokers"):
+        info = knowledge.joker_info(j.get("label") or j.get("key")) or {}
+        if info.get("family") == "face" and info.get("category") != "ECON":
+            return True
+    return False
 
 
 def boss_reroll_available(G: dict[str, Any]) -> bool:
@@ -2889,6 +2919,13 @@ def boss_reroll_reason(G: dict[str, Any]) -> str | None:
     plan = main_hand_plan(G)
     if name in BOSS_REROLL_ALWAYS:
         return f"{name} is a boss to always reroll"
+    if (
+        int(G.get("ante_num") or 1) >= BOSS_REROLL_KEEP_FROM_ANTE
+        and int(G.get("money") or 0) - BOSS_REROLL_COST < BOSS_REROLL_KEEP
+    ):
+        return None
+    if name == "The Plant" and face_build(G):
+        return "The Plant turns off your face-card jokers"
     if name in ("The Eye", "The Mouth"):
         return f"{name} shuts off your MAIN_HAND {plan['hand']}"
     if name == "The Psychic" and plan["hand"] not in FIVE_CARD_HANDS:
@@ -3055,6 +3092,7 @@ def _shop_impact(G: dict[str, Any]) -> dict[str, Any]:
         gain = int(base - score(rest))
         contrib[i] = gain
         out["owned"][i] = f"adds {fmt_num(gain)} per hand"
+    out["gains"] = contrib
     out["chips_sources"] = sum(
         1 for j in owned if (knowledge.joker_info(j.get("label")) or {}).get("category") == "CHIPS"
     )
@@ -3216,9 +3254,20 @@ def _sell_veto(G: dict[str, Any], joker: dict[str, Any], full: bool) -> str | No
     if any(c.get("key") in makes_joker for c in _area_cards(G, "consumables")):
         return None
     if not full:
+        # F7 / P2-7: with free slots, an unwanted joker that adds nothing now
+        # (not XMULT/SCALE/ECON, does not grow, nothing depends on it) may go.
+        owned = _area_cards(G, "jokers")
+        idx = next((i for i, j in enumerate(owned) if j is joker), None)
+        if (
+            idx is not None
+            and info.get("category") not in ("XMULT", "SCALE", "ECON")
+            and _carry(G, joker) is None
+            and int(shop_impact(G).get("gains", {}).get(idx, 1)) <= 0
+        ):
+            return None
         return (
-            f"Keep {label}: your joker slots are not full, so selling only loses "
-            "a joker. Buy something else, use a card, or call next_round."
+            f"Keep {label}: your joker slots are not full and it adds to your score, "
+            "so selling only loses a joker. Buy something else, use a card, or call next_round."
         )
     money = int(G.get("money") or 0) + int((joker.get("cost") or {}).get("sell") or 0)
 

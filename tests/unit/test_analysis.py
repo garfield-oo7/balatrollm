@@ -1051,6 +1051,17 @@ class TestShopImpact:
         G["jokers"]["cards"][0] = joker("j_troubadour", "Troubadour")  # TRAP
         assert analysis.validate_action(G, "sell", {"joker": 0}) is None
 
+    def test_sell_unwanted_zero_joker_from_a_free_slot(self) -> None:
+        """F7: with free slots, a joker that adds nothing now may be sold."""
+        G = self._shop()
+        G["jokers"]["cards"][0] = joker("j_chaos", "Chaos the Clown")  # adds no score
+        G["money"] = 4
+        assert analysis.validate_action(G, "sell", {"joker": 0}) is None
+        G["jokers"]["cards"][0] = joker("j_jolly", "Jolly Joker")  # Pair: adds
+        assert "slots are not full" in analysis.validate_action(G, "sell", {"joker": 0})
+        G["jokers"]["cards"][1] = joker("j_golden", "Golden Joker")  # ECON: kept
+        assert "slots are not full" in analysis.validate_action(G, "sell", {"joker": 1})
+
     def test_swap_plan_sells_weakest_first(self) -> None:
         G = self._shop()  # owns Jolly Joker + Golden Joker; shop: The Duo, Zany
         G["money"] = 8
