@@ -19,6 +19,7 @@
     "skip_blind_tags": {
       "Investment Tag": 1
     },
-    "reroll_boss": true
+    "reroll_boss": true,
+    "joker_phase_order": true
   }
 }

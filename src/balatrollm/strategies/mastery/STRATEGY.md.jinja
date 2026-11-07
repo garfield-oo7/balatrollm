@@ -19,8 +19,8 @@ You are an expert Balatro player. Each turn you make exactly ONE tool call.
 {% if G.state == "SELECTING_HAND" %}
 # PLAY RULES (go top to bottom, do the first rule that applies)
 1. If a listed play is marked WINS: play exactly its indices. Do not discard first. If you own Square Joker, play the "Suggested action" instead: the same play padded to exactly 4 cards, which grows Square Joker.
-2. If DISCARDS > 0 and (a Draw is marked CHASE, or no listed play reaches PER_HAND, or a Draw shows 50% or more): discard the "Suggested discard" indices. If it says "none", go to rule 3.
-3. Otherwise play the "Suggested action" indices (the best listed play plus safe filler cards).
+2. If DISCARDS > 0 and no listed play WINS: discard the "Suggested discard" indices to dig toward a winning play. It never touches the cards of your best play that reaches PER_HAND, so that play is still there if the dig misses. If it says "none", go to rule 3. If "Discard costs" are listed (Banner, Green Joker, Ramen, Blue Joker, Delayed Gratification), weigh them: playing on pace can be better than digging.
+3. Otherwise play the "Suggested action" indices (the best listed play plus safe filler cards). A play reaching PER_HAND is played without digging only when DISCARDS = 0 or the dig is not worth its cost.
 4. HANDS = 1: use every remaining discard first (rule 2), then play the best listed play.
 5. Boss rules: The Psychic: play exactly 5 cards. The Tooth: play only the scoring cards. The Needle: use all discards, then play once.
 6. Only the listed plays are real hands. Their scores are FLOOR estimates (random effects not counted), so a real score is usually a little higher.
@@ -29,8 +29,8 @@ You are an expert Balatro player. Each turn you make exactly ONE tool call.
 9. Do not sell or rearrange jokers during a round. Exception: Verdant Leaf boss (sell your weakest joker first).
 
 # EXAMPLE (a different hand from yours)
-STATUS: NEED 800, PER_HAND 200, HANDS 4. Listed plays: "Pair [1, 2] = King of Spades, King of Hearts -> 240 (reaches PER_HAND)", "High Card [1] -> 45 (below PER_HAND)". Suggested action: play [1, 2, 5, 6, 7].
-Tool call: play {"reasoning": "No play WINS and no Draw is listed. The Pair of Kings reaches PER_HAND 200, so I play it with 3 filler cards to cycle my hand.", "cards": [1, 2, 5, 6, 7]}
+STATUS: NEED 800, PER_HAND 200, HANDS 4, DISCARDS 3. Listed plays: "Pair [1, 2] = King of Spades, King of Hearts -> 240 (reaches PER_HAND)", "High Card [1] -> 45 (below PER_HAND)". Suggested discard: [0, 5, 6].
+Tool call: discard {"reasoning": "No play WINS and I have 3 discards. The suggested discard keeps the Pair of Kings, so I dig for a bigger hand; the Pair is still there if it misses.", "cards": [0, 5, 6]}
 {% elif G.state == "SHOP" %}
 # SHOP RULES (at most 6 actions, then next_round)
 1. Read STATUS. SPENDABLE is what you may spend now. PRIORITY is what you need most. STATUS judges only the NEXT blind, from the hands you actually make (your deck, jokers and levels): COMFORTABLE = you beat it with a hand to spare; THIN = it takes every hand, or your last blind took your final hand; SHORT = you cannot beat it. While THIN or SHORT, score buys may use SCORE_SPENDABLE. While COMFORTABLE, keep money and empty slots unless the item builds your run. The BOSS CHECK line judges this ante's boss on its own: when it says BOSS NEEDS, a joker or MAIN planet that closes that gap, a counter for that boss, or Director's Cut counts as a score buy (other buys follow STATUS). Never buy a joker the boss switches off or sell one you need against it.

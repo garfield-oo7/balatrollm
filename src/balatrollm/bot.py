@@ -17,6 +17,7 @@ from .analysis import (
     main_commit,
     boss_reroll_reason,
     estimate_play,
+    discard_phase_order,
     joker_order,
     round_record,
     summarize_outcome,
@@ -100,6 +101,8 @@ class Bot:
         self._shop_locked: bool = False
         # Harness boss rerolls per ante (decision C: at most 1)
         self._boss_rerolls: dict[int, int] = {}
+        # Jokers were moved for a discard (P2-15): restore before the next play
+        self._phase_moved: bool = False
         # Tags the harness skipped for that have not paid yet (M1)
         self._pending_tags: list[dict[str, Any]] = []
 
@@ -540,6 +543,9 @@ class Bot:
                 logger.info(f"Harness sold {swap['label']} to make room for {swap['buy']}")
                 swap_note = f"harness sold {swap['label']} (WEAKEST) to make room; "
 
+        if self.harness.get("joker_phase_order") and before.get("state") == "SELECTING_HAND":
+            await self._phase_order(before, fn_name, params)
+
         if (
             fn_name == "next_round"
             and self.harness.get("auto_reorder_jokers")
@@ -641,6 +647,29 @@ class Bot:
             raise BotError("Too many consecutive error calls")
 
         return await self._balatro.call("gamestate")
+
+    async def _phase_order(self, before: dict[str, Any], method: str, params: dict[str, Any]) -> None:
+        """P2-15: before a discard that pays a discard joker, put Blueprint /
+        Brainstorm onto it; before the next play, restore joker_order."""
+        assert self._balatro is not None
+        order: list[int] | None = None
+        if method == "discard":
+            order = discard_phase_order(before, params.get("cards") or [])
+            moved = order is not None
+        elif method == "play" and getattr(self, "_phase_moved", False):
+            order = joker_order(before)
+            moved = False
+            self._phase_moved = False
+        else:
+            return
+        if order is None:
+            return
+        try:
+            await self._balatro.call("rearrange", {"jokers": order})
+            self._phase_moved = moved
+            logger.info(f"Harness joker phase order for {method}: {order}")
+        except BalatroError as e:
+            logger.warning(f"Joker phase order failed: {e}")
 
     def _track_shop_visit(self, before: dict[str, Any]) -> None:
         """Count shop visits; per-visit counters reset when the state leaves the shop."""

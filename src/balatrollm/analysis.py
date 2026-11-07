@@ -832,30 +832,51 @@ def _hypergeom_at_least(total: int, outs: int, draws: int, need: int) -> float:
     return good / comb(total, draws)
 
 
+FACE_RANKS = {"J", "Q", "K"}
+HACK_RANKS = {"2", "3", "4", "5"}
+
+
 def _discard_choice(
     hand: list[dict[str, Any]],
     keep: Iterable[int],
     limit: int,
     first_rank: str | None = None,
+    keys: Iterable[str] = (),
 ) -> list[int]:
     """Pick up to ``limit`` cards to discard, lowest value first, never ``keep``.
 
-    Cards of ``first_rank`` (Mail-In Rebate pays $5 each) go first.
+    Cards of ``first_rank`` (Mail-In Rebate pays $5 each) go first; with
+    Faceless Joker, face cards go first when 3+ can go at once ($5); with
+    Blackboard, red cards go first (held cards must all be black); with Hack,
+    2-5s go last (Hack retriggers them when played) (P6, P7, V8).
     """
     keep = set(keep)
+    keys = set(keys)
     candidates = [
         i
         for i, c in enumerate(hand)
         if i not in keep and c["enh"] not in ("STEEL", "GOLD") and c["seal"] != "BLUE"
     ]
+    faces_first = (
+        "j_faceless" in keys
+        and sum(1 for i in candidates if hand[i]["rank"] in FACE_RANKS) >= 3
+    )
     candidates.sort(
         key=lambda i: (
             first_rank is None or hand[i]["rank"] != first_rank,
+            not (faces_first and hand[i]["rank"] in FACE_RANKS),
+            not ("j_blackboard" in keys and _red(hand[i])),
+            "j_hack" in keys and hand[i]["rank"] in HACK_RANKS,
             hand[i]["enh"] is not None or hand[i]["ed"] is not None,
             CHIP_VALUE.get(hand[i]["rank"] or "", 0),
         )
     )
     return sorted(candidates[:limit])
+
+
+def _red(c: dict[str, Any]) -> bool:
+    """A card that breaks Blackboard while held (not a Spade/Club, not Wild)."""
+    return c["enh"] != "WILD" and (c["stone"] or c["suit"] not in ("S", "C"))
 
 
 def _synthetic_card(suit: str, rank: str) -> dict[str, Any]:
@@ -1259,6 +1280,31 @@ def blue_seal_count(G: dict[str, Any]) -> int:
 GROWS_LATE_ANTE = 5  # self-growing X1 jokers need an empty xMult role from here
 
 
+# P7 / P2-8: jokers that work against each other (advice only)
+CLASHES = {
+    "j_hack": ({"j_faceless"}, "Hack wants 2-5s played; Faceless Joker wants face cards discarded"),
+    "j_faceless": (
+        {"j_hack", "j_photograph", "j_hanging_chad", "j_scary_face", "j_smiley"},
+        "Faceless Joker wants face cards discarded; your face-card scorers want them played",
+    ),
+    "j_photograph": ({"j_faceless"}, "Photograph wants face cards played; Faceless Joker wants them discarded"),
+    "j_scary_face": ({"j_faceless"}, "Scary Face wants face cards played; Faceless Joker wants them discarded"),
+    "j_smiley": ({"j_faceless"}, "Smiley Face wants face cards played; Faceless Joker wants them discarded"),
+}
+
+
+def clash_note(G: dict[str, Any], card: dict[str, Any]) -> str:
+    """'[CLASHES with X: why]' when a shop joker works against one you own."""
+    hit = CLASHES.get(str(card.get("key")))
+    if not hit:
+        return ""
+    others, why = hit
+    owned = [j for j in _area_cards(G, "jokers") if j.get("key") in others]
+    if not owned:
+        return ""
+    return f"[CLASHES with {', '.join(str(j.get('label')) for j in owned)}: {why}]"
+
+
 def grows_xmult(G: dict[str, Any], card: dict[str, Any]) -> str:
     """``[GROWS-XMULT] ...`` for a joker that starts at X1 Mult and grows.
 
@@ -1491,7 +1537,8 @@ def _filler(
         and c["rank"] not in keep_ranks
         and not (suit and (c["suit"] == suit or c["enh"] == "WILD"))
     ]
-    pool.sort(key=lambda i: CHIP_VALUE.get(hand[i]["rank"] or "", 0))
+    board = "j_blackboard" in set(_joker_keys(G)) | set(copied_keys(G))
+    pool.sort(key=lambda i: (not (board and _red(hand[i])), CHIP_VALUE.get(hand[i]["rank"] or "", 0)))
     flags = _classify_flags(G)
     base = classify([hand[i] for i in play], **flags)[0]
     out: list[int] = []
@@ -1562,7 +1609,98 @@ def suggested_discard(
         }
     keep |= protect
     keep |= {i for i, c in enumerate(hand) if c["stone"] and plan["hand"] != "Flush"}
-    return _discard_choice(hand, keep, limit, mail_rank(G))
+    keys = set(_joker_keys(G)) | set(copied_keys(G))
+    return _discard_choice(hand, keep, limit, mail_rank(G), keys)
+
+
+# P2: what one discard costs with jokers that dislike discards (facts only;
+# the harness never refuses a discard)
+DISCARD_COSTS = {
+    "j_banner": "Banner -30 Chips per discard used",
+    "j_green_joker": "Green Joker -1 Mult per discard",
+    "j_ramen": "Ramen -X0.01 per card discarded",
+    "j_blue_joker": "Blue Joker -2 Chips per card drawn from the deck",
+    "j_delayed_grat": "Delayed Gratification pays $2 per discard only if you use none this round",
+}
+
+
+def discard_costs(G: dict[str, Any]) -> list[str]:
+    keys = set(_joker_keys(G)) | set(copied_keys(G))
+    out = [text for key, text in DISCARD_COSTS.items() if key in keys]
+    if "j_mystic_summit" in keys:
+        out.append("Mystic Summit +15 Mult once DISCARDS reach 0 (a gain)")
+    return out
+
+
+def _discard_hurts(G: dict[str, Any]) -> bool:
+    """A joker loses value with every discard: the on-pace dig is shown, not
+    suggested (P2: do not dig when the cost may exceed the gain)."""
+    keys = set(_joker_keys(G)) | set(copied_keys(G))
+    return bool(keys & {"j_banner", "j_green_joker", "j_ramen", "j_blue_joker", "j_delayed_grat"})
+
+
+def house_blind_play(G: dict[str, Any]) -> dict[str, Any] | None:
+    """P2 / The House: every card is face down; estimate a blind play of the
+    cards dealt (they still score). Facts only, Luna chooses."""
+    if _active_boss(G) != "The House":
+        return None
+    hand = [_norm(c) for c in _area_cards(G, "hand")]
+    if not hand or not all(c["hidden"] for c in hand):
+        return None
+    n = 5 if _pad_allowed(G) else 1
+    draws = sample_draws(G)[:SHOP_SAMPLES]
+    scores = [
+        int(estimate_play(G, dealt[:n], dealt[n:])["score"]) for dealt, _ in draws if len(dealt) >= n
+    ]
+    if not scores:
+        return None
+    scores.sort()
+    return {"cards": list(range(min(n, len(hand)))), "typical": scores[len(scores) // 2], "n": n}
+
+
+def _mark_repeats(G: dict[str, Any], plays: list[dict[str, Any]]) -> None:
+    """P4: Card Sharp X3 for a hand type already played this round."""
+    if "j_card_sharp" not in set(_joker_keys(G)) | set(copied_keys(G)):
+        return
+    hands = G.get("hands") or {}
+    for p in plays:
+        if (hands.get(p["hand"]) or {}).get("played_this_round", 0):
+            p["repeat"] = True
+
+
+def repeat_note(G: dict[str, Any]) -> str | None:
+    if "j_card_sharp" not in set(_joker_keys(G)) | set(copied_keys(G)):
+        return None
+    played = [n for n, h in (G.get("hands") or {}).items() if (h or {}).get("played_this_round", 0)]
+    if played:
+        return f"Card Sharp: X3 for {', '.join(played)} (already played this round): repeat it if you can"
+    return "Card Sharp: X3 from the 2nd time a hand type is played this round: pick a type you can repeat"
+
+
+def _blackboard_pad(
+    G: dict[str, Any], hand_raw: list[dict[str, Any]], hand: list[dict[str, Any]], p: dict[str, Any]
+) -> dict[str, Any]:
+    """V8: with Blackboard, add the red cards to the play so every card held is
+    black (X3), when that keeps the hand type and scores more."""
+    if "j_blackboard" not in set(_joker_keys(G)) | set(copied_keys(G)) or p.get("blocked"):
+        return p
+    if not _pad_allowed(G) or _active_boss(G) == "The Psychic":
+        return p
+    limit = int((G.get("hand") or {}).get("highlighted_limit", 5) or 5)
+    rest = [i for i in range(len(hand)) if i not in p["cards"]]
+    if any(hand[i]["hidden"] for i in rest):
+        return p
+    reds = [i for i in rest if _red(hand[i])]
+    if not reds or len(p["cards"]) + len(reds) > limit:
+        return p
+    cards = sorted([*p["cards"], *reds])
+    flags = _classify_flags(G)
+    if classify([hand[i] for i in cards], **flags)[0] != p["hand"]:
+        return p
+    est = estimate_play(G, [hand_raw[i] for i in cards], [hand_raw[i] for i in range(len(hand)) if i not in cards])
+    if int(est["score"]) <= int(p["score"]):
+        return p
+    return {**p, "cards": cards, "score": int(est["score"]), "padded": "red cards added: every held card is black (Blackboard X3)"}
 
 
 def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
@@ -1587,10 +1725,16 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         # Prefer the version that keeps a Blue Seal card held if it still wins.
         if alt and alt["score"] >= margin * remaining and not alt["blocked"]:
             p = alt
+        p = _blackboard_pad(G, hand_raw, hand, p)
         wins = p["score"] >= margin * remaining and not p["blocked"]
         plays.append({**p, "wins": wins, "reaches_pace": p["score"] >= per_hand})
+    plays.sort(key=lambda p: -p["score"])
+    _mark_repeats(G, plays)
     winners = [p for p in plays if p["wins"]]
-    protect = set(winners[0]["cards"]) if winners else set()
+    # P1: with no winner, dig toward a winning play but keep the best play
+    # that is on pace (it is still there if the dig misses)
+    on_pace = next((p for p in plays if p["reaches_pace"] and not p["blocked"]), None)
+    protect = set(winners[0]["cards"]) if winners else set(on_pace["cards"]) if on_pace else set()
     discard = suggested_discard(G, plan, protect)
     # Only draws the plan allows are shown (Flush/Straight only in the OPEN antes
     # or when MAIN_HAND is that hand); a strong one beats spending a weak hand.
@@ -1690,6 +1834,13 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
             "cards": discard,
             "why": "no play reaches PER_HAND; dig toward MAIN_HAND",
         }
+    elif discards > 0 and discard and on_pace and not _discard_hurts(G):
+        action = {
+            "tool": "discard",
+            "cards": discard,
+            "why": f"no play wins yet: dig toward a winning play and keep your {on_pace['hand']} "
+            "(play on pace only with no discards left)",
+        }
     elif plays:
         best = plays[0]
         cards = list(best["cards"])
@@ -1733,6 +1884,11 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         "strong_draw": strong_draw,
         "blue_in_hand": sorted(blue_in_hand),
         "suit_pays": suit_pays(G),
+        "discard_costs": discard_costs(G),
+        "mail_rank": mail_rank(G),
+        "blind_play": house_blind_play(G),
+        "repeats": repeat_note(G),
+        "acrobat": "j_acrobat" in (set(_joker_keys(G)) | set(copied_keys(G))),
         "hand_suits": analysis_["hand_suits"],
         "deck_size": analysis_["deck_size"],
         "deck_suits": analysis_["deck_suits"],
@@ -2205,6 +2361,62 @@ def run_status(
     }
 
 
+def _castle_suit(j: dict[str, Any]) -> str | None:
+    effect = str((j.get("value") or {}).get("effect", "") or "")
+    m = re.search(r"discarded (heart|diamond|club|spade)", effect, re.IGNORECASE)
+    return SUIT_LETTER.get(m.group(1).lower()) if m else None
+
+
+def discard_payers(G: dict[str, Any], cards: Iterable[int]) -> list[int]:
+    """Owned jokers this discard triggers (P2-15): Mail-In Rebate rank,
+    Faceless Joker 3+ faces, Trading Card first single-card discard, Burnt
+    Joker first discard, Castle suit, Hit the Road Jacks."""
+    hand = [_norm(c) for c in _area_cards(G, "hand")]
+    try:
+        chosen = [hand[int(i)] for i in cards]
+    except (IndexError, TypeError, ValueError):
+        return []
+    first = int((G.get("round") or {}).get("discards_used", 0) or 0) == 0
+    ranks = [c["rank"] for c in chosen]
+    out = []
+    for i, j in enumerate(_area_cards(G, "jokers")):
+        key = j.get("key")
+        hit = (
+            (key == "j_mail" and (r := mail_rank(G)) is not None and r in ranks)
+            or (key == "j_faceless" and sum(1 for r in ranks if r in FACE_RANKS) >= 3)
+            or (key == "j_trading" and first and len(chosen) == 1)
+            or (key == "j_burnt" and first)
+            or (key == "j_castle" and (s := _castle_suit(j)) is not None and any(c["suit"] == s for c in chosen))
+            or (key == "j_hit_the_road" and "J" in ranks)
+        )
+        if hit:
+            out.append(i)
+    return out
+
+
+def discard_phase_order(G: dict[str, Any], cards: Iterable[int]) -> list[int] | None:
+    """Joker order for this discard so Blueprint (copies the joker to its
+    right) / Brainstorm (copies the leftmost joker) copy the joker the discard
+    pays (P2-15). None: nothing to change."""
+    jokers = _area_cards(G, "jokers")
+    keys = [j.get("key", "") for j in jokers]
+    if not {"j_blueprint", "j_brainstorm"} & set(keys):
+        return None
+    payers = discard_payers(G, cards)
+    if not payers:
+        return None
+    target = payers[0]
+    order = list(range(len(jokers)))
+    if "j_blueprint" in keys:
+        bp = keys.index("j_blueprint")
+        order.remove(bp)
+        order.insert(order.index(target), bp)
+    if "j_brainstorm" in keys and keys.index("j_brainstorm") != target:
+        order.remove(target)
+        order.insert(0, target)
+    return None if order == list(range(len(jokers))) else order
+
+
 def joker_order(G: dict[str, Any]) -> list[int] | None:
     """Ideal joker order (+Chips, +Mult, scaling, xMult, Polychrome right), or None.
 
@@ -2240,18 +2452,27 @@ def joker_order(G: dict[str, Any]) -> list[int] | None:
     if "j_ceremonial" in keys:  # order matters destructively, leave it to the player
         return None
     order = sorted(range(len(jokers)), key=lambda i: (weight(jokers[i]), i))
+    # P2-13: the copy target is the hand-defining joker (MAIN_HAND commit
+    # trigger, e.g. Baron), else the strongest xMult
+    trigger = (main_hand_plan(G).get("commit") or {}).get("trigger")
+    copiers = {"j_blueprint", "j_brainstorm"}
+    defining = next(
+        (i for i, j in enumerate(jokers) if trigger and j.get("label") == trigger and keys[i] not in copiers),
+        None,
+    )
     if "j_blueprint" in keys:
         bp = keys.index("j_blueprint")
         order.remove(bp)
-        xs = [i for i in order if weight(jokers[i]) >= 5]
-        target = xs[-1] if xs else order[-1]
+        xs = [i for i in order if weight(jokers[i]) >= 5 and keys[i] not in copiers]
+        target = defining if defining is not None else xs[-1] if xs else order[-1]
         order.insert(order.index(target), bp)
     if "j_brainstorm" in keys:
         bs = keys.index("j_brainstorm")
-        xs = [i for i in order if i != bs and weight(jokers[i]) >= 5]
-        if xs:
-            order.remove(xs[-1])
-            order.insert(0, xs[-1])
+        xs = [i for i in order if i != bs and weight(jokers[i]) >= 5 and keys[i] not in copiers]
+        target = defining if defining is not None else xs[-1] if xs else None
+        if target is not None and target != bs:
+            order.remove(target)
+            order.insert(0, target)
     return None if order == list(range(len(jokers))) else order
 
 
@@ -2886,6 +3107,8 @@ BOSS_REROLL_KEEP = 10
 def face_build(G: dict[str, Any]) -> bool:
     """True when an owned scoring joker works off face cards (The Plant hurts)."""
     for j in _area_cards(G, "jokers"):
+        if j.get("key") in ("j_baron", "j_shoot_the_moon"):  # held Kings / Queens
+            return True
         info = knowledge.joker_info(j.get("label") or j.get("key")) or {}
         if info.get("family") == "face" and info.get("category") != "ECON":
             return True
@@ -3611,6 +3834,7 @@ TEMPLATE_GLOBALS = {
     "suggest_targets": suggest_targets,
     "joker_order": joker_order,
     "grows_xmult": grows_xmult,
+    "clash_note": clash_note,
     "joker_tag": knowledge.joker_tag,
     "consumable_tag": knowledge.consumable_tag,
     "voucher_tag": knowledge.voucher_tag,
