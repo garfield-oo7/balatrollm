@@ -36,6 +36,10 @@ from .strategy import StrategyManager, StrategyManifest
 
 logger = logging.getLogger(__name__)
 
+SHOP_STATES = ("SHOP", "SMODS_BOOSTER_OPENED")
+# Refused calls in a row in one shop visit before the harness leaves the shop
+SHOP_REFUSALS_TO_LEAVE = 3
+
 
 class BotError(Exception):
     """Base exception for bot errors."""
@@ -70,6 +74,10 @@ class Bot:
         self._consecutive_vetoes: int = 0
         self._consecutive_rearranges: int = 0
         self._shop_rerolls: int = 0
+        # One shop visit = SHOP plus any pack opened from it (SMODS_BOOSTER_OPENED)
+        self._in_shop: bool = False
+        self._shop_visits: int = 0
+        self._shop_refusal_exits: int = 0
         # Harness boss rerolls per ante (Retcon has no game limit)
         self._boss_rerolls: dict[int, int] = {}
 
@@ -185,7 +193,9 @@ class Bot:
             await self._balatro.call("menu")
             await self._wait_for_menu()
             gamestate = await self._balatro.call("start", start_args)
-            if random_start and not seeds.started_on(start_args["seed"], gamestate):
+            # RANDOM and SEED-<label> replays must both start on the recorded seed
+            check_seed = random_start or seeds.is_label(self.task.seed)
+            if check_seed and not seeds.started_on(start_args["seed"], gamestate):
                 self._finish_reason = "unexpected_error"
                 logger.error(f"Game did not start on the seed generated for {self.task.seed}")
                 raise BotError(f"Game did not start on the seed generated for {self.task.seed}")
@@ -474,8 +484,7 @@ class Bot:
         ################################################################################
 
         veto: str | None = None
-        if before.get("state") != "SHOP":
-            self._shop_rerolls = 0
+        self._track_shop_visit(before)
         if self.harness.get("validate_actions") and before:
             veto = validate_action(before, fn_name, params, self._shop_rerolls)
         max_rearranges = int(self.harness.get("max_consecutive_rearranges", 0) or 0)
@@ -489,7 +498,7 @@ class Bot:
         else:
             self._consecutive_rearranges = 0
         if veto is not None:
-            return await self._handle_veto(veto)
+            return await self._handle_veto(veto, before)
         if fn_name == "reroll":
             self._shop_rerolls += 1
 
@@ -497,7 +506,7 @@ class Bot:
         if self.harness.get("auto_swap_jokers") and before:
             swap = swap_plan(before, fn_name, params)
             if isinstance(swap, str):
-                return await self._handle_veto(swap)
+                return await self._handle_veto(swap, before)
             if swap:
                 try:
                     await self._balatro.call("sell", {"joker": swap["sell"]})
@@ -605,8 +614,23 @@ class Bot:
 
         return await self._balatro.call("gamestate")
 
-    async def _handle_veto(self, msg: str) -> dict[str, Any]:
-        """Handle an action refused by the harness before reaching the game."""
+    def _track_shop_visit(self, before: dict[str, Any]) -> None:
+        """Count shop visits; per-visit counters reset when the state leaves the shop."""
+        in_shop = before.get("state") in SHOP_STATES
+        if in_shop and not self._in_shop:
+            self._shop_visits += 1
+        if not in_shop:
+            self._shop_rerolls = 0
+        self._in_shop = in_shop
+
+    async def _handle_veto(
+        self, msg: str, before: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Handle an action refused by the harness before reaching the game.
+
+        In a shop, repeated refusals make the harness leave the shop for Luna
+        (owner, pass 1 Seed P) instead of ending a live run.
+        """
         assert self._balatro is not None
         assert self._collector is not None
 
@@ -614,10 +638,48 @@ class Bot:
         self._last_failed_msg = f"Refused by harness: {msg}"
         self._collector.record_call("failed")
         self._consecutive_vetoes += 1
+        state = (before or {}).get("state")
+        if state in SHOP_STATES and self._consecutive_vetoes >= SHOP_REFUSALS_TO_LEAVE:
+            return await self._leave_shop(before or {})
         if self._consecutive_vetoes >= 5:
             self._finish_reason = "consecutive_failed_calls"
             raise BotError("Too many consecutive refused calls")
         return await self._balatro.call("gamestate")
+
+    async def _leave_shop(self, before: dict[str, Any]) -> dict[str, Any]:
+        """Skip an open pack, then call next_round for Luna (logged)."""
+        assert self._balatro is not None
+        n = self._consecutive_vetoes
+        self._consecutive_vetoes = 0
+        self._shop_refusal_exits += 1
+        money = before.get("money")
+        try:
+            gamestate = before
+            if before.get("state") == "SMODS_BOOSTER_OPENED":
+                gamestate = await self._balatro.call("pack", {"skip": True})
+            if gamestate.get("state") == "SHOP":
+                gamestate = await self._balatro.call("next_round")
+        except BalatroError as e:
+            logger.warning(f"Harness could not leave the shop: {e}")
+            return await self._balatro.call("gamestate")
+        logger.info(f"Harness left the shop after {n} refusals in a row (money ${money})")
+        self._last_failed_msg = (
+            f"The harness left the shop for you after {n} refused actions in a row."
+        )
+        self._history.append(
+            {
+                "method": "next_round",
+                "params": {},
+                "reasoning": f"harness: left the shop after {n} refusals",
+                "state": before.get("state", ""),
+                "ante": before.get("ante_num"),
+                "round": before.get("round_num"),
+                "result": f"harness left the shop after {n} refused actions (${money})",
+                "score": None,
+                "estimate": None,
+            }
+        )
+        return gamestate
 
     async def _handle_failed_call(self, msg: str) -> dict[str, Any]:
         """Handle valid tool call that resulted in BalatroError."""

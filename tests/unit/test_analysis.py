@@ -345,6 +345,48 @@ class TestRetriggerSynergies:
         assert floor == 38 * 2 and expected == 38 * (2 + 12)
 
 
+class TestPaddingKeepsHandType:
+    """Pass 1 Seeds Q and S: the suggested 'Pair' padded into a Full House /
+    Two Pair / Four of a Kind with the lowest cards."""
+
+    def _flags(self, G: dict[str, Any]) -> dict[str, bool]:
+        return analysis._classify_flags(G)
+
+    def test_filler_never_pairs_or_trips_the_play(self) -> None:
+        # Seed Q hand 1: 10s + 2 2 2 = Full House
+        G = make_state("H_T C_T S_2 C_2 D_2 H_9 S_8 D_6")
+        hand = [analysis._norm(c) for c in G["hand"]["cards"]]
+        plan = analysis.main_hand_plan(G)
+        fill = analysis._filler(G, hand, [0, 1], plan, 3)
+        played = [hand[i] for i in [0, 1, *fill]]
+        assert analysis.classify(played, **self._flags(G))[0] == "Pair"
+        assert len(fill) == 3
+
+    def test_filler_never_makes_a_flush(self) -> None:
+        G = make_state("H_K D_K H_2 H_3 H_4 C_9 S_7 H_6")
+        hand = [analysis._norm(c) for c in G["hand"]["cards"]]
+        plan = {**analysis.main_hand_plan(G), "suit": None}
+        fill = analysis._filler(G, hand, [0, 1], plan, 3)
+        played = [hand[i] for i in [0, 1, *fill]]
+        assert analysis.classify(played, **self._flags(G))[0] == "Pair"
+
+    def test_suggested_pair_stays_a_pair(self) -> None:
+        # Seed S hand 2: 3 3 + 3 3 6 = Four of a Kind; keep the Pair of 3s alone
+        G = make_state("H_3 S_3 C_3 D_3 H_6 S_Q D_9 C_7", hands_left=2)
+        G["blinds"]["small"]["score"] = 100_000
+        advice = analysis.play_advice(G)
+        if advice["action"]["tool"] == "play":
+            cards = [analysis._norm(G["hand"]["cards"][i]) for i in advice["action"]["cards"]]
+            best = advice["plays"][0]["hand"]
+            assert analysis.classify(cards, **self._flags(G))[0] == best
+
+    def test_baron_keeps_kings_out_of_the_filler(self) -> None:
+        G = make_state("H_9 C_9 S_K D_2 H_3 C_K S_5 D_7", [joker("j_baron", "Baron")])
+        hand = [analysis._norm(c) for c in G["hand"]["cards"]]
+        fill = analysis._filler(G, hand, [0, 1], analysis.main_hand_plan(G), 3)
+        assert all(hand[i]["rank"] != "K" for i in fill)
+
+
 class TestPlayAdvice:
     def test_wins_needs_margin(self) -> None:
         # With a joker the floor estimate needs a 10% margin to count as WINS.
@@ -383,10 +425,13 @@ class TestPlayAdvice:
         assert action["tool"] == "use" and action["consumable"] == 0
         assert action["cards"] == analysis.suggest_targets(G, G["consumables"]["cards"][0])
 
-    def test_discard_of_winning_cards_is_vetoed(self) -> None:
+    def test_discard_is_never_refused(self) -> None:
+        """Owner (pass 1): the harness never refuses a discard; WINS is advice."""
         G = make_state("H_A H_K H_T H_5 H_4 S_4 C_4 D_9", chips=200)
-        assert analysis.validate_action(G, "discard", {"cards": [0, 5]})
+        assert analysis.validate_action(G, "discard", {"cards": [0, 5]}) is None
         assert analysis.validate_action(G, "discard", {"cards": [5, 6]}) is None
+        G["round"]["discards_left"] = 0
+        assert analysis.validate_action(G, "discard", {"cards": [5, 6]})
         assert analysis.validate_action(G, "play", {"cards": [0, 1, 2, 3, 4, 5]})
 
 
@@ -985,3 +1030,38 @@ class TestBossReroll:
             verdict, hint = knowledge.VOUCHERS[name]
             assert verdict == "BUY"
             assert "insurance" in hint
+
+
+ANCIENT_HEARTS = "Each played card with Heart suit gives X1.5 Mult when scored, suit changes at end of round"
+
+
+class TestSuitJokers:
+    """Pass 1 Seed M: Ancient Joker (Hearts) was invisible; the advice discarded Hearts."""
+
+    def _seed_m(self) -> dict[str, Any]:
+        G = make_state(
+            "H_6 C_5 H_A H_T H_9 C_8 D_8 C_T",
+            [joker("j_ancient", "Ancient Joker", ANCIENT_HEARTS)],
+        )
+        G["ante_num"] = 2
+        return G
+
+    def test_ancient_joker_scores_its_suit(self) -> None:
+        G = self._seed_m()
+        hand = G["hand"]["cards"]
+        hearts = analysis.estimate_play(G, [hand[4]], [])  # 9 of Hearts high card
+        clubs = analysis.estimate_play(G, [hand[5]], [])  # 8 of Clubs high card
+        assert analysis.ancient_suit(G) == "H"
+        assert hearts["mult"] == 1.5 and clubs["mult"] == 1
+
+    def test_discard_keeps_the_paid_suit(self) -> None:
+        G = self._seed_m()
+        advice = analysis.play_advice(G)
+        hand = G["hand"]["cards"]
+        assert all(hand[i]["value"]["suit"] != "H" for i in advice["discard"])
+        assert any(d["kind"] == "Flush" and d.get("suit") == "H" for d in advice["draws"])
+
+    def test_round_line_names_the_suit(self) -> None:
+        sm = StrategyManager("mastery")
+        text = sm.render_gamestate(self._seed_m(), rounds=[], history=[], flags={})
+        assert "Ancient Joker: Hearts this round, X1.5 Mult per Heart scored" in text
