@@ -599,11 +599,24 @@ def copied_keys(G: dict[str, Any]) -> list[str]:
     return out
 
 
+def _estimate_ctx(G: dict[str, Any]) -> dict[str, Any]:
+    """Per-G values estimate_play needs (computed once per _best_play call)."""
+    keys = _joker_keys(G)
+    return {
+        "keys": keys,
+        "keyset": set(keys),
+        "boss": _active_boss(G),
+        "ancient": ancient_suit(G),
+        "copied": copied_keys(G),
+    }
+
+
 def estimate_play(
     G: dict[str, Any],
     played_raw: list[dict[str, Any]],
     held_raw: list[dict[str, Any]],
     expected: bool = False,
+    _pre: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Estimate the score of playing ``played_raw`` while holding ``held_raw``.
 
@@ -614,12 +627,17 @@ def estimate_play(
     ``unknown``. ``expected=True`` counts them at their average (Lucky card
     +4 Mult per trigger, Misprint +10 Mult, Bloodstone x1.25 per Heart) for
     valuing jokers in the shop.
+
+    ``_pre`` (sampler only) carries values the caller already has for this G
+    and these cards: ``ctx`` from _estimate_ctx(G) and the normalised
+    ``played`` / ``held`` cards.
     """
-    keys = _joker_keys(G)
-    keyset = set(keys)
-    boss = _active_boss(G)
-    played = [_norm(c) for c in played_raw]
-    held = [_norm(c) for c in held_raw]
+    ctx = _pre["ctx"] if _pre else _estimate_ctx(G)
+    keys = ctx["keys"]
+    keyset = ctx["keyset"]
+    boss = ctx["boss"]
+    played = _pre["played"] if _pre else [_norm(c) for c in played_raw]
+    held = _pre["held"] if _pre else [_norm(c) for c in held_raw]
     htype, scoring = classify(
         played,
         four_fingers="j_four_fingers" in keyset,
@@ -636,7 +654,7 @@ def estimate_play(
     groups = _suit_groups(smeared)
     hands_left = int((G.get("round") or {}).get("hands_left", 0))
     scored_cards = [played[i] for i in scoring]
-    ancient = ancient_suit(G)
+    ancient = ctx["ancient"]
 
     def is_face(c: dict[str, Any]) -> bool:
         return not c["stone"] and (pareidolia or (c["rank"] in FACE_RANKS))
@@ -731,7 +749,7 @@ def estimate_play(
 
     # Held-in-hand effects (Blueprint / Brainstorm copies of Baron, Mime and
     # Shoot the Moon count as extra copies)
-    copied = copied_keys(G)
+    copied = ctx["copied"]
     mime = keys.count("j_mime") + copied.count("j_mime")
     barons = keys.count("j_baron") + copied.count("j_baron")
     moons = keys.count("j_shoot_the_moon") + copied.count("j_shoot_the_moon")
@@ -2115,7 +2133,9 @@ def ante_goals(
     hands = G.get("hands") or {}
     level = int((hands.get(plan["hand"]) or {}).get("level", 1))
     scale = sum(1 for i in infos if i["category"] == "SCALE")
-    weakest = (shop_impact(G).get("weakest") or {}).get("label") if count else None
+    # WEAKEST (a full shop valuation) only matters for a [CHIPS] joker in full slots
+    chips_owned = any(i["category"] == "CHIPS" for i in infos)
+    weakest = (shop_impact(G).get("weakest") or {}).get("label") if chips_owned and count >= limit else None
     # A [CHIPS] joker is filler only when it is also WEAKEST (Blue Joker can carry a run).
     filler = sum(
         1
@@ -2775,16 +2795,38 @@ def _candidates(G: dict[str, Any], norm: list[dict[str, Any]], pad_to: int) -> l
     return out
 
 
+HELD_CANDIDATE_KEYS = frozenset({"j_blackboard", "j_baron", "j_shoot_the_moon", "j_raised_fist"})
+
+
 def _best_play(
-    G: dict[str, Any], hand: list[dict[str, Any]], pad_to: int, only: str | None = None
+    G: dict[str, Any],
+    hand: list[dict[str, Any]],
+    pad_to: int,
+    only: str | None = None,
+    memo: dict[Any, Any] | None = None,
 ) -> tuple[int, str, list[int]]:
-    """Best candidate play (score, hand type, indices); ``only`` = that type."""
-    norm = [_norm(c) for c in hand]
+    """Best candidate play (score, hand type, indices); ``only`` = that type.
+
+    ``memo`` (one dict per dealt hand, sampler only) keeps the normalised
+    cards and the candidate plays, which depend only on the hand, the pad
+    size, the classify flags and the held-card jokers owned.
+    """
+    ctx = _estimate_ctx(G)
+    if memo is None:
+        norm = [_norm(c) for c in hand]
+        cands = _candidates(G, norm, pad_to)
+    else:
+        norm = memo.get("norm") or memo.setdefault("norm", [_norm(c) for c in hand])
+        flags = _classify_flags(G)
+        sig = (pad_to, tuple(sorted(flags.items())), frozenset((ctx["keyset"] | set(ctx["copied"])) & HELD_CANDIDATE_KEYS))
+        cands = memo.get(sig)
+        if cands is None:
+            cands = memo[sig] = _candidates(G, norm, pad_to)
     best = (0, "High Card", [])
-    for play in _candidates(G, norm, pad_to):
-        played = [hand[i] for i in play]
-        held = [hand[i] for i in range(len(hand)) if i not in play]
-        est = estimate_play(G, played, held, expected=True)
+    for play in cands:
+        rest = [i for i in range(len(hand)) if i not in play]
+        pre = {"ctx": ctx, "played": [norm[i] for i in play], "held": [norm[i] for i in rest]}
+        est = estimate_play(G, [hand[i] for i in play], [hand[i] for i in rest], expected=True, _pre=pre)
         if est["blocked"] or (only is not None and est["hand"] != only):
             continue
         if est["score"] > best[0]:
@@ -2833,15 +2875,34 @@ def _currently(j: dict[str, Any]) -> float:
     return float(m.group(2)) if m else 0.0
 
 
+class _Dealt(list):
+    """Dealt hands plus the first best play of each hand the discard left
+    unchanged, valid only for the G object they were computed with."""
+
+    def __init__(self, G: dict[str, Any], pad: int) -> None:
+        super().__init__()
+        self.G = G
+        self.pad = pad
+        self.first: dict[int, tuple] = {}
+        self.memo: list[dict[Any, Any]] = []
+
+
 def _dealt_hands(G: dict[str, Any], draws: list, *, boss: str = "", discards: bool = True) -> list[list]:
     """The hand Luna plays from each draw: after one discard (K2) when allowed."""
     pad = 5 if boss == "The Psychic" else 0
-    out = []
+    out = _Dealt(G, pad)
     for hand, refill in draws:
+        memo: dict[Any, Any] = {}
         if discards:
-            _s, t, _p = _best_play(G, hand, pad)
-            hand = _after_discard(G, hand, refill, t)
+            first = _best_play(G, hand, pad, memo=memo)
+            new = _after_discard(G, hand, refill, first[1])
+            if new is hand:
+                out.first[len(out)] = first
+            else:
+                memo = {}
+            hand = new
         out.append(hand)
+        out.memo.append(memo)
     return out
 
 
@@ -2856,8 +2917,10 @@ def _score_hands(G: dict[str, Any], dealt: list[list], *, boss: str = "") -> dic
     pad = 5 if boss == "The Psychic" else 0
     hands = _hands_per_round(G)
     chosen = []
-    for hand in dealt:
-        s, t, play = _best_play(G, hand, pad)
+    reuse = dealt.first if isinstance(dealt, _Dealt) and dealt.G is G and dealt.pad == pad else {}
+    memos = dealt.memo if isinstance(dealt, _Dealt) else None
+    for n, hand in enumerate(dealt):
+        s, t, play = reuse[n] if n in reuse else _best_play(G, hand, pad, memo=memos[n] if memos else None)
         chosen.append((s, t, hand, play))
     if not chosen:
         return {"per_hand": 0, "types": Counter(), "chosen": []}
@@ -3249,13 +3312,14 @@ def _shop_impact(G: dict[str, Any]) -> dict[str, Any]:
     draws = sample_draws(G)[:SHOP_SAMPLES]
     if not draws:
         return out
-    dealt = _dealt_hands(_with_jokers(G0, owned), draws)
+    G_owned = _with_jokers(G0, owned)
+    dealt = _dealt_hands(G_owned, draws)
 
     def score(js: list[dict[str, Any]], Gx: dict[str, Any] | None = None) -> float:
         Gv = _with_jokers(Gx if Gx is not None else G0, js)
         return _score_hands(Gv, dealt)["per_hand"]
 
-    base_run = _score_hands(_with_jokers(G0, owned), dealt)
+    base_run = _score_hands(G_owned, dealt)
     base = base_run["per_hand"]
     types = base_run["types"]
     out["score"] = base
@@ -3459,9 +3523,10 @@ def swap_plan(
         if grows:
             rest = [x for n, x in enumerate(owned) if n != sell]
             G0 = _neutral(G)
-            dealt = _dealt_hands(_with_jokers(G0, owned), sample_draws(G)[:SHOP_SAMPLES])
+            G_owned = _with_jokers(G0, owned)
+            dealt = _dealt_hands(G_owned, sample_draws(G)[:SHOP_SAMPLES])
             types = Counter(power_check(G).get("types") or {})
-            now = _score_hands(_with_jokers(G0, owned), dealt)["per_hand"]
+            now = _score_hands(G_owned, dealt)["per_hand"]
             later = _score_hands(grown(_with_jokers(G0, [*rest, card]), GROWTH_BLINDS, types), dealt)["per_hand"] - now
         if later is None or later <= 0:
             return (
