@@ -21,6 +21,9 @@
 {%- endif -%}
 {%- endmacro -%}
 # STATUS
+{%- if flags and flags.lessons %}{% for l in past_lessons(G, S.status, flags.lessons if flags.lessons is string else none) %}
+- Past games: {{ l }}
+{%- endfor %}{% endif %}
 - Ante {{ S.ante }}/8, round {{ G.round_num }}, money ${{ S.money }}
 - MAIN_HAND: {{ S.main_label }}{% if S.main_suit %} (MAIN_SUIT: {{ S.main_suit }}){% endif %} - {{ S.main_reason }}
 - Jokers {{ S.jokers }}/{{ S.joker_limit }}, SLOTS_FREE {{ S.slots_free }}, XMULT_OWNED {{ S.xmult_owned }}
