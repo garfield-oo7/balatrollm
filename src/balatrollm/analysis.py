@@ -1934,6 +1934,64 @@ def ante_goals(
     return goals
 
 
+SITUATIONS = ("COMFORTABLE", "THIN", "SHORT")
+
+
+def situation(
+    G: dict[str, Any],
+    power: dict[str, Any],
+    rounds: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """COMFORTABLE / THIN / SHORT for the NEXT blind only (owner: "1 round
+    ahead"); the boss counts only when it is that blind, against its hands.
+
+    hands_needed = ceil(target / per hand): <= hands - 1 COMFORTABLE (a hand to
+    spare), == hands THIN, > hands SHORT (K4). Last blind won on its final
+    hand -> at least THIN. Safety net (fix 2): THIN/SHORT becomes COMFORTABLE
+    when the last 2 blinds were each won with 2+ hands left, never for a boss.
+    """
+    cur = current_blind(G) if G.get("state") == "SELECTING_HAND" else None
+    nxt = cur or next_blind(G) or {}
+    kind = nxt.get("kind")
+    per = int(power["boss_per_hand"] if kind == "boss" else power["per_hand"])
+    if cur:
+        prog = blind_progress(G) or {}
+        target, hands = int(prog.get("remaining") or 0), int(prog.get("hands_left") or 0)
+    else:
+        target = int(nxt.get("score") or 0)
+        hands = int(power["boss_hands_allowed"]) if kind == "boss" else _hands_per_round(G)
+    last = rounds[-1] if rounds else None
+    last_spare = int(last.get("hands_left", 0)) if last else None
+    status, need = "UNKNOWN", None
+    if per and target and hands:
+        need = -(-target // per)
+        status = SITUATIONS[0 if need <= hands - 1 else 1 if need == hands else 2]
+    elif last is not None:
+        status = "COMFORTABLE" if last_spare else "THIN"
+    if not cur and last_spare == 0 and status == "COMFORTABLE":
+        status = "THIN"
+    net = False
+    if (
+        status in ("THIN", "SHORT")
+        and kind != "boss"
+        and rounds
+        and len(rounds) >= 2
+        and all(int(r.get("hands_left", 0)) >= 2 for r in rounds[-2:])
+    ):
+        status, net = "COMFORTABLE", True
+    return {
+        "status": status,
+        "hands_needed": need,
+        "hands": hands,
+        "kind": kind,
+        "name": nxt.get("name") or (kind or "").title(),
+        "target": target,
+        "per_hand": per,
+        "net": net,
+        "last_spare": last_spare,
+    }
+
+
 def run_status(
     G: dict[str, Any],
     rounds: list[dict[str, Any]] | None = None,
@@ -1950,8 +2008,7 @@ def run_status(
     xmult = xmult_owned(G, plan)
     floor = money_floor(G)
 
-    # Power check from the current deck, jokers and hand levels (not from past
-    # scores: those miss scaling jokers' growth and count junk/filler hands).
+    # Strength check (P2-1/P2-2): the next blind only; the boss has its own line.
     scores = _play_scores(history)[-3:]
     nxt = next_blind(G) or current_blind(G) or {}
     nxt_target = int(nxt.get("score") or 0)
@@ -1959,21 +2016,15 @@ def run_status(
     boss_name = str(boss.get("name") or "")
     boss_target = int(boss.get("score") or 0)
     power = power_check(G, plan)
-    hands_needed = None
-    boss_hands = None
-    status = "UNKNOWN"
-    if power["per_hand"] and nxt_target:
-        per = power["boss_per_hand"] if nxt.get("kind") == "boss" else power["per_hand"]
-        hands_needed = -(-nxt_target // max(int(per), 1))
-        status = "ON TRACK" if hands_needed <= 3 else "TOO WEAK"
-    if power["boss_per_hand"] and boss_target:
-        boss_hands = -(-boss_target // max(int(power["boss_per_hand"]), 1))
-        if boss_hands > power["boss_hands_allowed"]:
-            status = "TOO WEAK"
-    if status == "UNKNOWN" and rounds:
-        status = "ON TRACK" if int(rounds[-1].get("hands_left", 0)) >= 1 else "TOO WEAK"
-    # TOO WEAK no longer frees all money: rerolls and routine buys keep FLOOR;
-    # only score buys may go down to RESERVE (see "score_spendable").
+    sit = situation(G, power, rounds)
+    status = sit["status"]
+    hands_needed = sit["hands_needed"]
+    boss_hands = (
+        -(-boss_target // max(int(power["boss_per_hand"]), 1))
+        if power["boss_per_hand"] and boss_target
+        else None
+    )
+    bcheck = boss_check(G, history) if boss.get("status") in ("SELECT", "UPCOMING") else None
     effective_floor = floor
 
     econ = sum(1 for i in infos if i["category"] == "ECON")
@@ -2012,6 +2063,15 @@ def run_status(
         "xmult_owned": xmult,
         "status": status,
         "hands_needed": hands_needed,
+        "next_kind": sit["kind"],
+        "sit_target": sit["target"],
+        "sit_per": sit["per_hand"],
+        "next_name": sit["name"],
+        "next_hands": sit["hands"],
+        "safety_net": sit["net"],
+        "last_spare": sit["last_spare"],
+        "boss_check": bcheck,
+        "best_types": power.get("best_types", []),
         "boss_name": boss_name,
         "boss_target": boss_target,
         "boss_hands": boss_hands,
@@ -2256,80 +2316,424 @@ def _debuffed(card: dict[str, Any]) -> dict[str, Any]:
     return {**card, "state": {**(card.get("state") or {}), "debuff": True}}
 
 
-def power_check(G: dict[str, Any], plan: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Expected MAIN_HAND score per hand now and against this ante's boss.
+# ---------------------------------------------------------------------------
+# P2-1 strength check: the hands Luna actually makes (sampled), not a typical
+# MAIN_HAND play. Deterministic per deck (seeded from the cards), cached per
+# gamestate. Knobs (pass2_build_plan.md "Pre-registered calibration knobs").
+# ---------------------------------------------------------------------------
+SAMPLES = 150  # K1
+SHOP_SAMPLES = 60  # shop variants reuse the first draws (common random numbers)
+REFILL = 5
+DISCARD_FROM = {"High Card", "Pair"}  # K2: one discard per hand from these
+TWO_PAIR_TYPES = {"Two Pair", "Full House"}
+_CACHE: "OrderedDict[str, Any]" = OrderedDict()
+_CACHE_MAX = 64
 
-    Starts from the TYPICAL MAIN_HAND score of the current deck, jokers (at
-    their current, grown values) and hand levels, then weights it by how often
-    the hand is actually made (missing it falls back to a typical Pair). The
-    boss is applied to the estimate itself: The Flint/The Arm through the
-    scorer, suit bosses and The Plant by debuffing those cards, The Water by
-    the 0-discard make rate, The Needle by allowing one hand.
+
+def _state_key(G: dict[str, Any], *extra: Any) -> str:
+    raw = json.dumps([G, extra], sort_keys=True, default=str)
+    return hashlib.md5(raw.encode()).hexdigest()
+
+
+def _cached(key: str, make: Any) -> Any:
+    if key in _CACHE:
+        _CACHE.move_to_end(key)
+        return _CACHE[key]
+    value = make()
+    _CACHE[key] = value
+    if len(_CACHE) > _CACHE_MAX:
+        _CACHE.popitem(last=False)
+    return value
+
+
+def _card_id(c: dict[str, Any]) -> str:
+    n = _norm(c)
+    return f"{n['rank']}{n['suit']}{n['enh']}{n['seal']}{n['ed']}{n['stone']}"
+
+
+def _hand_size(G: dict[str, Any]) -> int:
+    return int((G.get("hand") or {}).get("limit") or 8) or 8
+
+
+def sample_draws(G: dict[str, Any], n: int = SAMPLES) -> list[tuple[list, list]]:
+    """``n`` (hand, refill) draws of the full deck (deck + hand, face up)."""
+    pool = [_face_up(c) for a in ("cards", "hand") for c in _area_cards(G, a)]
+    size = _hand_size(G)
+    ids = sorted(_card_id(c) for c in pool)
+    key = _state_key({"ids": ids}, size, n, "draws")
+
+    def make() -> list[tuple[list, list]]:
+        seed = int(hashlib.md5(json.dumps([ids, size]).encode()).hexdigest()[:12], 16)
+        rng = random.Random(seed)
+        ordered = sorted(pool, key=_card_id)
+        out = []
+        for _ in range(n):
+            pick = rng.sample(range(len(ordered)), min(len(ordered), size + REFILL))
+            out.append(([ordered[i] for i in pick[:size]], [ordered[i] for i in pick[size:]]))
+        return out
+
+    return _cached(key, make)
+
+
+def _candidates(G: dict[str, Any], norm: list[dict[str, Any]], pad_to: int) -> list[list[int]]:
+    """Candidate plays (index lists) for one dealt hand: every pair-family
+    play by rank, Two Pair / Full House combinations, a Flush per suit, a
+    Straight, the high card. Padded to ``pad_to`` cards (The Psychic)."""
+    flags = _classify_flags(G)
+    by_rank: dict[str, list[int]] = {}
+    for i, c in enumerate(norm):
+        if c["rank"] and not c["stone"] and not c["hidden"]:
+            by_rank.setdefault(c["rank"], []).append(i)
+    cands: set[tuple[int, ...]] = set()
+    ranked = [i for ids in by_rank.values() for i in ids]
+    if ranked:
+        cands.add((max(ranked, key=lambda i: RANK_VALUE[norm[i]["rank"]]),))
+    multi = sorted(
+        ((r, ids) for r, ids in by_rank.items() if len(ids) >= 2),
+        key=lambda kv: (len(kv[1]), CHIP_VALUE[kv[0]]),
+        reverse=True,
+    )
+    for _r, ids in multi:
+        cands.add(tuple(ids[:2]))
+        if len(ids) >= 3:
+            cands.add(tuple(ids[:min(len(ids), 4)]))
+    for (_r1, a), (_r2, b) in combinations(multi[:4], 2):
+        cands.add(tuple(a[:2] + b[:2]))
+        if len(a) >= 3:
+            cands.add(tuple(a[:3] + b[:2]))
+        if len(b) >= 3:
+            cands.add(tuple(b[:3] + a[:2]))
+    need = 4 if flags["four_fingers"] else 5
+    groups = _suit_groups(flags["smeared"])
+    for g in set(groups.values()):
+        ids = [
+            i for i, c in enumerate(norm)
+            if not c["stone"] and not c["hidden"] and (c["enh"] == "WILD" or (c["suit"] and groups[c["suit"]] == g))
+        ]
+        if len(ids) >= need:
+            ids.sort(key=lambda i: -CHIP_VALUE.get(norm[i]["rank"] or "", 0))
+            cands.add(tuple(ids[:5]))
+    for lo in range(1, 11):
+        window = ["A" if v in (1, 14) else RANKS[v - 2] for v in range(lo, lo + 5)]
+        for skip in ([None] if need == 5 else [None, *range(5)]):
+            ranks = [r for k, r in enumerate(window) if k != skip][:need] if skip is not None else window
+            if all(r in by_rank for r in ranks):
+                cands.add(tuple(by_rank[r][0] for r in ranks))
+    out = []
+    for c in cands:
+        play = list(c)
+        if pad_to and len(play) < pad_to:
+            rest = sorted(
+                (i for i in range(len(norm)) if i not in play),
+                key=lambda i: (norm[i]["rank"] in held_scoring_ranks(G) or norm[i]["enh"] == "STEEL",
+                               CHIP_VALUE.get(norm[i]["rank"] or "", 0)),
+            )
+            play += rest[: pad_to - len(play)]
+        out.append(play)
+    return out
+
+
+def _best_play(
+    G: dict[str, Any], hand: list[dict[str, Any]], pad_to: int, only: str | None = None
+) -> tuple[int, str, list[int]]:
+    """Best candidate play (score, hand type, indices); ``only`` = that type."""
+    norm = [_norm(c) for c in hand]
+    best = (0, "High Card", [])
+    for play in _candidates(G, norm, pad_to):
+        played = [hand[i] for i in play]
+        held = [hand[i] for i in range(len(hand)) if i not in play]
+        est = estimate_play(G, played, held, expected=True)
+        if est["blocked"] or (only is not None and est["hand"] != only):
+            continue
+        if est["score"] > best[0]:
+            best = (int(est["score"]), est["hand"], play)
+    return best
+
+
+def _after_discard(G: dict[str, Any], hand: list, refill: list, htype: str) -> list:
+    """K2: one discard when the best play is High Card or Pair. Keeps pairs,
+    cards that score held, paid-suit cards, else a 4-card Flush draw."""
+    if htype not in DISCARD_FROM or not refill:
+        return hand
+    norm = [_norm(c) for c in hand]
+    rc = Counter(c["rank"] for c in norm if c["rank"])
+    keep_ranks = held_scoring_ranks(G)
+    paid = {p["suit"] for p in suit_pays(G)}
+    keep = {
+        i for i, c in enumerate(norm)
+        if (c["rank"] and rc[c["rank"]] >= 2) or c["rank"] in keep_ranks
+        or c["enh"] in ("STEEL", "GOLD") or (c["suit"] in paid)
+    }
+    suits = Counter(c["suit"] for c in norm if c["suit"])
+    if suits:
+        top, cnt = suits.most_common(1)[0]
+        need = 4 if "j_four_fingers" in set(_joker_keys(G)) else 5
+        if cnt >= need - 1 and not any(rc[r] >= 2 for r in rc):
+            keep |= {i for i, c in enumerate(norm) if c["suit"] == top}
+    drop = sorted((i for i in range(len(hand)) if i not in keep),
+                  key=lambda i: CHIP_VALUE.get(norm[i]["rank"] or "", 0))[:min(5, len(refill))]
+    if not drop:
+        return hand
+    return [c for i, c in enumerate(hand) if i not in drop] + refill[: len(drop)]
+
+
+def _with_effect(G: dict[str, Any], key: str, effect: str) -> dict[str, Any]:
+    area = dict(G.get("jokers") or {})
+    area["cards"] = [
+        {**j, "value": {**(j.get("value") or {}), "effect": effect}} if j.get("key") == key else j
+        for j in _area_cards(G, "jokers")
+    ]
+    return {**G, "jokers": area}
+
+
+def _currently(j: dict[str, Any]) -> float:
+    m = CURRENTLY.search(str((j.get("value") or {}).get("effect", "")))
+    return float(m.group(2)) if m else 0.0
+
+
+def _strength(G: dict[str, Any], draws: list, *, boss: str = "", discards: bool = True) -> dict[str, Any]:
+    """Mean score per hand over ``draws`` under G (jokers, levels, boss)."""
+    pad = 5 if boss == "The Psychic" else 0
+    hands = _hands_per_round(G)
+    chosen = []
+    for hand, refill in draws:
+        s, t, play = _best_play(G, hand, pad)
+        if discards:
+            new = _after_discard(G, hand, refill, t)
+            if new is not hand:
+                hand = new
+                s, t, play = _best_play(G, hand, pad)
+        chosen.append((s, t, hand, play))
+    if not chosen:
+        return {"per_hand": 0, "types": Counter(), "chosen": []}
+    types = Counter(t for _, t, _, _ in chosen)
+    keys = set(_joker_keys(G)) | set(copied_keys(G))
+    scores = [s for s, _, _, _ in chosen]
+
+    def rescore(Gv: dict[str, Any], only: str | None = None) -> list[int]:
+        out = []
+        for s, t, hand, play in chosen:
+            if only is not None and t != only:
+                out.append(s)
+                continue
+            est = estimate_play(Gv, [hand[i] for i in play],
+                                [hand[i] for i in range(len(hand)) if i not in play], expected=True)
+            out.append(int(est["score"]))
+        return out
+
+    # K6 Spare Trousers grows inside the blind: +2 Mult per Two Pair played
+    if "j_trousers" in keys:
+        p2 = sum(n for t, n in types.items() if t in TWO_PAIR_TYPES) / len(chosen)
+        tr = next(j for j in _area_cards(G, "jokers") if j.get("key") == "j_trousers")
+        grown = _currently(tr) + 2 * p2 * (hands + 1) / 2
+        G = _with_effect(G, "j_trousers", f"(Currently +{grown:g} Mult)")
+        scores = rescore(G)
+    per_round = [s * hands for s in scores]
+    # Card Sharp: hands 2.. repeat the most common hand type for X3, played
+    # from any draw that contains it when that beats the draw's best play
+    # (owner S3: "play Pairs"; findings P4)
+    if "j_card_sharp" in keys and boss != "The Eye":
+        modal = types.most_common(1)[0][0]
+        hands_tbl = {k: dict(v or {}) for k, v in (G.get("hands") or {}).items()}
+        hands_tbl.setdefault(modal, {})["played_this_round"] = 1
+        G_rep = {**G, "hands": hands_tbl}
+        pad = 5 if boss == "The Psychic" else 0
+        rep = [
+            max(s, _best_play(G_rep, hand, pad, only=modal)[0])
+            for s, (_, _, hand, _) in zip(scores, chosen)
+        ]
+        per_round = [s + (hands - 1) * r for s, r in zip(scores, rep)]
+    # Acrobat: X3 on the final hand only (owner, pass 1)
+    if "j_acrobat" in keys:
+        rnd = dict(G.get("round") or {})
+        last = rescore({**G, "round": {**rnd, "hands_left": 1}})
+        per_round = [pr - s + l for pr, s, l in zip(per_round, scores, last)]
+    per_hand = int(sum(per_round) / len(per_round) / hands)
+    return {"per_hand": per_hand, "types": types, "chosen": chosen}
+
+
+def _boss_view(G: dict[str, Any], draws: list) -> tuple[dict[str, Any], list]:
+    """G with the ante's boss CURRENT and the draws debuffed by it."""
+    boss = (G.get("blinds") or {}).get("boss") or {}
+    name = str(boss.get("name") or "")
+    blinds = {k: dict(v or {}) for k, v in (G.get("blinds") or {}).items()}
+    for k, v in blinds.items():
+        v["status"] = "CURRENT" if k == "boss" else "DEFEATED"
+    Gb = {**G, "blinds": blinds}
+    if name in ("The Eye", "The Mouth"):
+        Gb = G  # one hand type: the strongest repeated type keeps its score
+    suit = knowledge.SUIT_BOSSES.get(name)
+
+    def hit(c: dict[str, Any]) -> bool:
+        n = _norm(c)
+        return bool((suit and n["suit"] == suit and n["enh"] != "WILD")
+                    or (name in BOSS_DEBUFF_FACES and n["rank"] in FACE_RANKS))
+
+    def under(cards: list) -> list:
+        return [_debuffed(c) if hit(c) else c for c in cards]
+
+    if suit or name in BOSS_DEBUFF_FACES:
+        draws = [(under(h), under(r)) for h, r in draws]
+    return Gb, draws
+
+
+PLAYS_PER_BLIND = 3  # K8: plays per blind when growing jokers between blinds
+STRAIGHT_TYPES = {"Straight", "Straight Flush"}
+
+
+def planets_per_round(G: dict[str, Any], history: list[dict[str, Any]] | None) -> float:
+    """Planets used per round so far this run (at least 0.5)."""
+    n = 0
+    for h in history or []:
+        res = str(h.get("result") or "")
+        m = re.match(r"(?:used|took) (.+?)(?: from pack)?$", res)
+        if m and knowledge.planet_hand(m.group(1)):
+            n += 1
+    rounds = max(int(G.get("round_num") or 1), 1)
+    return max(0.5, n / rounds)
+
+
+def grown(
+    G: dict[str, Any],
+    blinds: int,
+    types: Counter,
+    history: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """G with growing / decaying jokers moved ``blinds`` blinds ahead (P2-3, K8).
+
+    ``types`` = how often each hand type is the best play (from the sampler).
+    Spare Trousers +2 Mult per Two Pair, Runner +15 Chips per Straight,
+    Supernova +1 per play of the hand, Constellation X0.1 per planet,
+    Popcorn -4 Mult per round, Ice Cream -5 Chips per hand.
+    """
+    if blinds <= 0:
+        return G
+    plays = PLAYS_PER_BLIND * blinds
+    total = max(sum(types.values()), 1)
+    share = {t: n / total for t, n in types.items()}
+    two_pair = sum(v for t, v in share.items() if t in TWO_PAIR_TYPES)
+    straight = sum(v for t, v in share.items() if t in STRAIGHT_TYPES)
+    cards = []
+    for j in _area_cards(G, "jokers"):
+        key = j.get("key", "")
+        cur = _currently(j)
+        effect = None
+        if key == "j_trousers":
+            effect = f"(Currently +{cur + 2 * plays * two_pair:g} Mult)"
+        elif key == "j_runner":
+            effect = f"(Currently +{cur + 15 * plays * straight:g} Chips)"
+        elif key == "j_constellation":
+            x = cur or 1.0
+            effect = f"(Currently X{x + 0.1 * planets_per_round(G, history) * blinds:.2f} Mult)"
+        elif key == "j_popcorn":
+            m = FIRST_PLUS.search(str((j.get("value") or {}).get("effect", "")))
+            now = float(m.group(1)) if m else 20.0
+            effect = f"+{max(now - 4 * blinds, 0):g} Mult"
+        elif key == "j_ice_cream":
+            m = FIRST_PLUS.search(str((j.get("value") or {}).get("effect", "")))
+            now = float(m.group(1)) if m else 100.0
+            effect = f"+{max(now - 5 * plays, 0):g} Chips"
+        if effect is not None:
+            j = {**j, "value": {**(j.get("value") or {}), "effect": effect}}
+        cards.append(j)
+    area = {**(G.get("jokers") or {}), "cards": cards}
+    out = {**G, "jokers": area}
+    if "j_supernova" in set(_joker_keys(G)):
+        hands_tbl = {k: dict(v or {}) for k, v in (G.get("hands") or {}).items()}
+        for t, v in share.items():
+            if t in hands_tbl:
+                hands_tbl[t]["played"] = int(hands_tbl[t].get("played", 0)) + round(plays * v)
+        out["hands"] = hands_tbl
+    return out
+
+
+def power_check(G: dict[str, Any], plan: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Expected score per hand from the hands Luna actually makes (P2-1).
+
+    Samples dealt hands from the whole deck, plays the best candidate (any
+    hand type, held cards scored), with one discard per hand from High Card /
+    Pair; Card Sharp, Acrobat and Spare Trousers growth inside the blind are
+    counted. The boss version applies this ante's boss (debuffs, The Psychic
+    padding, The Needle 1 hand, The Water no discards, The Flint halving).
     """
     plan = plan or main_hand_plan(G)
-    hand = plan["hand"]
+    return _cached(_state_key(G, plan["hand"], "power"), lambda: _power_check(G, plan))
+
+
+def _power_check(G: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
     G_owned = _with_jokers(G, _area_cards(G, "jokers"))
-    # The typical score is boss-free (in a boss round the CURRENT boss would
-    # otherwise zero it, e.g. The Psychic on 2-card plays); bosses come below.
     G_owned["blinds"] = {
         k: {**v, "status": "UPCOMING"} if v.get("status") == "CURRENT" else v
         for k, v in (G.get("blinds") or {}).items()
     }
-    plays = typical_plays(G, plan)
-    typical = _mean_score(G_owned, plays, hand)
-    fallback = 0
-    if hand != "Pair":
-        pair_plan = {**plan, "hand": "Pair", "family": "pair", "suit": None}
-        fallback = _mean_score(G_owned, typical_plays(G, pair_plan), "Pair")
-    keys = set(_joker_keys(G))
-    rates = MAKE_RATE.get(hand, (0.5, 0.8))
-    if hand == "Flush" and keys & {"j_four_fingers", "j_smeared"}:
-        rates = FLUSH_HELP_RATE
-    rate = rates[1]
-    per_hand = int(rate * typical + (1 - rate) * fallback) if typical else 0
-
+    draws = sample_draws(G)
+    now = _strength(G_owned, draws)
     boss = (G.get("blinds") or {}).get("boss") or {}
     name = str(boss.get("name") or "")
-    allowed = 1 if name == "The Needle" else _hands_per_round(G)
-    boss_rate = rates[0] if name == "The Water" else rate
-    blinds = {k: dict(v or {}) for k, v in (G.get("blinds") or {}).items()}
-    for k, v in blinds.items():
-        v["status"] = "CURRENT" if k == "boss" else "DEFEATED"
-    G_boss = {**G_owned, "blinds": blinds}
-    suit = knowledge.SUIT_BOSSES.get(name)
-
-    def under_boss(play: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        out = []
-        for c in play:
-            n = _norm(c)
-            hit = (suit and n["suit"] == suit and n["enh"] != "WILD") or (
-                name in BOSS_DEBUFF_FACES and n["rank"] in FACE_RANKS
-            )
-            out.append(_debuffed(c) if hit else c)
-        return out
-
-    if name in ("The Psychic", "The Eye", "The Mouth"):
-        G_boss = G_owned  # padding / one hand type keeps the typical score
-    boss_typical = _mean_score(G_boss, [under_boss(p) for p in plays], hand)
-    boss_fallback = 0
-    if hand != "Pair":
-        pair_plan = {**plan, "hand": "Pair", "family": "pair", "suit": None}
-        boss_fallback = _mean_score(
-            G_boss, [under_boss(p) for p in typical_plays(G, pair_plan)], "Pair"
-        )
-    boss_per_hand = (
-        int(boss_rate * boss_typical + (1 - boss_rate) * boss_fallback)
-        if boss_typical or boss_fallback
-        else 0
-    )
+    Gb, bdraws = _boss_view(G_owned, draws)
+    if name == "The Mouth" or name == "The Eye":
+        bstr = now
+    else:
+        bstr = _strength(Gb, bdraws, boss=name, discards=name != "The Water")
+    total = max(sum(now["types"].values()), 1)
+    made = now["types"].get(plan["hand"], 0) / total
     return {
-        "typical": typical,
-        "make_rate": rate,
-        "per_hand": per_hand,
-        "boss_make_rate": boss_rate,
-        "boss_per_hand": boss_per_hand,
-        "boss_hands_allowed": allowed,
+        "typical": now["per_hand"],
+        "per_hand": now["per_hand"],
+        "make_rate": made,
+        "best_types": [t for t, _ in now["types"].most_common(3)],
+        "types": dict(now["types"]),
+        "boss_make_rate": made,
+        "boss_per_hand": bstr["per_hand"],
+        "boss_hands_allowed": 1 if name == "The Needle" else _hands_per_round(G),
     }
+
+
+def boss_check(
+    G: dict[str, Any], history: list[dict[str, Any]] | None = None
+) -> dict[str, Any] | None:
+    """Can the build beat this ante's boss (its rule, its hands)? (S2, K7)
+
+    Judged from the ante's first shop with jokers grown through the blinds
+    still to play before the boss. Returns None without a boss; else
+    {name, target, per_hand, hands, allowed, ok, needs}.
+    """
+    blinds = G.get("blinds") or {}
+    boss = blinds.get("boss") or {}
+    target = int(boss.get("score") or 0)
+    if not boss or not target or boss.get("status") == "DEFEATED":
+        return None
+    name = str(boss.get("name") or "")
+    plan = main_hand_plan(G)
+
+    def make() -> dict[str, Any]:
+        before = sum(
+            1
+            for k in ("small", "big")
+            if (blinds.get(k) or {}).get("status") in ("SELECT", "UPCOMING")
+        )
+        power = power_check(G, plan)
+        Gg = grown(G, before, Counter(power.get("types") or {}), history)
+        Gg = _with_jokers(Gg, _area_cards(Gg, "jokers"))
+        Gb, bdraws = _boss_view(Gg, sample_draws(G))
+        if name in ("The Eye", "The Mouth"):
+            per = _strength(Gg, sample_draws(G))["per_hand"]
+        else:
+            per = _strength(Gb, bdraws, boss=name, discards=name != "The Water")["per_hand"]
+        allowed = 1 if name == "The Needle" else _hands_per_round(G)
+        hands = -(-target // max(per, 1))
+        return {
+            "name": name,
+            "target": target,
+            "per_hand": per,
+            "hands": hands,
+            "allowed": allowed,
+            "ok": per > 0 and hands <= allowed,
+            "needs": max(-(-target // allowed) - per, 0),
+            "grown_blinds": before,
+        }
+
+    return _cached(_state_key(G, len(history or []), "boss_check"), make)
 
 
 # Boss reroll (Director's Cut: once per ante, Retcon: unlimited; $10 each).

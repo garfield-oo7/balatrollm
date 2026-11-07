@@ -267,11 +267,12 @@ class TestLookAheadAndRefusals:
         G["hands"]["Three of a Kind"].update(chips=30, mult=3)
         assert analysis._hand_base(G, "Three of a Kind", "The Flint") == (15, 2)
 
-    def test_the_water_lowers_the_flush_make_rate(self) -> None:
+    def test_the_water_lowers_the_score(self) -> None:
+        """No discards against The Water: fewer dug hands, a lower estimate."""
         G = make_state("H_2", [joker("j_four_fingers", "Four Fingers")], state="SHOP")
         G["blinds"]["boss"]["name"] = "The Water"
         power = analysis.power_check(G)
-        assert power["boss_make_rate"] < power["make_rate"]
+        assert power["boss_per_hand"] < power["per_hand"]
 
     def test_reroll_cap_and_stencil(self) -> None:
         G = make_state("H_2", state="SHOP")
