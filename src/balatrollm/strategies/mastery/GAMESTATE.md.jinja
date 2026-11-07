@@ -169,7 +169,7 @@
 {% for card in G.pack.cards -%}
 {%- if card.set == "JOKER" -%}
 {%- set jt = joker_tag(card, S.tag_hand, S.ante) -%}
-- {{ loop.index0 }}: {{ card.label }} (Joker) {{ jt }}{% set gx = grows_xmult(G, card) %}{% if gx %} {{ gx }}{% endif %}{% if card.modifier and card.modifier.edition %} ({{ card.modifier.edition }}){% endif %}{% if I and I.pack[loop.index0] %} | SCORE {{ I.pack[loop.index0] }}{% endif %} | effect: {{ card.value.effect }} | sells for ${{ card.cost.sell }}{% if S.slots_free and ('tier T' in jt or '[TRAP]' in jt) %} [CASH ONLY: take it if nothing better, then sell it in the shop]{% endif %}
+- {{ loop.index0 }}: {{ card.label }} (Joker) {{ jt }}{% set gx = grows_xmult(G, card) %}{% if gx %} {{ gx }}{% endif %}{% if card.modifier and card.modifier.edition %} ({{ card.modifier.edition }}){% endif %}{% if I and I.pack[loop.index0] %} | SCORE {{ I.pack[loop.index0] }}{% endif %}{% if I and I.pack_swaps[loop.index0] and not S.slots_free and G.luna and G.luna.sell_in_pack %} | {{ I.pack_swaps[loop.index0].text }} (the harness sells it for you){% endif %} | effect: {{ card.value.effect }} | sells for ${{ card.cost.sell }}{% if S.slots_free and ('tier T' in jt or '[TRAP]' in jt) %} [CASH ONLY: take it if nothing better, then sell it in the shop]{% endif %}
 {%- elif card.set in ["TAROT", "PLANET", "SPECTRAL"] -%}
 {%- set tg = consumable_targets(card.key) %}
 {%- set sug = suggest_targets(G, card) -%}
