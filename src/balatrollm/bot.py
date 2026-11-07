@@ -43,6 +43,20 @@ SHOP_STATES = ("SHOP", "SMODS_BOOSTER_OPENED")
 SHOP_REFUSALS_TO_LEAVE = 3
 
 
+
+SHOP_LOCK_MONEY = 10
+
+
+def shop_lock_after(before: dict[str, Any], method: str, after: dict[str, Any]) -> bool:
+    """P2-8 / owner F1: from Ante 4, one buy may take money below $10; after it
+    the shop is over (no more buys or rerolls this visit)."""
+    return (
+        method == "buy"
+        and before.get("state") == "SHOP"
+        and int(before.get("ante_num") or 1) >= 4
+        and int(after.get("money") or 0) < SHOP_LOCK_MONEY
+    )
+
 class BotError(Exception):
     """Base exception for bot errors."""
 
@@ -565,6 +579,9 @@ class Bot:
             self._collector.record_call("successful")
             self._collector.write_gamestate(gamestate)
             self._consecutive_vetoes = 0
+            if shop_lock_after(before, fn_name, gamestate):
+                self._shop_locked = True
+                logger.info("Harness locked the shop: Ante 4+ buy left money below $10")
             result = swap_note + summarize_outcome(fn_name, params, before, gamestate)
             score: int | None = None
             if fn_name == "play":

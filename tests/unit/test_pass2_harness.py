@@ -46,3 +46,14 @@ def test_digest_counts_game_over_as_loss(tmp_path: Path) -> None:
         json.dumps({"state": "SELECTING_HAND"}) + "\n" + json.dumps({"state": "GAME_OVER", "won": True}) + "\n"
     )
     assert digest.ended_game_over(tmp_path)
+
+
+def test_shop_lock_after_ante_4_buy_below_10() -> None:
+    from balatrollm.bot import shop_lock_after
+
+    shop = {"state": "SHOP", "ante_num": 4}
+    assert shop_lock_after(shop, "buy", {"money": 9})
+    assert not shop_lock_after(shop, "buy", {"money": 10})
+    assert not shop_lock_after({**shop, "ante_num": 3}, "buy", {"money": 2})
+    assert not shop_lock_after(shop, "reroll", {"money": 2})
+    assert not shop_lock_after({**shop, "state": "SMODS_BOOSTER_OPENED"}, "buy", {"money": 2})
