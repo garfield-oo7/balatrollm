@@ -25,6 +25,7 @@ def _bot(game: AsyncMock) -> Bot:
     bot._main_commit = None
     bot._shop_locked = False
     bot._pending_tags = []
+    bot._rounds = []
     bot._consecutive_vetoes = 0
     bot._consecutive_errors = 0
     bot._consecutive_faileds = 0

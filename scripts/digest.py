@@ -16,7 +16,8 @@ from typing import Any
 HEAD = re.compile(r"- Ante (\d+)/8, round (\d+), money \$(-?\d+)")
 JOKERS = re.compile(r"- Jokers (\d+)/(\d+), SLOTS_FREE (\d+), XMULT_OWNED (\d+)")
 # both vocabularies: pass 1 (ON TRACK / TOO WEAK) and pass 2 (COMFORTABLE / THIN / SHORT)
-STATUS = re.compile(r"- STATUS: (ON TRACK|TOO WEAK|UNKNOWN|COMFORTABLE|THIN|SHORT)\b[^\n]*?(?:needs about (\d+))?[^\n]*$", re.M)
+STATUS = re.compile(r"^- STATUS: (ON TRACK|TOO WEAK|UNKNOWN|COMFORTABLE|THIN|SHORT)\b(.*)$", re.M)
+NEEDS = re.compile(r"needs about (\d+)")
 WEAK = {"TOO WEAK", "SHORT"}
 MAIN = re.compile(r"^- MAIN_HAND: (.+?) - (.*)$", re.M)
 COMMIT = re.compile(r"committed: (.+?)(?: \(round (\d+)\))?$")
@@ -115,7 +116,8 @@ def decisions(run: Path) -> list[dict[str, Any]]:
             "phase": phase,
             "jokers": int(j.group(1)) if j else None, "slots_free": int(j.group(3)) if j else None,
             "xmult": int(j.group(4)) if j else None,
-            "status": st.group(1) if st else None, "hands_needed": int(st.group(2)) if st and st.group(2) else None,
+            "status": st.group(1) if st else None,
+            "hands_needed": int(nd.group(1)) if st and (nd := NEEDS.search(st.group(2))) else None,
             "main_hand": mh.group(1).strip() if mh else None,
             "main_reason": mh.group(2).strip() if mh else None,
             "packs": packs,

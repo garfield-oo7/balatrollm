@@ -15,6 +15,7 @@ from . import seeds
 from .analysis import (
     BOSS_REROLL_MAX_PER_ANTE,
     main_commit,
+    run_status,
     boss_reroll_reason,
     estimate_play,
     discard_phase_order,
@@ -694,6 +695,11 @@ class Bot:
             "shop_locked": self._shop_locked,
             "sell_in_pack": bool(self.harness.get("sell_in_pack")),
         }
+        if gamestate.get("state") in SHOP_STATES:
+            # The STATUS Luna sees (with the run's rounds: safety net, last
+            # blind on its final hand); the validators use it too
+            status = run_status(gamestate, self._rounds, self._history)["status"]
+            gamestate["luna"]["status"] = status
 
     async def _handle_veto(
         self, msg: str, before: dict[str, Any] | None = None
