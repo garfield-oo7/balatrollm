@@ -266,14 +266,36 @@ class TestLookAheadAndRefusals:
         assert analysis.run_status(G, [], [])["boss_hands_allowed"] == 1
         assert "spend money" in analysis.boss_impact({**G, "blinds": {"boss": {"name": "The Ox"}}})["prep"]
 
-    def test_reroll_never_goes_below_the_reserve(self) -> None:
+    def test_reroll_money_lines(self) -> None:
+        """P2-9: from Ante 4, $25 while COMFORTABLE, $10 while THIN/SHORT."""
         G = make_state("H_2", state="SHOP")
         G["ante_num"] = 4
-        G["money"] = 14
         G["round"]["reroll_cost"] = 5
-        assert "RESERVE" in analysis.validate_action(G, "reroll", {})
+        G["hands"]["Pair"].update(chips=500, mult=50, level=20)  # COMFORTABLE
+        assert analysis.run_status(G, [], [])["status"] == "COMFORTABLE"
+        G["money"] = 29
+        assert "keep $25" in analysis.validate_action(G, "reroll", {})
+        G["money"] = 30
+        assert analysis.validate_action(G, "reroll", {}) is None
+        G["hands"]["Pair"].update(chips=5, mult=1, level=1)
+        G["blinds"]["small"]["score"] = 10_000_000
+        assert analysis.run_status(G, [], [])["status"] == "SHORT"
+        G["money"] = 14
+        assert "at least $10" in analysis.validate_action(G, "reroll", {})
         G["money"] = 15
         assert analysis.validate_action(G, "reroll", {}) is None
+
+    def test_reroll_line_ante_2_3(self) -> None:
+        """Ante 2-3: $25 only while COMFORTABLE with a defining joker; else $10."""
+        G = make_state("H_2", state="SHOP")
+        G["ante_num"] = 2
+        G["round"]["reroll_cost"] = 5
+        G["money"] = 20
+        G["hands"]["Pair"].update(chips=500, mult=50, level=20)
+        assert analysis.validate_action(G, "reroll", {}) is None  # no defining joker
+        G["luna"] = {"main_commit": {"hand": "Pair", "trigger": "The Duo", "ante": 1, "round": 2}}
+        assert analysis.main_hand_plan(G).get("commit")
+        assert "keep $25" in analysis.validate_action(G, "reroll", {})
 
     def test_first_shop_prefers_buffoon_over_a_zero_joker(self) -> None:
         G = make_state("H_2", state="SHOP")
@@ -283,6 +305,55 @@ class TestLookAheadAndRefusals:
         assert "Buffoon" in analysis.validate_action(G, "buy", {"card": 0})
         G["round_num"] = 2
         assert analysis.validate_action(G, "buy", {"card": 0}) is None
+        # P2-6: the bot's first-shop flag wins over ante/round (whole first visit)
+        G["luna"] = {"first_shop": True}
+        assert "Buffoon" in analysis.validate_action(G, "buy", {"card": 0})
+        G["luna"] = {"first_shop": False}
+        G["round_num"] = 1
+        assert analysis.validate_action(G, "buy", {"card": 0}) is None
+
+    def test_first_shop_supernova_exception(self) -> None:
+        G = make_state("H_2", state="SHOP")
+        G["luna"] = {"first_shop": True}
+        G["shop"] = {"cards": [{**joker("j_supernova", "Supernova"), "cost": {"buy": 5}}]}
+        G["packs"] = {"cards": [{"key": "p_buffoon_normal_1", "label": "Buffoon Pack", "set": "BOOSTER", "cost": {"buy": 4}}]}
+        G["money"] = 8  # cannot afford both: Supernova first
+        assert analysis.validate_action(G, "buy", {"card": 0}) is None
+        G["money"] = 9  # can afford both: pack first
+        assert "Buffoon" in analysis.validate_action(G, "buy", {"card": 0})
+
+    def test_reserve_by_ante_and_status(self) -> None:
+        G = make_state("H_2", state="SHOP")
+        assert analysis.reserve(G) == 0
+        G["ante_num"] = 2
+        assert analysis.reserve(G, "COMFORTABLE") == 10
+        assert analysis.reserve(G, "THIN") == 0 and analysis.reserve(G, "SHORT") == 0
+        G["ante_num"] = 3
+        assert analysis.reserve(G, "SHORT") == 10
+        assert analysis.reserve(G, "SHORT", boss_short=True) == 0
+        G["ante_num"] = 5
+        assert analysis.reserve(G, "COMFORTABLE") == 0
+
+    def test_locked_shop_refuses_buy_and_reroll(self) -> None:
+        G = make_state("H_2", state="SHOP")
+        G["ante_num"] = 5
+        G["money"] = 40
+        G["luna"] = {"shop_locked": True}
+        G["shop"] = {"cards": [{**joker("j_joker", "Joker"), "cost": {"buy": 2}}]}
+        assert "next_round" in analysis.validate_action(G, "buy", {"card": 0})
+        assert "next_round" in analysis.validate_action(G, "reroll", {})
+        G["luna"] = {}
+        assert analysis.validate_action(G, "buy", {"card": 0}) is None
+
+    def test_buffoon_with_full_slots_needs_25_left(self) -> None:
+        G = make_state("H_2", state="SHOP")
+        G["ante_num"] = 3
+        G["jokers"] = {"count": 5, "limit": 5, "cards": [joker("j_joker", "Joker")] * 5}
+        G["packs"] = {"cards": [{"key": "p_buffoon_normal_1", "label": "Buffoon Pack", "set": "BOOSTER", "cost": {"buy": 4}}]}
+        G["money"] = 28
+        assert "$25" in analysis.validate_action(G, "buy", {"pack": 0})
+        G["money"] = 29
+        assert analysis.validate_action(G, "buy", {"pack": 0}) is None
 
     def test_score_spendable_never_below_spendable(self) -> None:
         G = make_state("H_2", state="SHOP")
@@ -319,9 +390,17 @@ class TestLookAheadAndRefusals:
         G = make_state("H_2", state="SHOP")
         G["ante_num"] = 4
         G["money"] = 60
-        G["hands"]["Pair"].update(chips=500, mult=50, level=20)  # ON TRACK
-        assert analysis.validate_action(G, "reroll", {}, shop_rerolls=1) is None
-        assert "limit 2" in analysis.validate_action(G, "reroll", {}, shop_rerolls=2)
+        G["hands"]["Pair"].update(chips=5, mult=1, level=1)
+        G["blinds"]["small"]["score"] = 10_000_000  # SHORT: $10 line
+        G["money"] = 20  # leaves $15 < $25: the cap counts
+        assert analysis.validate_action(G, "reroll", {}, shop_rerolls=5) is None
+        assert "at most 6" in analysis.validate_action(G, "reroll", {}, shop_rerolls=6)
+        G["ante_num"] = 5
+        assert analysis.validate_action(G, "reroll", {}, shop_rerolls=9) is None
+        assert "at most 10" in analysis.validate_action(G, "reroll", {}, shop_rerolls=10)
+        G["money"] = 60  # leaves $55: no cap, only the runaway guard
+        assert analysis.validate_action(G, "reroll", {}, shop_rerolls=29) is None
+        assert "too many" in analysis.validate_action(G, "reroll", {}, shop_rerolls=30)
         G["ante_num"] = 1
         assert "Ante 1" in analysis.validate_action(G, "reroll", {}, shop_rerolls=0)
         G["jokers"] = {"count": 5, "limit": 5, "cards": [joker("j_joker", "Joker")] * 5}
@@ -683,9 +762,9 @@ class TestPlanAndStatus:
         G["ante_num"] = 4
         status = analysis.run_status(G, [], [])
         texts = [g["text"] for g in status["goals"]]
-        assert texts[0].startswith("5 scoring jokers")
+        assert not any("scoring jokers" in t for t in texts)  # owner C4
         assert any("XMULT" in t for t in texts) and any("SCALE" in t for t in texts)
-        assert status["priority"] == "fill empty joker slots with scoring jokers"
+        assert "fill empty joker slots" not in status["priority"]
 
     def test_pair_boss_impact(self) -> None:
         G = make_state("H_2", boss="The Eye")
@@ -926,17 +1005,16 @@ class TestShopImpact:
         }
         return G
 
-    def test_deltas_average_every_pair_in_the_deck(self) -> None:
+    def test_deltas_come_from_dealt_hands(self) -> None:
+        """P2-1: SCORE = change of the mean best play over hands dealt from the deck."""
         impact = analysis.shop_impact(self._shop())
-        # 75 pairs (12 ranks x 6, plus 3 from the three 2s); mean card 7.52 chips:
-        # (10 + 15.04) chips x (2 + 8 Jolly) mult = 250
-        assert impact["hand"] == "Pair" and impact["plays"] == 75
-        assert impact["score"] == 250
-        assert impact["shop"][0].startswith("+250")  # The Duo doubles it
-        assert impact["shop"][1].startswith("+0")  # Zany needs Three of a Kind
+        assert impact["plays"] == analysis.SHOP_SAMPLES and impact["score"] > 0
+        duo = int(impact["shop"][0].split()[0].replace(",", ""))
+        zany = int(impact["shop"][1].split()[0].replace(",", ""))
+        assert duo > zany >= 0  # The Duo X2 on any Pair; Zany only on Three of a Kind
         assert 2 not in impact["shop"]  # Uranus levels another hand
-        assert impact["shop"][3].startswith("+190")  # Mercury: 40.04 x 11 = 440
-        assert impact["owned"][0] == "adds 200 per hand"  # Jolly: 250 - 25.04 x 2
+        assert impact["shop"][3].startswith("+")  # Mercury levels the leaning Pair
+        assert int(impact["owned"][0].split()[1].replace(",", "")) > 0  # Jolly adds
 
     def test_face_jokers_count_face_pairs(self) -> None:
         G = self._shop()
@@ -991,7 +1069,7 @@ class TestShopImpact:
     def test_shop_render_shows_score(self) -> None:
         sm = StrategyManager("mastery")
         text = sm.render_gamestate(self._shop(), rounds=[], history=[], flags={})
-        assert "TYPICAL Pair (average of the 75" in text and "SCORE +250 per hand" in text
+        assert "TYPICAL: your best play scores about" in text and "SCORE +" in text
         assert "WEAKEST:" not in text  # only named once slots are full
         G = self._shop()
         G["jokers"]["limit"] = len(G["jokers"]["cards"])

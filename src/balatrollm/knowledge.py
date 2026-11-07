@@ -96,14 +96,14 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
         None,
         "$2/discard only if you use NO discards",
     ),
-    "Hack": ("UTIL", "C", "B", None, "retrigger scored 2-5"),
+    "Hack": ("UTIL", "C", "B", None, "retrigger scored 2-5: keep and play your 2-5s; clashes with Faceless Joker (it wants face cards discarded)"),
     "Pareidolia": ("UTIL", "C", "B", "face", "all cards are face cards"),
     "Gros Michel": (
         "MULT",
         "S",
         "C",
         None,
-        "+15 Mult; may die (then Cavendish can appear)",
+        "+15 Mult; 1 in 6 chance to die each round; only after it dies can Cavendish (X3 Mult) appear in shops",
     ),
     "Even Steven": ("MULT", "B", "C", None, "+4 Mult per scored even card"),
     "Odd Todd": ("CHIPS", "B", "C", None, "+31 Chips per scored odd card"),
@@ -111,10 +111,10 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
     "Business Card": ("ECON", "C", "C", "face", "$2 sometimes from face cards"),
     "Supernova": (
         "SCALE",
+        "S",
         "A",
-        "B",
         None,
-        "+Mult = times this hand type was played; loves MAIN_HAND",
+        "+1 Mult every time you play a hand type (adds the times played): best bought early, for the hand you keep playing",
     ),
     "Ride the Bus": (
         "SCALE",
@@ -126,7 +126,7 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
     "Space Joker": ("SCALE", "B", "B", None, "1 in 4 to level the played hand"),
     "Egg": ("ECON", "C", "C", None, "+$3 sell value per round"),
     "Burglar": ("TRAP", "T", "C", None, "+3 hands but lose ALL discards"),
-    "Blackboard": ("XMULT", "B", "A", None, "x3 if ALL held cards are Spades/Clubs"),
+    "Blackboard": ("XMULT", "B", "A", None, "X3 only when EVERY card held is a Spade or Club: pad your play with the red cards so only black cards stay in hand"),
     "Runner": ("SCALE", "B", "C", "straight", "grows with Straights"),
     "Ice Cream": ("CHIPS", "A", "C", None, "+100 Chips, -5 per hand played"),
     "DNA": ("UTIL", "C", "B", None, "copies a 1-card first hand into deck"),
@@ -140,7 +140,7 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
         "B",
         "C",
         None,
-        "$5 for discarding 3+ face cards at once",
+        "$5 for discarding 3+ face cards at once; clashes with face-card scorers (Photograph, Hanging Chad, Scary Face, Smiley) and with Hack",
     ),
     "Green Joker": (
         "KEEP-DISCARDS",
@@ -149,7 +149,7 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
         None,
         "+1 Mult per hand, -1 per discard; small with discard play",
     ),
-    "Superposition": ("UTIL", "C", "C", "straight", "situational, low value"),
+    "Superposition": ("UTIL", "C", "C", "straight", "makes a Tarot when you play a Straight with an Ace: only for a Straight build (Shortcut, Four Fingers, The Order)"),
     "To Do List": ("ECON", "C", "C", None, "situational, low value"),
     "Cavendish": ("XMULT", "S", "S", None, "x3 Mult always"),
     "Card Sharp": (
@@ -170,9 +170,9 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
     ),
     "Seance": ("UTIL", "C", "C", None, "situational, low value"),
     "Riff-raff": ("UTIL", "B", "C", None, "creates 2 Common jokers if slots free"),
-    "Vampire": ("SCALE", "C", "B", None, "eats enhancements for xMult"),
+    "Vampire": ("SCALE", "C", "B", None, "X0.1 per ENHANCED card you play (it removes the enhancement): feed it with enhancement Tarots (Hierophant, Empress, Magician, Lovers, Justice, Chariot, Devil, Tower) and Arcana packs"),
     "Shortcut": ("UTIL", "B", "B", "straight", "straights may skip 1 rank"),
-    "Hologram": ("SCALE", "B", "A", None, "x0.25 per card added to deck"),
+    "Hologram": ("SCALE", "B", "A", None, "X0.25 per card added to your deck: take Standard packs (every card picked grows it)"),
     "Vagabond": ("UTIL", "C", "C", None, "situational, low value"),
     "Baron": ("XMULT", "B", "A", None, "x1.5 per King HELD; needs many Kings"),
     "Cloud 9": (
@@ -241,7 +241,7 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
         "$3 for a 1-card first discard; conflicts with discards",
     ),
     "Flash Card": ("SCALE", "C", "C", None, "grows on rerolls"),
-    "Popcorn": ("MULT", "S", "C", None, "+20 Mult, -4 per round; replace by Ante 3"),
+    "Popcorn": ("MULT", "B", "C", None, "+20 Mult, -4 per round (gone in 5): a short patch only when your build lacks +Mult"),
     "Spare Trousers": (
         "SCALE",
         "A",
@@ -264,7 +264,7 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
     "Campfire": ("SCALE", "C", "B", None, "grows when selling cards"),
     "Golden Ticket": ("ECON", "C", "C", None, "situational, low value"),
     "Mr. Bones": ("TRAP", "T", "C", None, "one-time save; wastes a slot"),
-    "Acrobat": ("XMULT", "A", "A", None, "x3 on the LAST hand of the round"),
+    "Acrobat": ("XMULT", "A", "A", None, "X3 on the LAST hand of a blind only (X1 on the others): save your strongest play for the last hand"),
     "Sock and Buskin": ("UTIL", "B", "A", "face", "retrigger face cards"),
     "Swashbuckler": ("MULT", "B", "C", None, "+Mult = sell value of other jokers"),
     "Troubadour": ("TRAP", "C", "C", None, "-1 hand per round"),
@@ -301,7 +301,7 @@ JOKERS: dict[str, tuple[str, str, str, str | None, str]] = {
     "Wee Joker": ("SCALE", "C", "C", None, "grows on scored 2s"),
     "Merry Andy": ("TRAP", "T", "C", None, "-1 hand size"),
     "Oops! All 6s": ("UTIL", "C", "B", None, "doubles probabilities"),
-    "The Idol": ("XMULT", "C", "B", None, "x2 for one specific card"),
+    "The Idol": ("UTIL", "C", "C", None, "X2 only for one random card each round: needs heavy deck building; generally avoid (not an xMult source)"),
     "Seeing Double": ("XMULT", "B", "B", None, "x2 if a Club and another suit score"),
     "Matador": ("ECON", "C", "C", None, "situational, low value"),
     "Hit the Road": ("SCALE", "B", "A", None, "x0.5 per Jack discarded this round"),
@@ -381,7 +381,7 @@ CONSUMABLES: dict[str, tuple[str, str]] = {
     "The Empress": ("GOOD", "Mult (+4) on 2 cards you play"),
     "The Emperor": ("GOOD", "2 random Tarots (needs empty slots)"),
     "The Hierophant": ("GOOD", "Bonus (+30 chips) on 2 cards you play"),
-    "The Lovers": ("SITUATIONAL", "Wild on 1 off-suit card (Flush)"),
+    "The Lovers": ("SITUATIONAL", "Wild on 1 card (counts as every suit: helps Flushes; an enhancement that feeds Vampire)"),
     "The Chariot": ("SITUATIONAL", "Steel on 1 card you HOLD (not play)"),
     "Justice": ("GOOD", "Glass (x2) on 1 card you play (grows Glass Joker)"),
     "The Hermit": ("GOOD", "doubles money (max +$20); worth it at $10+"),
@@ -428,8 +428,8 @@ VOUCHERS: dict[str, tuple[str, str]] = {
     "Blank": ("NEVER", "does nothing by itself"),
     "Clearance Sale": ("GOOD", "25% off (Antes 1-4)"),
     "Liquidation": ("GOOD", "50% off"),
-    "Overstock": ("BUY", "permanent: every shop and every reroll shows 3 cards instead of 2 (2 rerolls with it see as much as 3 without), so it pays for itself in later shops"),
-    "Overstock Plus": ("BUY", "permanent: 4 cards per shop and per reroll"),
+    "Overstock": ("BUY", "permanent: every shop and every reroll shows 3 cards instead of 2, so it pays for itself; buy it whenever offered unless it leaves you less than $10"),
+    "Overstock Plus": ("BUY", "permanent: 4 cards per shop and per reroll; buy it whenever offered unless it leaves you less than $10"),
     "Telescope": ("GOOD", "Celestial packs give MAIN_HAND planet"),
     "Observatory": (
         "GOOD",
@@ -438,7 +438,7 @@ VOUCHERS: dict[str, tuple[str, str]] = {
     "Wasteful": ("BUY", "+1 discard"),
     "Recyclomancy": ("BUY", "+1 discard"),
     "Crystal Ball": ("GOOD", "+1 consumable slot"),
-    "Reroll Surplus": ("GOOD", "rerolls $2 cheaper; only if you plan to reroll"),
+    "Reroll Surplus": ("BUY", "rerolls $2 cheaper: buy when money is above the interest step, after the jokers/packs your build needs"),
     "Reroll Glut": ("GOOD", "rerolls $2 cheaper"),
     "Seed Money": ("NEVER", "interest cap $10; rarely reached"),
     "Money Tree": ("NEVER", "interest cap $20"),
@@ -527,7 +527,11 @@ MAIN_CONTAINS = {
 }
 SMALL_PLAY_MAINS = {"High Card", "Pair", "Three of a Kind"}  # Half Joker: <= 3 cards
 
-FLUSH_ONLY_TAROTS = {"The Star", "The Moon", "The Sun", "The World", "The Lovers"}
+FLUSH_ONLY_TAROTS = {"The Star", "The Moon", "The Sun", "The World"}
+# Enhancement Tarots: each enhanced card played grows Vampire (owner, pass 1)
+VAMPIRE_FOOD = {"The Hierophant", "The Empress", "The Magician", "The Lovers", "Justice", "The Chariot", "The Devil", "The Tower"}
+BLACKBOARD_FOOD = {"The World", "The Moon"}  # turn cards into Spades / Clubs
+SUIT_JOKERS = {"Greedy Joker", "Lusty Joker", "Wrathful Joker", "Gluttonous Joker"}
 PAIR_FIXER_TAROTS = {"Strength", "The Hanged Man", "Death", "Cryptid"}
 TRANCE_MAX_DECK = 50  # Trance only on a (slightly) thinned deck; otherwise Immolate first
 # Jokers that start at X1 Mult and grow -> (enhancement that grows it, Tarot
@@ -619,6 +623,12 @@ def joker_tag(card: dict[str, Any], main_hand: str | None, ante: int) -> str:
     tier = info["early"] if ante <= 3 else info["late"]
     if "OFF-PLAN" in tags and tier in ("S", "A"):
         tier = "B"
+    if info["name"] in SUIT_JOKERS and ante >= 3:
+        tags.append("NOT AFTER ANTE 2")  # owner D4/F3: flat suit jokers only in Antes 1-2
+    if info["name"] == "Superposition" and main_hand == "Straight":
+        tier = "B"
+    if info["name"] == "Blackboard":
+        tags[0] = "XMULT IF ALL HELD ♠/♣"  # judged by its SCORE, not as an [XMULT] buy (owner V8)
     return f"[{'] ['.join(tags)}] tier {tier}: {info['hint']}"
 
 
@@ -629,6 +639,7 @@ def consumable_tag(
     deck_size: int | None = None,
     constellation: bool = False,
     ok_hands: list[str] | None = None,
+    owned: list[str] | None = None,
 ) -> str:
     """Render a short verdict for a Tarot / Planet / Spectral card dict."""
     label = card.get("label")
@@ -653,6 +664,11 @@ def consumable_tag(
     if not hit:
         return ""
     verdict, hint = hit[1]
+    owned_set = set(owned or [])
+    if "j_vampire" in owned_set and hit[0] in VAMPIRE_FOOD:
+        return f"[FEED Vampire] {hint}: every enhanced card you play grows Vampire"
+    if "j_blackboard" in owned_set and hit[0] in BLACKBOARD_FOOD:
+        return f"[FEED Blackboard] {hint}: more black cards to hold for Blackboard's X3"
     if hit[0] == "The High Priestess" and constellation:
         return "[GOOD] 2 random Planets: each one grows Constellation"
     if HAND_FAMILY.get(main_hand or "") == "pair":

@@ -1062,9 +1062,23 @@ def money_floor(G: dict[str, Any]) -> int:
 RESERVE = 10  # soft money reserve from Ante 2 (owner: "try to reserve $10")
 
 
-def reserve(G: dict[str, Any]) -> int:
-    """Soft minimum money to keep even for score buys (rerolls never go below)."""
-    return RESERVE if int(G.get("ante_num") or 1) >= 2 else 0
+def reserve(G: dict[str, Any], status: str | None = None, boss_short: bool = False) -> int:
+    """Money a SCORE buy must leave (P2-8, owner S2/F1).
+
+    Ante 1: $0. Ante 2 while THIN/SHORT: $0 (S2: spend to ~$0 for survival).
+    Ante 3: $0 only when SHORT for the boss. From Ante 4: one buy may take money
+    below $10 (F1), after which the harness locks the shop. Otherwise $10.
+    """
+    ante = int(G.get("ante_num") or 1)
+    if ante <= 1:
+        return 0
+    if ante == 2 and status in ("THIN", "SHORT"):
+        return 0
+    if ante == 3 and boss_short:
+        return 0
+    if ante >= 4:
+        return 0
+    return RESERVE
 
 
 def interest(money: int) -> int:
@@ -1201,7 +1215,7 @@ def xmult_owned(G: dict[str, Any], plan: dict[str, Any] | None = None) -> int:
         1
         for i in _owned_joker_infos(G)
         if i["category"] == "XMULT"
-        and i["key"] not in ("j_loyalty_card", "j_stencil", "j_flower_pot")
+        and i["key"] not in ("j_loyalty_card", "j_stencil", "j_flower_pot", "j_blackboard")
         and knowledge.joker_fit(i["name"], plan["hand"]) != "OFF-PLAN"
     )
 
@@ -1937,16 +1951,9 @@ def ante_goals(
         or (cat == "CHIPS" and j.get("label") == weakest)
     )
     useful = sum(1 for i in infos if i["category"] not in ("UTIL", "TRAP"))
-    want_jokers = {1: 2, 2: 4}.get(ante, limit)
     want_xmult = 0 if ante <= 3 else (1 if ante <= 5 else 2)
     want_level = max(1, ante - 1) if ante >= 3 else 1
-    goals = [
-        {
-            "text": f"{want_jokers} scoring jokers (have {useful})",
-            "done": useful >= want_jokers or count >= limit,
-            "action": "fill empty joker slots with scoring jokers",
-        },
-    ]
+    goals: list[dict[str, Any]] = []  # no joker-count goal (owner C4)
     if want_xmult or ante == 3:
         goals.append(
             {
@@ -2081,6 +2088,7 @@ def run_status(
         else None
     )
     bcheck = boss_check(G, history) if boss.get("status") in ("SELECT", "UPCOMING") else None
+    boss_short = bool(bcheck and not bcheck["ok"]) or (status == "SHORT" and sit["kind"] == "boss")
     effective_floor = floor
 
     econ = sum(1 for i in infos if i["category"] == "ECON")
@@ -2100,7 +2108,7 @@ def run_status(
     priority = (
         open_goals[0]["action"]
         if open_goals
-        else "level MAIN_HAND with planets and upgrade your weakest joker"
+        else "buy what builds your run (see STATUS); keep money and empty slots while COMFORTABLE"
     )
     milestone = f"Ante {ante} goals met: {len(goals) - len(open_goals)}/{len(goals)}."
     return {
@@ -2138,11 +2146,12 @@ def run_status(
         "make_rate": power["make_rate"],
         "boss_make_rate": power["boss_make_rate"],
         "boss_per_hand": power["boss_per_hand"],
-        "reserve": reserve(G),
+        "reserve": reserve(G, status, boss_short),
         # money a score buy may use: a joker filling an empty slot (Antes 1-3),
         # a joker with SCORE +50% or more, an on-plan [XMULT] joker, a [MAIN]
         # planet, a Buffoon pack with a free slot, or a SCORE > 0 joker while TOO WEAK
-        "score_spendable": max(money - reserve(G), money - effective_floor, 0),
+        "score_spendable": max(money - reserve(G, status, boss_short), money - effective_floor, 0),
+        "shop_locked": bool((G.get("luna") or {}).get("shop_locked")),
         "recent_scores": scores,
         "next_target": nxt_target,
         "milestone": milestone,
@@ -2153,6 +2162,8 @@ def run_status(
         "hologram": owns_hologram(G),
         # [FEED] planets: Constellation grows, Satellite pays (owner J5)
         "constellation": owns_joker(G, "j_constellation") or owns_joker(G, "j_satellite"),
+        "owned_keys": _joker_keys(G),
+        "vampire": owns_joker(G, "j_vampire"),
         "main_open": plan["open"],
         "main_label": f"OPEN (leaning {plan['hand']})" if plan["open"] else plan["hand"],
         "tag_hand": None if plan["open"] else plan["hand"],
@@ -2485,6 +2496,31 @@ def _candidates(G: dict[str, Any], norm: list[dict[str, Any]], pad_to: int) -> l
             ranks = [r for k, r in enumerate(window) if k != skip][:need] if skip is not None else window
             if all(r in by_rank for r in ranks):
                 cands.add(tuple(by_rank[r][0] for r in ranks))
+    keyset = set(_joker_keys(G)) | set(copied_keys(G))
+    held_value = keyset & {"j_blackboard", "j_baron", "j_shoot_the_moon", "j_raised_fist"} or any(
+        c["enh"] == "STEEL" for c in norm
+    )
+    if held_value and not pad_to:
+        # Pad a play to 5 with cards that are worth less HELD (Blackboard: red
+        # cards first, owner V8; Baron/Shoot the Moon keep Kings/Queens held);
+        # a filler may never change the hand type (H3)
+        keep_ranks = held_scoring_ranks(G)
+
+        def held_worth(i: int) -> tuple:
+            c = norm[i]
+            black = c["suit"] in ("S", "C") or c["enh"] == "WILD"
+            return ("j_blackboard" in keyset and black, c["rank"] in keep_ranks or c["enh"] == "STEEL",
+                    CHIP_VALUE.get(c["rank"] or "", 0))
+
+        for c in list(cands):
+            base = classify([norm[i] for i in c], **flags)[0]
+            play = list(c)
+            for i in sorted((i for i in range(len(norm)) if i not in play and not norm[i]["hidden"]), key=held_worth):
+                if len(play) >= 5:
+                    break
+                if classify([norm[j] for j in [*play, i]], **flags)[0] == base:
+                    play.append(i)
+            cands.add(tuple(play))
     out = []
     for c in cands:
         play = list(c)
@@ -2557,18 +2593,31 @@ def _currently(j: dict[str, Any]) -> float:
     return float(m.group(2)) if m else 0.0
 
 
+def _dealt_hands(G: dict[str, Any], draws: list, *, boss: str = "", discards: bool = True) -> list[list]:
+    """The hand Luna plays from each draw: after one discard (K2) when allowed."""
+    pad = 5 if boss == "The Psychic" else 0
+    out = []
+    for hand, refill in draws:
+        if discards:
+            _s, t, _p = _best_play(G, hand, pad)
+            hand = _after_discard(G, hand, refill, t)
+        out.append(hand)
+    return out
+
+
 def _strength(G: dict[str, Any], draws: list, *, boss: str = "", discards: bool = True) -> dict[str, Any]:
     """Mean score per hand over ``draws`` under G (jokers, levels, boss)."""
+    return _score_hands(G, _dealt_hands(G, draws, boss=boss, discards=discards), boss=boss)
+
+
+def _score_hands(G: dict[str, Any], dealt: list[list], *, boss: str = "") -> dict[str, Any]:
+    """Best play per dealt hand under G, plus Spare Trousers growth inside the
+    blind, Card Sharp repeats and Acrobat's last hand: mean score per hand."""
     pad = 5 if boss == "The Psychic" else 0
     hands = _hands_per_round(G)
     chosen = []
-    for hand, refill in draws:
+    for hand in dealt:
         s, t, play = _best_play(G, hand, pad)
-        if discards:
-            new = _after_discard(G, hand, refill, t)
-            if new is not hand:
-                hand = new
-                s, t, play = _best_play(G, hand, pad)
         chosen.append((s, t, hand, play))
     if not chosen:
         return {"per_hand": 0, "types": Counter(), "chosen": []}
@@ -2876,72 +2925,123 @@ def _with_jokers(G: dict[str, Any], jokers: list[dict[str, Any]]) -> dict[str, A
     return G2
 
 
-def shop_impact(G: dict[str, Any]) -> dict[str, Any]:
-    """Score change per hand of an average MAIN_HAND play for each shop/pack
-    joker and MAIN_HAND planet, and what each owned joker contributes.
+GROWING = {"j_trousers", "j_runner", "j_constellation", "j_supernova", "j_popcorn", "j_ice_cream"}
+DISCARD_ENDS = {"j_banner", "j_mystic_summit"}  # SCORE depends on discards kept (W5)
+GROWTH_BLINDS = 3  # P2-3: growing jokers valued over the next 3 rounds
 
-    The average runs over every MAIN_HAND play your deck can make (see
-    typical_plays), so face-card and suit jokers count as often as they fire.
-    """
+
+def _neutral(G: dict[str, Any]) -> dict[str, Any]:
+    """G with no blind CURRENT (shop valuation is boss-free)."""
+    return {
+        **G,
+        "blinds": {
+            k: {**v, "status": "UPCOMING"} if v.get("status") == "CURRENT" else v
+            for k, v in (G.get("blinds") or {}).items()
+        },
+    }
+
+
+def _carry(G: dict[str, Any], j: dict[str, Any]) -> str | None:
+    """Why an owned joker is never a swap candidate (None: it can be swapped)."""
     plan = main_hand_plan(G)
-    play = typical_play(G, plan)
+    key = j.get("key", "")
+    label = str(j.get("label") or key)
+    if label in synergy_keep(G):
+        return "synergy"
+    commit = plan.get("commit") or {}
+    if commit.get("trigger") == label:
+        return "it sets MAIN_HAND"
+    if key in GROWING - {"j_popcorn", "j_ice_cream"} or label in knowledge.GROWS_XMULT:
+        return "it grows"
+    info = knowledge.joker_info(label) or {}
+    ante = int(G.get("ante_num") or 1)
+    money = int(G.get("money") or 0)
+    # [ECON] is kept through Ante 4 unless money is at the interest cap (G3)
+    if info.get("category") == "ECON" and ante <= 4 and money < 25:
+        return "economy"
+    return None
+
+
+def shop_impact(G: dict[str, Any]) -> dict[str, Any]:
+    """Score change per hand for each shop/pack joker and MAIN_HAND planet, what
+    each owned joker adds, WEAKEST, and the best swap per shop joker (P2-1 sampler)."""
+    return _cached(_state_key(G, "shop_impact"), lambda: _shop_impact(G))
+
+
+def _shop_impact(G: dict[str, Any]) -> dict[str, Any]:
+    plan = main_hand_plan(G)
     out: dict[str, Any] = {
         "hand": plan["hand"],
-        "cards": [card_name(c) for c in play],
+        "cards": [],
         "plays": 0,
         "score": 0,
         "shop": {},
         "pack": {},
         "owned": {},
+        "swaps": {},
         "weakest": None,
+        "chips_sources": 0,
     }
     owned = _area_cards(G, "jokers")
-    G_owned = _with_jokers(G, owned)
-    plays = [
-        p
-        for p in typical_plays(G, plan)
-        if estimate_play(G_owned, p, [], expected=True)["hand"] == plan["hand"]
-    ]
-    if not plays:
+    G0 = _neutral(G)
+    draws = sample_draws(G)[:SHOP_SAMPLES]
+    if not draws:
         return out
+    dealt = _dealt_hands(_with_jokers(G0, owned), draws)
 
-    def average(G2: dict[str, Any]) -> tuple[float, set[str]]:
-        total, unknown = 0.0, set()
-        for p in plays:
-            est = estimate_play(G2, p, [], expected=True)
-            total += est["score"]
-            unknown |= set(est["unknown"])
-        return total / len(plays), unknown
+    def score(js: list[dict[str, Any]], Gx: dict[str, Any] | None = None) -> float:
+        Gv = _with_jokers(Gx if Gx is not None else G0, js)
+        return _score_hands(Gv, dealt)["per_hand"]
 
-    base_score, base_unknown = average(G_owned)
-    score = int(base_score)
-    out["score"] = score
-    out["plays"] = len(plays)
+    base_run = _score_hands(_with_jokers(G0, owned), dealt)
+    base = base_run["per_hand"]
+    types = base_run["types"]
+    out["score"] = base
+    out["plays"] = len(dealt)
+    out["mix"] = [t for t, _ in types.most_common(3)]
 
-    def describe(new_score: float, unknown: bool) -> str:
-        if unknown:
-            return "effect not computed"
-        delta = int(new_score) - score
-        pct_txt = f" ({round(delta * 100 / score)}%)" if score else ""
-        return f"{'+' if delta >= 0 else ''}{fmt_num(delta)} per hand{pct_txt}"
+    def pct(delta: float) -> str:
+        return f" ({round(delta * 100 / base)}%)" if base else ""
+
+    def signed(v: float) -> str:
+        return f"{'+' if v >= 0 else ''}{fmt_num(v)}"
+
+    def joker_text(card: dict[str, Any]) -> str:
+        key = card.get("key", "")
+        new = score([*owned, card])
+        txt = f"{signed(new - base)} per hand{pct(new - base)}"
+        if key in GROWING or str(card.get("label")) in knowledge.GROWS_XMULT:
+            Gg = grown(_with_jokers(G0, [*owned, card]), GROWTH_BLINDS, types)
+            later = _score_hands(Gg, dealt)["per_hand"]
+            txt += f" now, {signed(later - base)} in 3 rounds"
+        if key == "j_acrobat":
+            rnd = dict(G0.get("round") or {})
+            Gl = {**G0, "round": {**rnd, "hands_left": 1}}
+            last = score([*owned, card], Gl) - score(owned, Gl)
+            txt += f" (X3 on the LAST hand of a blind only: {signed(last)} on that hand, X1 on the others)"
+        if key in DISCARD_ENDS:
+            rnd = dict(G0.get("round") or {})
+            keep = score([*owned, card], {**G0, "round": {**rnd, "discards_left": 4}}) - score(owned, {**G0, "round": {**rnd, "discards_left": 4}})
+            dig = score([*owned, card], {**G0, "round": {**rnd, "discards_left": 0}}) - score(owned, {**G0, "round": {**rnd, "discards_left": 0}})
+            txt = f"{signed(keep)} per hand if you keep all 4 discards, {signed(dig)} after using them"
+        return txt
 
     def item_delta(card: dict[str, Any]) -> str | None:
         if card.get("set") == "JOKER":
-            new_score, unknown = average(_with_jokers(G, [*owned, card]))
-            label = str(card.get("label") or card.get("key"))
-            return describe(new_score, label in unknown)
+            if (card.get("state") or {}).get("hidden"):
+                return None
+            return joker_text(card)
         if card.get("set") == "PLANET":
             hand = knowledge.planet_hand(card.get("label"))
             if hand != plan["hand"]:
                 return None
-            levels = dict(G.get("hands") or {})
-            cur = dict(levels.get(hand) or {})
+            levels = {k: dict(v or {}) for k, v in (G.get("hands") or {}).items()}
+            cur = levels.setdefault(hand, {})
             dc, dm = LEVEL_UP.get(hand, (0, 0))
             cur["chips"] = float(cur.get("chips", 0)) + dc
             cur["mult"] = float(cur.get("mult", 0)) + dm
-            levels[hand] = cur
-            new_score, _ = average({**G_owned, "hands": levels})
-            return describe(new_score, False)
+            new = score(owned, {**G0, "hands": levels})
+            return f"{signed(new - base)} per hand{pct(new - base)}"
         return None
 
     for area in ("shop", "pack"):
@@ -2951,33 +3051,53 @@ def shop_impact(G: dict[str, Any]) -> dict[str, Any]:
                 out[area][i] = d
     contrib = {}
     for i, j in enumerate(owned):
-        info = knowledge.joker_info(j.get("label")) or {}
         rest = [x for k, x in enumerate(owned) if k != i]
-        label = str(j.get("label") or j.get("key"))
-        if label in base_unknown:
-            out["owned"][i] = "effect not computed"
-            continue
-        rest_score, _ = average(_with_jokers(G, rest))
-        gain = score - int(rest_score)
-        contrib[i] = (gain, info.get("category"))
+        gain = int(base - score(rest))
+        contrib[i] = gain
         out["owned"][i] = f"adds {fmt_num(gain)} per hand"
-    # weakest = least score among jokers that do not grow or pay money
-    ante = int(G.get("ante_num") or 1)
-    protected = {"SCALE", "XMULT"} | ({"ECON"} if ante <= 4 else set())
-    keep = synergy_keep(G)
-    candidates = [
-        (gain, i)
-        for i, (gain, cat) in contrib.items()
-        if cat not in protected and owned[i].get("label") not in keep
-    ]
+    out["chips_sources"] = sum(
+        1 for j in owned if (knowledge.joker_info(j.get("label")) or {}).get("category") == "CHIPS"
+    )
+    candidates = [(gain, i) for i, gain in contrib.items() if _carry(G, owned[i]) is None]
     if candidates:
         gain, i = min(candidates)
-        out["weakest"] = {
-            "index": i,
-            "label": owned[i].get("label"),
-            "gain": gain,
-        }
+        out["weakest"] = {"index": i, "label": owned[i].get("label"), "gain": gain}
+    jokers_area = G.get("jokers") or {}
+    if owned and int(jokers_area.get("count", len(owned))) >= int(jokers_area.get("limit", 5)):
+        # W1/W2: with full slots, the best swap per shop joker over every owned
+        # joker that can be swapped
+        for i, card in enumerate(_area_cards(G, "shop")):
+            if card.get("set") != "JOKER" or _norm(card)["ed"] == "NEGATIVE":
+                continue
+            best = None
+            for _g, k in candidates:
+                rest = [x for n, x in enumerate(owned) if n != k]
+                delta = score([*rest, card]) - base
+                if best is None or delta > best[0]:
+                    best = (delta, k)
+            if best is not None:
+                out["swaps"][i] = {
+                    "index": best[1],
+                    "label": owned[best[1]].get("label"),
+                    "delta": int(best[0]),
+                    "text": f"swap for {owned[best[1]].get('label')}: {signed(best[0])} per hand{pct(best[0])}",
+                }
     return out
+
+
+def live_xmult(G: dict[str, Any], card: dict[str, Any], score_text: str | None) -> bool:
+    """An [XMULT] joker that fires on the hands Luna makes (its SCORE added now
+    is above 0), or a growing xMult with its source: such a joker may replace
+    another even when today's swap is not a gain (owner F8: "excellent joker ...
+    buy it and replace another"). Blackboard and other xMult jokers with SCORE
+    +0 are judged by SCORE alone (owner, V8 (b))."""
+    label = str(card.get("label") or "")
+    if "SOURCE PRESENT" in grows_xmult(G, card):
+        return True
+    if (knowledge.joker_info(label) or {}).get("category") != "XMULT":
+        return False
+    m = re.match(r"\s*([+-]?[\d,]+)", score_text or "")
+    return bool(m) and int(m.group(1).replace(",", "")) > 0
 
 
 def swap_plan(
@@ -2986,9 +3106,12 @@ def swap_plan(
     """Sell-first plan for buying a shop joker while joker slots are full.
 
     Returns None when no swap is needed, a refusal message when the swap is
-    bad, or ``{"sell": index, "label": WEAKEST, "buy": label}``. The swap is
-    allowed for an [XMULT] joker, a [GROWS-XMULT] joker with a source, or a
-    joker that scores more than the line-up with WEAKEST in it.
+    bad, or ``{"sell": index, "label": ..., "buy": label}``. Every owned joker
+    that can be swapped is tried and the best one is sold (pass 1 W1); the swap
+    must raise the score (F3, no margin), or for a growing joker raise it within
+    3 rounds. F4: while THIN/SHORT a growing xMult joker (Constellation, ...) is
+    bought without that test and replaces the weakest joker that is not the main
+    +Mult or +Chips source.
     """
     if method != "buy" or "card" not in params or G.get("state") != "SHOP":
         return None
@@ -2996,46 +3119,63 @@ def swap_plan(
     if int(jokers.get("count", 0)) < int(jokers.get("limit", 5)):
         return None
     try:
-        card = _area_cards(G, "shop")[int(params["card"])]
+        idx = int(params["card"])
+        card = _area_cards(G, "shop")[idx]
     except (IndexError, TypeError, ValueError):
         return None
     if card.get("set") != "JOKER" or _norm(card)["ed"] == "NEGATIVE":
         return None
     label = str(card.get("label") or card.get("key"))
-    weakest = shop_impact(G).get("weakest")
-    if not weakest:
+    owned = _area_cards(G, "jokers")
+    impact = shop_impact(G)
+    swap = impact["swaps"].get(idx)
+    if not swap:
         return (
-            f"Your joker slots are full and every joker you own is kept (xMult, "
-            f"scaling, economy or a synergy pair), so there is no room for {label}. "
+            f"Your joker slots are full and every joker you own is kept (it sets MAIN_HAND, "
+            f"grows, pays money or is a synergy pair), so there is no room for {label}. "
             "Buy something else or call next_round."
         )
-    owned = _area_cards(G, "jokers")
-    out = owned[int(weakest["index"])]
-    info = knowledge.joker_info(label) or {}
-    big = info.get("category") == "XMULT" or "SOURCE PRESENT" in grows_xmult(G, card)
-    if not big:
-        plan = main_hand_plan(G)
-        plays = typical_plays(G, plan)
-        rest = [j for k, j in enumerate(owned) if k != int(weakest["index"])]
-
-        def average(js: list[dict[str, Any]]) -> float:
-            G2 = _with_jokers(G, js)
-            ests = [estimate_play(G2, p, [], expected=True) for p in plays]
-            return sum(e["score"] for e in ests) / max(len(ests), 1)
-
-        if plays and average([*rest, card]) <= average(owned):
+    sell = int(swap["index"])
+    grows = card.get("key") in GROWING or label in knowledge.GROWS_XMULT
+    status = run_status(G)["status"]
+    if label in knowledge.GROWS_XMULT and status in ("THIN", "SHORT"):
+        contrib = {
+            i: int(str(t).split()[1].replace(",", ""))
+            for i, t in impact["owned"].items()
+            if str(t).startswith("adds")
+        }
+        main = set()
+        for cat in ("MULT", "CHIPS"):
+            of_cat = [i for i in contrib if (knowledge.joker_info(owned[i].get("label")) or {}).get("category") == cat]
+            if of_cat:
+                main.add(max(of_cat, key=lambda i: contrib[i]))
+        pool = [i for i in contrib if i not in main and _carry(G, owned[i]) is None]
+        if pool:
+            sell = min(pool, key=lambda i: contrib[i])
+    elif swap["delta"] <= 0 and not live_xmult(G, card, impact["shop"].get(idx)):
+        later = None
+        if grows:
+            rest = [x for n, x in enumerate(owned) if n != sell]
+            G0 = _neutral(G)
+            dealt = _dealt_hands(_with_jokers(G0, owned), sample_draws(G)[:SHOP_SAMPLES])
+            types = Counter(power_check(G).get("types") or {})
+            now = _score_hands(_with_jokers(G0, owned), dealt)["per_hand"]
+            later = _score_hands(grown(_with_jokers(G0, [*rest, card]), GROWTH_BLINDS, types), dealt)["per_hand"] - now
+        if later is None or later <= 0:
             return (
-                f"Swapping {weakest['label']} (WEAKEST) for {label} would not raise "
-                f"your score, so keep your jokers. Buy something else or call next_round."
+                f"Refused: the best swap for {label} is {swap['text']} (now "
+                f"{fmt_num(impact['score'])} per hand), so it would not raise your score. "
+                "Buy something else or call next_round."
             )
+    out = owned[sell]
     price = int((card.get("cost") or {}).get("buy") or 0)
     money = int(G.get("money") or 0) + int((out.get("cost") or {}).get("sell") or 0)
     if price > money:
         return (
-            f"Even after selling {weakest['label']} you would have ${money}, not "
+            f"Even after selling {out.get('label')} you would have ${money}, not "
             f"enough for {label} (${price}). Buy something else or call next_round."
         )
-    return {"sell": int(weakest["index"]), "label": weakest["label"], "buy": label}
+    return {"sell": sell, "label": out.get("label"), "buy": label}
 
 
 def synergy_keep(G: dict[str, Any]) -> dict[str, str]:
@@ -3100,16 +3240,14 @@ def _sell_veto(G: dict[str, Any], joker: dict[str, Any], full: bool) -> str | No
 
 
 def _first_shop_veto(G: dict[str, Any], index: Any) -> str | None:
-    """First shop: a Buffoon pack beats a joker that adds +0 now (not xMult/econ)."""
+    """First shop VISIT of the run (owner C1, P2-6): open an affordable Buffoon
+    pack before buying any shop joker. Exception (owner Q2 (c)): Supernova may
+    come first when money cannot cover both."""
     try:
-        i = int(index)
-        card = _area_cards(G, "shop")[i]
+        card = _area_cards(G, "shop")[int(index)]
     except (IndexError, TypeError, ValueError):
         return None
     if card.get("set") != "JOKER":
-        return None
-    info = knowledge.joker_info(card.get("label")) or {}
-    if info.get("category") in ("XMULT", "ECON"):
         return None
     money = int(G.get("money") or 0)
     buffoon = [
@@ -3118,22 +3256,51 @@ def _first_shop_veto(G: dict[str, Any], index: Any) -> str | None:
         if "buffoon" in str(p.get("label", "")).lower()
         and int((p.get("cost") or {}).get("buy") or 0) <= money
     ]
-    if not buffoon or not str(shop_impact(G)["shop"].get(i, "")).startswith("+0 per hand"):
+    if not buffoon:
+        return None
+    price = int((card.get("cost") or {}).get("buy") or 0)
+    pack = min(int((p.get("cost") or {}).get("buy") or 0) for p in buffoon)
+    if card.get("key") == "j_supernova" and money < price + pack:
         return None
     return (
-        f"First shop: {card.get('label')} adds +0 to your hand now. Open the "
-        "Buffoon pack instead: it offers a choice of jokers that score now."
+        f"First shop: open the Buffoon pack before buying {card.get('label')} "
+        "(it offers a choice of jokers); then buy shop jokers that help."
     )
 
 
-def reroll_cap(G: dict[str, Any]) -> int:
-    """Rerolls allowed per shop visit (STRATEGY shop rule 8)."""
+REROLL_CAP = {"low": 6, "high": 10}  # decision B: rerolls leaving < $25, per shop
+REROLL_RUNAWAY = 30
+
+
+def reroll_veto(G: dict[str, Any], rerolls: int) -> str | None:
+    """Money lines for rerolls (P2-9, owner F6/G1/F1/F8, decision B)."""
     ante = int(G.get("ante_num") or 1)
     if ante <= 1:
-        return 0
-    if run_status(G)["status"] == "TOO WEAK":
-        return 3
-    return 2 if ante >= 4 else 1
+        return "Reroll refused: no rerolls in Ante 1 (early economy)."
+    money = int(G.get("money") or 0)
+    cost = int((G.get("round") or {}).get("reroll_cost", 5) or 0)
+    after = money - cost
+    status = run_status(G)["status"]
+    defining = bool(main_hand_plan(G).get("commit"))
+    if ante <= 3:
+        line = 10 if status in ("THIN", "SHORT") or not defining else 25
+    else:
+        line = 25 if status == "COMFORTABLE" else 10
+    if after < line:
+        why = "you are COMFORTABLE, so keep $25 for interest" if line == 25 else "keep at least $10"
+        return (
+            f"Reroll refused: it costs ${cost} and would leave ${after}; {why}. "
+            "Buy something useful or call next_round."
+        )
+    cap = REROLL_CAP["low"] if ante <= 4 else REROLL_CAP["high"]
+    if after < 25 and rerolls >= cap:
+        return (
+            f"Reroll refused: {rerolls} rerolls in this shop already (at most {cap} that leave "
+            "less than $25). Buy something useful or call next_round."
+        )
+    if rerolls >= REROLL_RUNAWAY:
+        return "Reroll refused: too many rerolls in one shop. Call next_round."
+    return None
 
 
 def validate_action(
@@ -3157,23 +3324,31 @@ def validate_action(
         if len(set(cards)) != len(cards):
             return "Each card index may appear only once."
         # Owner (pass 1): the harness never refuses a discard; WINS is advice.
+    luna = G.get("luna") or {}
+    first_shop = (
+        luna["first_shop"]
+        if "first_shop" in luna
+        else int(G.get("ante_num") or 1) == 1 and int(G.get("round_num") or 1) == 1
+    )
     if (
         method == "buy"
         and "card" in params
         and G.get("state") == "SHOP"
-        and int(G.get("ante_num") or 1) == 1
-        and int(G.get("round_num") or 1) == 1
-        and not full
+        and first_shop
         and (veto := _first_shop_veto(G, params["card"]))
     ):
         return veto
-    if method == "reroll" and shop_rerolls >= (cap := reroll_cap(G)):
+    if (
+        luna.get("shop_locked")
+        and G.get("state") in ("SHOP", "SMODS_BOOSTER_OPENED")
+        and (method == "reroll" or (method == "buy" and G.get("state") == "SHOP"))
+    ):
         return (
-            "Reroll refused: no rerolls in Ante 1."
-            if cap == 0
-            else f"Reroll refused: you already rerolled {shop_rerolls} times in this "
-            f"shop (limit {cap}). Buy something useful or call next_round."
+            "From Ante 4, once a buy takes your money below $10 the shop is over "
+            "(owner F1): call next_round."
         )
+    if method == "reroll" and (veto := reroll_veto(G, shop_rerolls)):
+        return veto
     if method == "buy" and "card" in params and G.get("state") == "SHOP" and full:
         try:
             card = _area_cards(G, "shop")[int(params["card"])]
@@ -3183,15 +3358,6 @@ def validate_action(
             return (
                 "Joker Stencil refused: it gives X1 per EMPTY joker slot and yours are "
                 "full, so it adds nothing. Buy something else or call next_round."
-            )
-    if method == "reroll":
-        money = int(G.get("money") or 0)
-        cost = int((G.get("round") or {}).get("reroll_cost", 5) or 0)
-        keep = reserve(G)
-        if cost and money - cost < keep:
-            return (
-                f"Reroll refused: it costs ${cost} and would leave ${money - cost}, "
-                f"below the ${keep} RESERVE. Buy something useful or call next_round."
             )
     if method == "sell" and "joker" in params and G.get("state") == "SHOP":
         try:
@@ -3206,9 +3372,14 @@ def validate_action(
             label = str(packs[int(params["pack"])].get("label", ""))
         except (IndexError, TypeError, ValueError):
             label = ""
-        if "buffoon" in label.lower():
+        try:
+            price = int((packs[int(params["pack"])].get("cost") or {}).get("buy") or 0)
+        except (IndexError, TypeError, ValueError):
+            price = 0
+        if "buffoon" in label.lower() and int(G.get("money") or 0) - price < 25:
             return (
-                "Buffoon Pack refused: your joker slots are full (sell a joker first)."
+                "Buffoon Pack refused: your joker slots are full; with full slots open one "
+                "only when $25 or more stays after buying it."
             )
     if method == "pack":
         if params.get("skip") and params.get("card") is not None:
