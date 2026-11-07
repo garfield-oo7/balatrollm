@@ -112,3 +112,74 @@ def test_pending_investment_tag_line_until_the_ante_moves_on() -> None:
     G2["ante_num"] = 2
     bot._annotate(G2)
     assert run_status(G2, [], [])["pending_tags"] == []
+
+
+def _prompt(ante: int, rnd: int, money: int, status: str, main: str, shop: str = "", hand: bool = False) -> dict:
+    body = (
+        f"# STATUS\n- Ante {ante}/8, round {rnd}, money ${money}\n"
+        f"- MAIN_HAND: {main}\n- Jokers 1/5, SLOTS_FREE 4, XMULT_OWNED 0\n"
+        f"- STATUS: {status} for the next blind (Small Blind): 300 needs about 2 of 4 hands at about 150 per hand\n"
+    )
+    body += "# ROUND\n- Blind: Small\n" if hand else shop
+    return {"body": {"messages": [{"role": "user", "content": body}]}}
+
+
+def _resp(name: str, args: dict) -> dict:
+    return {"response": {"body": {"choices": [{"message": {"tool_calls": [
+        {"function": {"name": name, "arguments": json.dumps(args)}}]}}]}}}
+
+
+def test_digest_pass2_fields(tmp_path: Path) -> None:
+    digest = _digest_module()
+    shop = (
+        "# SHOP\n- 0: The Duo $8 [XMULT] tier S | SCORE +541 per hand\n- 1: Pluto (Planet) $3 [OK]\n"
+        "- Reroll cost: $5\n\n## Packs (use buy with `pack`)\n- 0: Buffoon Pack $4\n\n- Next blind: x\n\n# JOKERS\n"
+    )
+    open_main = "OPEN (leaning Pair) - OPEN: no joker calls for a hand yet"
+    committed = "Pair - committed: The Duo (round 2)"
+    reqs = [
+        _prompt(1, 1, 10, "COMFORTABLE", open_main, shop),
+        _prompt(1, 1, 6, "COMFORTABLE", open_main, shop),
+        _prompt(1, 1, 6, "COMFORTABLE", open_main, shop),
+        _prompt(1, 2, 8, "THIN", committed, hand=True),
+        _prompt(2, 3, 20, "SHORT", committed, shop),
+        _prompt(2, 3, 15, "SHORT", committed, shop),
+    ]
+    resps = [
+        _resp("buy", {"pack": 0}),
+        _resp("buy", {"card": 0}),
+        _resp("next_round", {}),
+        _resp("play", {"cards": [0, 1]}),
+        _resp("reroll", {}),
+        _resp("next_round", {}),
+    ]
+    (tmp_path / "requests.jsonl").write_text("".join(json.dumps(r) + "\n" for r in reqs))
+    (tmp_path / "responses.jsonl").write_text("".join(json.dumps(r) + "\n" for r in resps))
+    (tmp_path / "task.json").write_text(json.dumps({"seed": "SEED-Z", "model": "m"}))
+    (tmp_path / "stats.json").write_text(json.dumps({"run_won": False, "final_ante": 2}))
+    (tmp_path / "gamestates.jsonl").write_text(json.dumps({"state": "GAME_OVER", "ante_num": 2, "hands": {
+        "High Card": {"played": 9}, "Pair": {"played": 4}}}) + "\n")
+    (tmp_path / "run.log").write_text(
+        "x - INFO - Harness rerolled boss The Wall -> The Hook (The Wall is a boss to always reroll)\n"
+        "x - WARNING - Vetoed call: Reroll refused\n"
+        "x - INFO - Skipping Small Blind for Investment Tag\n"
+    )
+    d = digest.digest(tmp_path)
+    assert d["situations_at_shop_entry"] == {"COMFORTABLE": 1, "SHORT": 1}
+    assert d["first_shop"] == {"buys": ["pack:Buffoon Pack", "joker:The Duo"], "buffoon_offered": True, "buffoon_first": True}
+    assert d["main_commit"] == {"ante": 1, "round": 2, "hand": "Pair", "trigger": "The Duo"}
+    assert d["rerolls_by_ante"] == {1: 0, 2: 1} and d["rerolls_below_25_ante2_3"] == 1
+    assert d["most_played"] == "Pair"  # High Card not counted (H4)
+    assert d["too_weak_share_ante1_2"] == 0.4  # 2 of 5 shop decisions SHORT
+    h = d["harness"]
+    assert h["boss_rerolls"] == 1 and h["boss_reroll_cost"] == 10 and h["boss_reroll_list"] == [["The Wall", "The Hook"]]
+    assert h["refusals"] == 1 and h["tag_skip_list"] == ["Investment Tag"]
+    assert not d["won"]
+
+
+def test_digest_dip_flag() -> None:
+    digest = _digest_module()
+    v = lambda a, m: {"ante": a, "money_in": m, "money_out": m}  # noqa: E731
+    assert digest.dip_flag([v(2, 10), v(2, 5), v(3, 20)])
+    assert not digest.dip_flag([v(2, 10), v(2, 30), v(3, 20)])
+    assert digest.dip_flag([v(4, 10), v(4, 30), v(5, 5)])

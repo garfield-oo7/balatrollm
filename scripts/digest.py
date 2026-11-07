@@ -15,8 +15,21 @@ from typing import Any
 
 HEAD = re.compile(r"- Ante (\d+)/8, round (\d+), money \$(-?\d+)")
 JOKERS = re.compile(r"- Jokers (\d+)/(\d+), SLOTS_FREE (\d+), XMULT_OWNED (\d+)")
-STATUS = re.compile(r"- STATUS: (ON TRACK|TOO WEAK|UNKNOWN)(?: \(next blind [\d,]+ needs about (\d+) hands)?")
-MAIN = re.compile(r"- MAIN_HAND: ([^-\n]+?) -")
+# both vocabularies: pass 1 (ON TRACK / TOO WEAK) and pass 2 (COMFORTABLE / THIN / SHORT)
+STATUS = re.compile(r"- STATUS: (ON TRACK|TOO WEAK|UNKNOWN|COMFORTABLE|THIN|SHORT)\b[^\n]*?(?:needs about (\d+))?[^\n]*$", re.M)
+WEAK = {"TOO WEAK", "SHORT"}
+MAIN = re.compile(r"^- MAIN_HAND: (.+?) - (.*)$", re.M)
+COMMIT = re.compile(r"committed: (.+?)(?: \(round (\d+)\))?$")
+PACKS = re.compile(r"^- (\d+): (.+?) \$(\d+)", re.M)
+HARNESS = {
+    "refusals": re.compile(r"Vetoed call: "),
+    "boss_rerolls": re.compile(r"Harness rerolled boss (.+?) -> (.+?) \("),
+    "shop_exits": re.compile(r"Harness left the shop after"),
+    "shop_locks": re.compile(r"Harness locked the shop"),
+    "tag_skips": re.compile(r"Skipping .+? for (.+)$"),
+    "harness_sells": re.compile(r"Harness sold (.+?) to make room for"),
+    "phase_orders": re.compile(r"Harness joker phase order for discard"),
+}
 BLIND = re.compile(r"- Ante (\d+) (.+?): scored ([\d,]+) / ([\d,]+), (\d+) hands left")
 OFFER = re.compile(r"^- (\d+): (.+?) \$(\d+)(.*)$", re.M)
 VETO = re.compile(r"Your last action FAILED\*\*: (?:Refused by harness: )?(.+)")
@@ -82,12 +95,20 @@ def decisions(run: Path) -> list[dict[str, Any]]:
         lv = LEVEL.search(u)
         phase = "PACK" if "# OPEN PACK" in u else "HAND" if "# ROUND" in u else "SHOP"
         offers = []
+        packs = []
         if phase == "SHOP":
-            for o in OFFER.finditer(_section(u, "# SHOP")):
+            shop = _section(u, "# SHOP")
+            cards_part = shop.split("\n## ")[0]
+            for o in OFFER.finditer(cards_part):
                 tags = re.findall(r"\[([A-Z+\- ]+)\]", o.group(4))
                 score = re.search(r"SCORE ([+\-][\d,]+)", o.group(4))
+                joker = not re.search(r"\((Tarot|Planet|Spectral|playing card)\)", o.group(2) + o.group(4))
                 offers.append({"label": o.group(2).strip(), "price": int(o.group(3)), "tags": tags,
-                               "score": score.group(1) if score else None})
+                               "score": score.group(1) if score else None, "joker": joker})
+            pk = shop.find("## Packs")
+            if pk >= 0:
+                packs = [{"label": m.group(2).strip(), "price": int(m.group(3))}
+                         for m in PACKS.finditer(shop[pk:].split("\n\n")[0])]
         veto = VETO.search(u)
         out.append({
             "ante": int(m.group(1)), "round": int(m.group(2)), "money": int(m.group(3)),
@@ -96,6 +117,8 @@ def decisions(run: Path) -> list[dict[str, Any]]:
             "xmult": int(j.group(4)) if j else None,
             "status": st.group(1) if st else None, "hands_needed": int(st.group(2)) if st and st.group(2) else None,
             "main_hand": mh.group(1).strip() if mh else None,
+            "main_reason": mh.group(2).strip() if mh else None,
+            "packs": packs,
             "main_level": int(lv.group(2)) if lv else None,
             "blinds": [(int(b[0]), b[1], _num(b[2]), _num(b[3]), int(b[4])) for b in BLIND.findall(u)],
             "offers": offers,
@@ -123,12 +146,15 @@ def shop_visits(ds: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "jokers_in": d["jokers"], "slots_free_in": d["slots_free"],
                 "last_blind": {"ante": last[0], "blind": last[1], "hands_left": last[4],
                                "margin": round(last[2] / max(last[3], 1), 2)} if last else None,
-                "offers": d["offers"], "actions": [], "vetoes": [], "lessons": d["lessons"],
-                "rerolls": 0, "jokers_bought": 0, "decision_index": k,
+                "offers": d["offers"], "packs": d["packs"], "actions": [], "vetoes": [], "lessons": d["lessons"],
+                "rerolls": 0, "rerolls_below_25": 0, "jokers_bought": 0, "decision_index": k,
+                "buys": [],
             }
         cur["money_out"] = d["money"]
         if d["phase"] == "SHOP" and d["offers"] and not cur["offers"]:
             cur["offers"] = d["offers"]
+        if d["phase"] == "SHOP" and d["packs"] and not cur["packs"]:
+            cur["packs"] = d["packs"]
         nxt = ds[k + 1] if k + 1 < len(ds) else None
         vetoed = bool(nxt and nxt["veto_of_previous"])
         if vetoed:
@@ -137,6 +163,10 @@ def shop_visits(ds: list[dict[str, Any]]) -> list[dict[str, Any]]:
             cur["actions"].append({"action": d["action"], "args": d["args"]})
             if d["action"] == "reroll":
                 cur["rerolls"] += 1
+                if nxt and nxt["money"] < 25:
+                    cur["rerolls_below_25"] += 1
+            if d["action"] == "buy" and d["phase"] == "SHOP":
+                cur["buys"].append(_buy_label(d))
         if nxt and nxt["phase"] != "HAND" and nxt["jokers"] is not None and d["jokers"] is not None:
             cur["jokers_bought"] += max(nxt["jokers"] - d["jokers"], 0)
     if cur:
@@ -152,6 +182,82 @@ def shop_visits(ds: list[dict[str, Any]]) -> list[dict[str, Any]]:
         elif later:
             v["next_blind"] = {"ante": later[-1]["ante"], "blind": "lost", "hands_left": 0, "margin": None}
     return visits
+
+
+def _buy_label(d: dict[str, Any]) -> str:
+    """'joker:<label>', 'card:<label>', 'pack:<label>' or 'voucher' for a SHOP buy."""
+    a = d["args"]
+    try:
+        if "pack" in a:
+            return "pack:" + d["packs"][int(a["pack"])]["label"]
+        if "card" in a:
+            o = d["offers"][int(a["card"])]
+            return ("joker:" if o.get("joker") else "card:") + o["label"]
+    except (IndexError, KeyError, TypeError, ValueError):
+        pass
+    return "voucher" if "voucher" in a else "buy"
+
+
+def first_shop_order(visits: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """P2-6: in the first shop visit, was a Buffoon pack opened before any joker buy?"""
+    if not visits:
+        return None
+    v = visits[0]
+    buys = v["buys"]
+    offered = any("buffoon" in p["label"].lower() for p in v.get("packs") or [])
+    first_pack = next((i for i, b in enumerate(buys) if b.startswith("pack:") and "buffoon" in b.lower()), None)
+    first_joker = next((i for i, b in enumerate(buys) if b.startswith("joker:")), None)
+    return {
+        "buys": buys,
+        "buffoon_offered": offered,
+        "buffoon_first": None if first_pack is None and first_joker is None
+        else first_pack is not None and (first_joker is None or first_pack < first_joker),
+    }
+
+
+def dip_flag(visits: list[dict[str, Any]]) -> bool:
+    """F2 (digest only): money below $25 at 3 shop exits in a row from Ante 2,
+    or at more than half the exits after Ante 3."""
+    exits = [(v["ante"], v.get("money_out", v["money_in"])) for v in visits if v["ante"] >= 2]
+    run = 0
+    for _a, m in exits:
+        run = run + 1 if m < 25 else 0
+        if run >= 3:
+            return True
+    late = [m for a, m in exits if a > 3]
+    return bool(late) and sum(m < 25 for m in late) > len(late) / 2
+
+
+def harness_log(run: Path) -> dict[str, Any]:
+    """H4: harness events from run.log (refusals, boss rerolls and their cost, ...)."""
+    out: dict[str, Any] = {k: 0 for k in HARNESS}
+    out["boss_reroll_list"] = []
+    out["tag_skip_list"] = []
+    path = run / "run.log"
+    if not path.exists():
+        return out
+    for line in path.open(errors="replace"):
+        for k, rx in HARNESS.items():
+            m = rx.search(line)
+            if not m:
+                continue
+            out[k] += 1
+            if k == "boss_rerolls":
+                out["boss_reroll_list"].append([m.group(1), m.group(2)])
+            if k == "tag_skips":
+                out["tag_skip_list"].append(m.group(1).strip())
+    out["boss_reroll_cost"] = 10 * out["boss_rerolls"]
+    return out
+
+
+def main_commit(ds: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """P2-4: the first decision whose MAIN_HAND reason says committed."""
+    for d in ds:
+        m = COMMIT.search(d.get("main_reason") or "")
+        if m:
+            return {"ante": d["ante"], "round": int(m.group(2)) if m.group(2) else d["round"],
+                    "hand": d["main_hand"], "trigger": m.group(1)}
+    return None
 
 
 def hands_played(run: Path, upto_ante: int) -> dict[str, int]:
@@ -189,6 +295,15 @@ def digest(run: Path) -> dict[str, Any]:
         by_ante.setdefault(v["ante"], []).append(v["money_out"])
     early = [d for d in ds if d["ante"] <= 2 and d["phase"] == "SHOP" and d["status"]]
     blinds = last.get("blinds", [])
+    played = hands_played(run, 99)
+    rerolls_by_ante: dict[int, int] = {}
+    for v in visits:
+        rerolls_by_ante[v["ante"]] = rerolls_by_ante.get(v["ante"], 0) + v["rerolls"]
+    situations: dict[str, int] = {}
+    for v in visits:
+        if v["status_in"]:
+            situations[v["status_in"]] = situations.get(v["status_in"], 0) + 1
+    hl = harness_log(run)
     return {
         "label": task.get("seed"), "code": task.get("code"), "model": task.get("model"),
         "won": bool(stats.get("run_won")) and not ended_game_over(run), "final_ante": stats.get("final_ante"),
@@ -198,9 +313,18 @@ def digest(run: Path) -> dict[str, Any]:
         "final_xmult": last.get("xmult"),
         "hands_played_ante1_2": hands_played(run, 2),
         "shop_exit_money_by_ante": by_ante,
-        "too_weak_share_ante1_2": round(sum(d["status"] == "TOO WEAK" for d in early) / len(early), 2) if early else None,
+        "too_weak_share_ante1_2": round(sum(d["status"] in WEAK for d in early) / len(early), 2) if early else None,
+        "situations_at_shop_entry": situations,
+        "most_played": max((k for k in played if k != "High Card"), key=lambda k: played[k], default=None),
+        "main_commit": main_commit(ds),
+        "first_shop": first_shop_order(visits),
+        "rerolls_by_ante": rerolls_by_ante,
+        "rerolls_below_25_ante2_3": sum(v["rerolls_below_25"] for v in visits if v["ante"] in (2, 3)),
+        "repeated_dips": dip_flag(visits),
+        "harness": hl,
         "blinds": [{"ante": b[0], "blind": b[1], "hands_left": b[4], "margin": round(b[2] / max(b[3], 1), 2)} for b in blinds],
         "vetoes": sum(len(v["vetoes"]) for v in visits),
+        "refusals_logged": hl["refusals"],
         "rerolls": sum(v["rerolls"] for v in visits),
         "shop_visits": visits,
     }
