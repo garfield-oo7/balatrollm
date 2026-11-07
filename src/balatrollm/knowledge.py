@@ -467,7 +467,7 @@ VOUCHERS: dict[str, tuple[str, str]] = {
 BOSSES: dict[str, str] = {
     "The Hook": "2 random held cards are discarded after each hand: play your best hand now, do not save cards",
     "The Ox": "playing the named (most played) hand sets money to $0: play another hand type if it still wins",
-    "The House": "first hand is face down: discard face-down cards to see new ones",
+    "The House": "first hand is face down: you may play it blind (the cards still score) or discard to see new ones",
     "The Wall": "target is 4x: use every hand at maximum score",
     "The Wheel": "some cards face down: they still score normally",
     "The Arm": "played hand loses 1 level permanently: win in as few hands as possible",

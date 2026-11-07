@@ -69,8 +69,23 @@
 {%- for sp in A.suit_pays %}
 - {{ sp.label }}: {{ {"H": "Hearts", "D": "Diamonds", "C": "Clubs", "S": "Spades"}[sp.suit] }}{% if sp.label == "Ancient Joker" %} this round{% endif %}, {{ sp.gain }} per {{ {"H": "Heart", "D": "Diamond", "C": "Club", "S": "Spade"}[sp.suit] }} scored: keep those cards; a Flush in that suit scores most
 {%- endfor %}
+{%- if A.mail_rank %}
+- Mail-In Rebate: discard {{ A.mail_rank }}s for $5 each this round (unless they are part of your play)
+{%- endif %}
+{%- if A.repeats %}
+- {{ A.repeats }}
+{%- endif %}
+{%- if A.acrobat %}
+- Acrobat: X3 on the LAST hand of the blind only{% if P.hands_left == 1 %} (this hand: listed scores include it){% else %}: keep a strong play for your last hand{% endif %}
+{%- endif %}
+{%- if A.discard_costs %}
+- Discard costs: {{ A.discard_costs | join("; ") }}. Dig only when the gain is worth it.
+{%- endif %}
+{%- if A.blind_play %}
+- The House: every card is face down. Playing {{ A.blind_play.n }} face-down card{% if A.blind_play.n > 1 %}s{% endif %} blind (they still score) typically scores about {{ A.blind_play.typical | fmt_num }}; or discard face-down cards to see new ones (each discard is gone for later hands). Your choice.
+{%- endif %}
 {%- if A.blue_in_hand %}
-- Blue Seal card in hand at {{ A.blue_in_hand }}: never play or discard it. When the blind is beaten it makes the Planet of your last played hand{% if S.consumable_slots_free %}.{% else %}, but your consumable slots are FULL: use or sell a consumable first.{% endif %}
+- Blue Seal card in hand at {{ A.blue_in_hand }}: keep it in hand (do not discard it), unless it is part of your best play: then play it (a Blue Seal only pays if the blind is won). When the blind is beaten it makes the Planet of your last played hand{% if S.consumable_slots_free %}.{% else %}, but your consumable slots are FULL: use or sell a consumable first.{% endif %}
 {%- endif %}
 
 ## Your hand (index: card)
@@ -84,6 +99,8 @@
 {%- elif p.wins %} WINS
 {%- elif p.reaches_pace %} (reaches PER_HAND)
 {%- else %} (below PER_HAND){% endif %}
+{%- if p.repeat %} [REPEAT: Card Sharp X3]{% endif %}
+{%- if p.padded %} ({{ p.padded }}){% endif %}
 {%- if p.unknown %} (not counted: {{ p.unknown | join(", ") }}){% endif %}
 {% else -%}
 - none
@@ -114,7 +131,7 @@
 {%- if card.state and card.state.hidden %}
 - {{ loop.index0 }}: face-down card
 {%- elif card.set == "JOKER" %}
-- {{ loop.index0 }}: {{ card.label }} ${{ card.cost.buy }} {{ joker_tag(card, S.tag_hand, S.ante) }}{% set gx = grows_xmult(G, card) %}{% if gx %} {{ gx }}{% endif %}{% if card.modifier and card.modifier.edition %} ({{ card.modifier.edition }}){% endif %}{% if I and I.shop[loop.index0] %} | SCORE {{ I.shop[loop.index0] }}{% endif %}{% if I and I.swaps[loop.index0] %} | {{ I.swaps[loop.index0].text }}{% endif %} | effect: {{ card.value.effect }}
+- {{ loop.index0 }}: {{ card.label }} ${{ card.cost.buy }} {{ joker_tag(card, S.tag_hand, S.ante) }}{% set gx = grows_xmult(G, card) %}{% if gx %} {{ gx }}{% endif %}{% set cn = clash_note(G, card) %}{% if cn %} {{ cn }}{% endif %}{% if card.modifier and card.modifier.edition %} ({{ card.modifier.edition }}){% endif %}{% if I and I.shop[loop.index0] %} | SCORE {{ I.shop[loop.index0] }}{% endif %}{% if I and I.swaps[loop.index0] %} | {{ I.swaps[loop.index0].text }}{% endif %} | effect: {{ card.value.effect }}
 {%- elif card.set in ["TAROT", "PLANET", "SPECTRAL"] %}
 - {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) ${{ card.cost.buy }} {% if card.label == "Death" and not sk.modified %}[SKIP] no sealed, enhanced or edition card in your deck to copy{% if sk.hanged %}: take The Hanged Man instead{% endif %}{% else %}{{ consumable_tag(card, S.main_hand, S.blue_seals, S.deck_total, S.constellation, S.ok_hands, S.owned_keys) }}{% endif %}{% if I and I.shop[loop.index0] %} | SCORE {{ I.shop[loop.index0] }}{% endif %}
 {%- else %}

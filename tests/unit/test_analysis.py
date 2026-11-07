@@ -952,6 +952,11 @@ class TestFableReviewFixes:
     def test_chase_never_breaks_a_made_flush(self) -> None:
         G = make_state("H_K H_5 H_4 H_3 H_2 C_J D_T S_9")
         action = analysis.play_advice(G)["action"]
+        # P1: the Flush is on pace but does not win: dig with the other cards,
+        # never with the Flush's own cards
+        assert action["tool"] == "discard" and not set(action["cards"]) & {0, 1, 2, 3, 4}
+        G["round"]["discards_left"] = 0
+        action = analysis.play_advice(G)["action"]
         assert action["tool"] == "play" and set(action["cards"]) == {0, 1, 2, 3, 4}
 
     def test_no_chase_at_ante_one_boss_without_jokers(self) -> None:
