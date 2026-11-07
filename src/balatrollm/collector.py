@@ -81,6 +81,24 @@ def code_version(strategy: str) -> dict[str, Any]:
     return {"commit": commit, "dirty": dirty, "strategy_hash": digest.hexdigest()[:12]}
 
 
+def is_real_win(gamestate: dict[str, Any]) -> bool:
+    """True only for a real win.
+
+    Vanilla Balatro sets ``G.GAME.won`` at the end of ANY Ante 8 boss round,
+    before it checks for a loss (pass 1 Seed T: lost Crimson Heart 65,980 /
+    100,000 with won = true). A win needs won, a state other than GAME_OVER,
+    and the boss's chips at or above its target when those are known.
+    """
+    if not gamestate.get("won") or gamestate.get("state") == "GAME_OVER":
+        return False
+    boss = (gamestate.get("blinds") or {}).get("boss") or {}
+    target = int(boss.get("score") or 0)
+    chips = int((gamestate.get("round") or {}).get("chips") or 0)
+    if target and chips and boss.get("status") == "CURRENT":
+        return chips >= target
+    return True
+
+
 @dataclass
 class Stats:
     """Complete statistics for a game run (flat structure)."""
@@ -451,8 +469,8 @@ class Collector:
 
         return Stats(
             # Outcome
-            run_won=gamestate["won"],
-            run_completed=gamestate["state"] == "GAME_OVER" or gamestate["won"],
+            run_won=is_real_win(gamestate),
+            run_completed=gamestate["state"] == "GAME_OVER" or is_real_win(gamestate),
             final_ante=gamestate["ante_num"],
             final_round=gamestate["round_num"],
             finish_reason=finish_reason,

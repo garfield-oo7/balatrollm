@@ -165,6 +165,15 @@ def hands_played(run: Path, upto_ante: int) -> dict[str, int]:
     return {k: v["played"] for k, v in last["hands"].items() if v.get("played")}
 
 
+def ended_game_over(run: Path) -> bool:
+    """The last logged state is GAME_OVER: a loss even if the game set won = true
+    (pass 1 Seed T lost the Ante 8 boss with won = true)."""
+    last = None
+    for line in (run / "gamestates.jsonl").open():
+        last = line
+    return bool(last) and json.loads(last).get("state") == "GAME_OVER"
+
+
 def digest(run: Path) -> dict[str, Any]:
     task = json.loads((run / "task.json").read_text())
     stats = json.loads((run / "stats.json").read_text()) if (run / "stats.json").exists() else {}
@@ -182,7 +191,7 @@ def digest(run: Path) -> dict[str, Any]:
     blinds = last.get("blinds", [])
     return {
         "label": task.get("seed"), "code": task.get("code"), "model": task.get("model"),
-        "won": stats.get("run_won"), "final_ante": stats.get("final_ante"),
+        "won": bool(stats.get("run_won")) and not ended_game_over(run), "final_ante": stats.get("final_ante"),
         "final_round": stats.get("final_round"), "finish_reason": stats.get("finish_reason"),
         "cost": stats.get("cost_total"),
         "main_hand_changes": mains, "final_main_level": last.get("main_level"),

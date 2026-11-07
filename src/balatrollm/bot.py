@@ -29,6 +29,7 @@ from .collector import (
     Collector,
     FinishReason,
     Stats,
+    is_real_win,
 )
 from .config import Config, Task, get_model_config
 from .llm import LLMClient, LLMClientError, LLMTimeoutError
@@ -229,7 +230,7 @@ class Bot:
         assert self._collector is not None
 
         while True:
-            if gamestate.get("won", False):
+            if is_real_win(gamestate):
                 self._finish_reason = "won"
                 logger.info("Game won! Waiting for GAME_OVER state...")
                 break
