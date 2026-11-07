@@ -24,9 +24,11 @@
 - Ante {{ S.ante }}/8, round {{ G.round_num }}, money ${{ S.money }}
 - MAIN_HAND: {{ S.main_label }}{% if S.main_suit %} (MAIN_SUIT: {{ S.main_suit }}){% endif %} - {{ S.main_reason }}
 - Jokers {{ S.jokers }}/{{ S.joker_limit }}, SLOTS_FREE {{ S.slots_free }}, XMULT_OWNED {{ S.xmult_owned }}
-- FLOOR ${{ S.effective_floor }}, SPENDABLE ${{ S.spendable }} (interest next round ${{ S.interest }}){% if G.state == "SHOP" %} | SCORE_SPENDABLE ${{ S.score_spendable }}{% if S.score_spendable > S.spendable %} (keeps RESERVE ${{ S.reserve }}){% else %} (same as SPENDABLE){% endif %} for a score buy: a joker filling an empty slot in Antes 1-3, a joker with SCORE +50% or more, an on-plan [XMULT] joker (not [OFF-PLAN]), a [MAIN] Planet, a Buffoon pack with SLOTS_FREE > 0{% if S.status in ["THIN", "SHORT"] %}, or any joker with SCORE above +0 ({{ S.status }}){% endif %}{% endif %}
+- FLOOR ${{ S.effective_floor }}, SPENDABLE ${{ S.spendable }} (interest next round ${{ S.interest }}){% if G.state == "SHOP" %} | SCORE_SPENDABLE ${{ S.score_spendable }}{% if S.score_spendable > S.spendable %}{% if S.reserve %} (keeps RESERVE ${{ S.reserve }}){% else %} (may go to $0){% endif %}{% else %} (same as SPENDABLE){% endif %} for a score buy: a joker with SCORE +50% or more, an on-plan [XMULT] joker (not [OFF-PLAN]), a [MAIN] Planet, a Buffoon pack with SLOTS_FREE > 0{% if S.status in ["THIN", "SHORT"] %}, or any joker with SCORE above +0 ({{ S.status }}){% endif %}{% if S.ante >= 4 %}. From Ante 4 one buy may take money below $10; after it the shop closes{% endif %}{% endif %}{% if S.shop_locked %}
+- SHOP CLOSED: a buy took money below $10 (Ante 4+). You may still use or sell cards; then call next_round.{% endif %}
 - ECON_OK {{ "YES" if S.econ_ok else "NO" }} (economy jokers owned {{ S.econ_owned }}) | BLUE_SEALS {{ S.blue_seals }}{% if not S.blue_seals %} (none yet: Standard packs and Blue Seal cards are wanted){% endif %}{% if S.hologram %} | HOLOGRAM owned (every card added helps){% endif %}
-- INTEREST_SPARE ${{ S.interest_spare }} (spend up to this and next round's interest stays ${{ S.interest }})
+{% for t in S.pending_tags %}- PENDING TAG: {{ t }}
+{% endfor %}- INTEREST_SPARE ${{ S.interest_spare }} (spend up to this and next round's interest stays ${{ S.interest }})
 - STATUS: {{ S.status }} for the next blind ({{ S.next_name }}){% if S.hands_needed %}: {{ S.sit_target | fmt_num }} needs about {{ S.hands_needed }} of {{ S.next_hands }} hands at about {{ S.sit_per | fmt_num }} per hand (your best plays: {{ S.best_types | join(", ") }}){% endif %}{% if S.safety_net %}; your last 2 blinds were each won with 2+ hands left{% endif %}{% if S.status in ["THIN", "SHORT"] %} -> score buys may use SCORE_SPENDABLE{% endif %}
 {%- if S.last_spare is not none and G.state != "SELECTING_HAND" %}
 - LAST BLIND: won with {{ S.last_spare }} hand{{ "s" if S.last_spare != 1 }} spare (a signal; STATUS is the test)
@@ -172,7 +174,7 @@
 {% for j in G.jokers.cards -%}
 - {{ loop.index0 }}: {{ joker_line(j) }}{% if I and I.owned[loop.index0] %} | {{ I.owned[loop.index0] }}{% endif %} | sells for ${{ j.cost.sell }}{% set jt = joker_tag(j, S.tag_hand, S.ante) %}{% if G.state == 'SHOP' and ('tier T' in jt or '[TRAP]' in jt) %} [SELL NOW: it hurts your run]{% endif %}
 {% else -%}
-- none (empty slots lose runs: buy scoring jokers)
+- none (buy jokers that build your run)
 {% endfor %}
 # CONSUMABLES ({{ G.consumables.count }}/{{ G.consumables.limit }})
 {% for c in G.consumables.cards -%}

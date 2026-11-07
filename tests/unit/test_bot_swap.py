@@ -24,6 +24,7 @@ def _bot(game: AsyncMock) -> Bot:
     bot._shop_refusal_exits = 0
     bot._main_commit = None
     bot._shop_locked = False
+    bot._pending_tags = []
     bot._consecutive_vetoes = 0
     bot._consecutive_errors = 0
     bot._consecutive_faileds = 0
@@ -147,7 +148,8 @@ async def test_failed_boss_reroll_falls_back_to_select() -> None:
     assert await bot._reroll_boss(blind_select("The Wall")) is None
 
 
-async def test_retcon_keeps_rerolling_until_the_boss_is_fine() -> None:
+async def test_retcon_rerolls_once_per_ante_and_keeps_the_next_boss() -> None:
+    """Decision C: one reroll per ante for Retcon too; keep whatever comes next."""
     from .test_analysis import blind_select
 
     def retcon(boss: str, money: int) -> dict[str, Any]:
@@ -158,19 +160,15 @@ async def test_retcon_keeps_rerolling_until_the_boss_is_fine() -> None:
         return G
 
     game = AsyncMock()
-    game.call.side_effect = [retcon("The Needle", 30), retcon("The Eye", 20), retcon("The Hook", 10)]
+    game.call.side_effect = [retcon("The Needle", 30)]
     bot = _bot(game)
     bot.harness = {"reroll_boss": True}
     bot._boss_rerolls = {}
-    G = retcon("The Wall", 40)
-    names = []
-    while (after := await bot._reroll_boss(G)) is not None:
-        G = after
-        names.append(G["blinds"]["boss"]["name"])
-    assert names == ["The Needle", "The Eye", "The Hook"]
-    assert bot._boss_rerolls == {1: 3}
-    # Out of money: no reroll even for a bad boss
-    assert await bot._reroll_boss(retcon("The Wall", 9)) is None
+    after = await bot._reroll_boss(retcon("The Wall", 40))
+    assert after is not None and after["blinds"]["boss"]["name"] == "The Needle"
+    assert await bot._reroll_boss(after) is None  # The Needle stays
+    assert bot._boss_rerolls == {1: 1}
+    assert await bot._reroll_boss(retcon("The Wall", 9)) is None  # cannot pay
 
 
 async def test_refusal_loop_in_shop_leaves_the_shop() -> None:
