@@ -967,3 +967,31 @@ class TestReviewRound8Codex:
         assert analysis._mark_held_fills(G) == "unknown"
         four = next(p for p in analysis.play_advice(G)["plays"] if p["cards"] == [4, 5, 6, 7])
         assert four["floor"] == 476 and not four["wins"]
+
+
+class TestReviewRound8Opus:
+    """opus R8-1 fix 2: the masked Raised Fist bound keeps its +4 when fewer
+    Stone cards are unseen than face-down cards are held."""
+
+    def _aces(self, deck: list[str], stone_face_down: bool) -> dict[str, Any]:
+        G = mark_hand("S_9 H_9 D_9 C_T", "H_A S_A",
+                      jokers=[joker("j_pareidolia", "Pareidolia"), joker("j_raised_fist", "Raised Fist")])
+        if stone_face_down:
+            for c in G["hand"]["cards"][:4]:
+                c["modifier"] = {"enhancement": "STONE"}
+        G["cards"].update(cards=[card(k) for k in deck], count=len(deck))
+        G["blinds"]["boss"]["score"] = 150
+        G["round"].update(hands_left=1, discards_left=0)
+        return G
+
+    def test_stone_face_down_no_false_win(self) -> None:
+        G = self._aces(["H_2", "D_3", "C_4", "S_5", "H_6", "D_7", "C_8", "S_9"], True)
+        A = analysis.play_advice(G)
+        pair = next(p for p in A["plays"] if p["hand"] == "Pair")
+        assert pair["floor"] == 64 and not pair["wins"]
+
+    def test_no_stone_keeps_the_true_win(self) -> None:
+        G = self._aces(["H_2", "D_3", "C_4", "S_5", "H_6", "D_7", "C_8", "S_9"], False)
+        assert analysis._mark_held_fills(G) == "unknown"
+        pair = next(p for p in analysis.play_advice(G)["plays"] if p["hand"] == "Pair")
+        assert pair["floor"] == 192 and pair["wins"]

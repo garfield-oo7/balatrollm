@@ -779,13 +779,17 @@ def estimate_play(
         # The Mark: a held face-down card is a J/Q/K (worth 10), or with
         # Pareidolia any card (counted as a 2): a lower bound (review r4 opus F2b)
         masked = [c for c in held if c["hidden"] and c["face"] and not c["debuff"]]
-        # with Pareidolia a held face-down card may be a Stone card (no rank):
-        # count it as a 2 only when a visible ranked card is held too, else it
-        # may add nothing (review r8 codex R8-1)
+        # with Pareidolia a held face-down card may be a Stone card (no rank,
+        # skipped): count it as a 2 only when a visible ranked card is held too
+        # or fewer Stone cards are unseen than face-down cards are held, else it
+        # may add nothing (review r8 codex R8-1 / opus R8-1, opus's fix 2)
         if masked and "j_pareidolia" not in keyset:
             ranks.append({"rank": "J"})
-        elif masked and ranks:
-            ranks.append({"rank": "2"})
+        elif masked:
+            stones = (sum(1 for c in _area_cards(G, "cards") if _norm(c)["stone"]) if G.get("mark_unseen")
+                      else len(masked))
+            if ranks or stones < len(masked):
+                ranks.append({"rank": "2"})
         if ranks:
             low = min(ranks, key=lambda c: RANK_VALUE[c["rank"]])
             mult += 2 * CHIP_VALUE[low["rank"]]
