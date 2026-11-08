@@ -9,6 +9,8 @@ standard Red Deck cards, S1 Two Pair Lv1, S3 = the shop after the Ante 3 boss
 
 from typing import Any
 
+import pytest
+
 from balatrollm import analysis
 
 from .test_analysis import card, joker, make_state
@@ -148,5 +150,6 @@ def test_s3_card_sharp_combo_is_enough() -> None:
     assert status(s3)["status"] == "COMFORTABLE"
 
 
+@pytest.mark.xfail(strict=True, reason="pass 3 K5 = 40th percentile reads S4 SHORT (needs 5 of 4); accepted by the owner 2026-11-08 (answers.md 'During the pass-3 build')")
 def test_s4_baron_build_before_the_psychic() -> None:
     assert status(s4)["status"] == "COMFORTABLE"

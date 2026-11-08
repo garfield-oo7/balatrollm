@@ -273,7 +273,7 @@ class TestLunaBossReroll:
         assert "already" in analysis.validate_action(beaten, "reroll_boss", {})
 
     def test_the_plant_is_not_rerolled_automatically(self) -> None:
-        G = blind_select("The Plant", on_deck="boss")
+        G = blind_select("The Plant")  # first blind select of the ante: named-boss rules only
         G["jokers"]["cards"] = [joker("j_photograph", "Photograph")]
         G["jokers"]["count"] = 1
         assert analysis.face_build(G) and analysis.boss_reroll_reason(G) is None
