@@ -19,7 +19,7 @@ import re
 from collections import Counter, OrderedDict
 from collections.abc import Iterable
 from itertools import combinations, combinations_with_replacement, permutations
-from math import comb
+from math import comb, perm
 from pathlib import Path
 from typing import Any
 
@@ -1927,32 +1927,44 @@ def _mark_minimum(pool: list[dict[str, Any]], n: int) -> str | None:
 
 
 MARK_FLOOR_MAX = 2000
+MARK_FLOOR_RAW_MAX = 60000  # raw slot fillings walked before de-duplication
 
 
-def _mark_floor(G: dict[str, Any], pool: list[dict[str, Any]], k: int, n: int,
-                visible: list[dict[str, Any]]) -> int | None:
-    """The lowest FLOOR score the face-down play can make over every set of
-    ``k`` unseen face cards, every choice of the ``n`` played, and every
-    distinct order of them (order matters: Hanging Chad, Photograph, Glass).
-    None when there are more than MARK_FLOOR_MAX cases: then no WINS claim."""
-    if k > len(pool) or comb(len(pool), k) * (comb(k, n) if k > n else 1) > MARK_FLOOR_MAX:
+def _mark_floor(G: dict[str, Any], pool: list[dict[str, Any]], hand: list[dict[str, Any]],
+                hidden: list[int], played: list[int]) -> int | None:
+    """The lowest FLOOR score of playing hand slots ``played`` over every
+    distinct way the unseen face cards can fill the face-down slots ``hidden``
+    (which card is where: played or held, in hand order, so the order of the
+    played cards AND of the held cards next to the face-up ones is covered:
+    Hanging Chad, Photograph, Glass, Steel + Shoot the Moon ...).
+    None when there are too many ways: then no WINS claim (review rounds 1-3)."""
+    k = len(hidden)
+    if k > len(pool) or perm(len(pool), k) > MARK_FLOOR_RAW_MAX:
         return None
-    cases: list[tuple[list[dict[str, Any]], list[dict[str, Any]]]] = []
-    seen: set[tuple[tuple[str, ...], tuple[str, ...]]] = set()
-    for pick in combinations(range(len(pool)), k):
-        cards = [pool[i] for i in pick]
-        for played in (combinations(range(k), n) if k > n else [tuple(range(k))]):
-            held = [c for j, c in enumerate(cards) if j not in played]
-            held_key = tuple(sorted(_card_id(c) for c in held))
-            for order in permutations([cards[j] for j in played]):
-                key = (tuple(_card_id(c) for c in order), held_key)
-                if key in seen:
-                    continue
-                seen.add(key)
-                cases.append((list(order), held))
-                if len(cases) > MARK_FLOOR_MAX:
-                    return None
-    return min(int(estimate_play(G, order, visible + held)["score"]) for order, held in cases)
+    seen: set[tuple[str, ...]] = set()
+    low: int | None = None
+    ids = [_card_id(c) for c in pool]
+    for pick in permutations(range(len(pool)), k):
+        key = tuple(ids[i] for i in pick)
+        if key in seen:
+            continue
+        seen.add(key)
+        if len(seen) > MARK_FLOOR_MAX:
+            return None
+        cards = list(hand)
+        for slot, i in zip(hidden, pick):
+            cards[slot] = pool[i]
+        est = int(estimate_play(G, [cards[i] for i in played], [c for i, c in enumerate(cards) if i not in played])["score"])
+        low = est if low is None else min(low, est)
+    return low
+
+
+def _mark_fill(hand: list[dict[str, Any]], hidden: list[int], pick: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """``hand`` with the face-down slots filled by ``pick`` (in slot order)."""
+    cards = list(hand)
+    for slot, c in zip(hidden, pick):
+        cards[slot] = c
+    return cards
 
 
 def play_estimate(G: dict[str, Any], chosen: list[int]) -> int:
@@ -1980,10 +1992,9 @@ def play_estimate(G: dict[str, Any], chosen: list[int]) -> int:
     seed = int(hashlib.md5(json.dumps([ids, seen_ids, len(hidden), n_chosen, "estimate"]).encode()).hexdigest()[:12], 16)
     rng = random.Random(seed)
     scores = []
-    for _ in range(MARK_SAMPLES):
-        pick = iter(rng.sample(pool, len(hidden)))
-        cards = {i: (visible[i] if i in visible else next(pick)) for i in range(len(hand))}
-        scores.append(int(estimate_play(G, [cards[i] for i in chosen], [cards[i] for i in cards if i not in chosen])["score"]))
+    for _ in range(MARK_PLAY_SAMPLES):
+        cards = _mark_fill(hand, hidden, rng.sample(pool, len(hidden)))
+        scores.append(int(estimate_play(G, [cards[i] for i in chosen], [c for i, c in enumerate(cards) if i not in chosen])["score"]))
     return int(sum(scores) / len(scores))
 
 
@@ -2008,13 +2019,14 @@ def mark_play(G: dict[str, Any]) -> dict[str, Any] | None:
     seen = sorted(_card_id(c) for c in visible)
     seed = int(hashlib.md5(json.dumps([ids, seen, len(hidden)]).encode()).hexdigest()[:12], 16)
     rng = random.Random(seed)
+    played = hidden[:n]
     scores, types = [], Counter()
     for _ in range(MARK_PLAY_SAMPLES):
-        pick = rng.sample(pool, len(hidden))
-        est = estimate_play(G, pick[:n], visible + pick[n:])
+        cards = _mark_fill(hand, hidden, rng.sample(pool, len(hidden)))
+        est = estimate_play(G, [cards[i] for i in played], [c for i, c in enumerate(cards) if i not in played])
         scores.append(int(est["score"]))
         types[est["hand"]] += 1
-    floor = _mark_floor(G, pool, len(hidden), n, visible)
+    floor = _mark_floor(G, pool, hand, hidden, played)
     return {
         "cards": hidden[:n],
         "n": n,
