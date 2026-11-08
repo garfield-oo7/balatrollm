@@ -606,7 +606,7 @@ class TestMarkReviewRound1:
     def test_no_wins_claim_when_the_floor_is_too_costly(self) -> None:
         mp = analysis.play_advice(mark_hand("S_K H_Q D_J C_K H_K S_Q D_Q", "H_2"))["mark_play"]
         assert mp["floor"] is None and not mp["wins"]
-        assert "lowest of 60 tries" in render(mark_hand("S_K H_Q D_J C_K H_K S_Q D_Q", "H_2"))
+        assert "lowest of 300 tries" in render(mark_hand("S_K H_Q D_J C_K H_K S_Q D_Q", "H_2"))
 
     def test_draw_odds_use_the_cards_actually_discarded(self) -> None:
         G = mark_hand("S_K H_Q D_J C_K", "H_2 H_3 H_4 S_6")
@@ -667,3 +667,10 @@ class TestReviewRound2Codex:
         G["cards"]["count"] = 4
         d = next(d for d in analysis.play_advice(G)["draws"] if d["kind"] == "Straight")
         assert d["chance"] == 0.0 and "unseen" in d["text"]
+
+
+class TestReviewRound2Opus:
+    def test_memory_estimate_is_the_number_shown_for_the_face_down_play(self) -> None:
+        G = mark_hand(jokers=[joker("j_smiley", "Smiley Face", "+5 Mult for face cards")])
+        mp = analysis.mark_play(G)
+        assert analysis.play_estimate(G, mp["cards"]) == mp["expected"]
