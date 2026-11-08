@@ -1190,8 +1190,11 @@ class TestBossReroll:
         assert analysis.validate_action(G, "reroll_boss", {}) is None
         G["round"]["boss_rerolled"] = True
         assert "refused" in (analysis.validate_action(G, "reroll_boss", {}) or "")
+        # pass 3 C4: in a shop Luna may ask (the harness runs it at blind select)
         shop = blind_select("The Hook")
         shop["state"] = "SHOP"
+        assert analysis.validate_action(shop, "reroll_boss", {}) is None
+        shop["state"] = "SMODS_BOOSTER_OPENED"
         assert analysis.validate_action(shop, "reroll_boss", {}) is not None
 
     def test_vouchers_are_insurance_buys(self) -> None:

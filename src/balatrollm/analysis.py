@@ -2522,6 +2522,12 @@ def run_status(
         # planet, a Buffoon pack with a free slot, or a SCORE > 0 joker while TOO WEAK
         "score_spendable": max(money - reserve(G, status, boss_short), money - effective_floor, 0),
         "shop_locked": bool((G.get("luna") or {}).get("shop_locked")),
+        # C4: Luna may ask for a boss reroll in this shop
+        "boss_reroll_ok": G.get("state") == "SHOP"
+        and bool((G.get("luna") or {}).get("luna_reroll"))
+        and not (G.get("luna") or {}).get("boss_reroll_request")
+        and luna_reroll_refusal(G) is None,
+        "boss_reroll_request": (G.get("luna") or {}).get("boss_reroll_request"),
         "pending_tags": pending_tag_lines(G),
         "recent_scores": scores,
         "next_target": nxt_target,
@@ -3351,9 +3357,11 @@ def boss_check(
 
 # Boss reroll (Director's Cut / Retcon; $10 each). Owner rule: always reroll
 # these bosses; also reroll a boss that shuts off MAIN_HAND, or one the
-# current build cannot beat by the strength check.
+# current build cannot beat by the strength check. Pass 3: The Wall only in
+# Antes 1-3, later when the boss check fails (C5); The Plant is Luna's call (C4).
 BOSS_REROLL_COST = 10
-BOSS_REROLL_ALWAYS = {"Violet Vessel", "The Wall", "The Needle"}
+BOSS_REROLL_ALWAYS = {"Violet Vessel", "The Needle"}
+WALL_ALWAYS_TO_ANTE = 3
 FIVE_CARD_HANDS = {"Flush", "Straight", "Full House"}
 # Decision C: one reroll per ante for Director's Cut and Retcon alike; keep
 # whatever boss comes next. From Ante 4, $10 must stay after the reroll,
@@ -3401,13 +3409,17 @@ def boss_reroll_reason(G: dict[str, Any]) -> str | None:
     plan = main_hand_plan(G)
     if name in BOSS_REROLL_ALWAYS:
         return f"{name} is a boss to always reroll"
-    if (
-        int(G.get("ante_num") or 1) >= BOSS_REROLL_KEEP_FROM_ANTE
-        and int(G.get("money") or 0) - BOSS_REROLL_COST < BOSS_REROLL_KEEP
-    ):
+    ante = int(G.get("ante_num") or 1)
+    if ante >= BOSS_REROLL_KEEP_FROM_ANTE and int(G.get("money") or 0) - BOSS_REROLL_COST < BOSS_REROLL_KEEP:
         return None
-    if name == "The Plant" and face_build(G):
-        return "The Plant turns off your face-card jokers"
+    if name == "The Wall":  # C5 (owner, after pass 2 Q3)
+        if ante <= WALL_ALWAYS_TO_ANTE:
+            return f"The Wall in Ante {ante} (rerolled in Antes 1-{WALL_ALWAYS_TO_ANTE})"
+        bc = boss_check(G)
+        if bc and not bc["ok"]:
+            return f"The Wall ({fmt_num(bc['target'])}) needs about {bc['hands']} hands at {fmt_num(bc['per_hand'])} per hand; you have {bc['allowed']}"
+        return None
+    # C4: The Plant is no longer rerolled automatically: Luna may ask (reroll_boss)
     if name in ("The Eye", "The Mouth"):
         return f"{name} shuts off your MAIN_HAND {plan['hand']}"
     if name == "The Psychic" and plan["hand"] not in FIVE_CARD_HANDS:
@@ -3430,6 +3442,32 @@ def boss_reroll_reason(G: dict[str, Any]) -> str | None:
                     f"{name} ({fmt_num(target)}) needs about {hands} hands at "
                     f"{fmt_num(per_hand)} per hand; you have {power['boss_hands_allowed']}"
                 )
+    return None
+
+
+def luna_reroll_refusal(G: dict[str, Any]) -> str | None:
+    """C4: why Luna's boss-reroll request is refused now (None: allowed).
+
+    Director's Cut (once per ante) or Retcon, $10, one reroll per ante (shared
+    with the harness's, ``G["luna"]["boss_rerolls"]``), from Ante 4 $10 kept
+    after it, boss not yet defeated. Checked when Luna asks (SHOP) and again
+    at the blind select that runs it."""
+    vouchers = set(G.get("used_vouchers") or {})
+    if not vouchers & {"v_directors_cut", "v_retcon"}:
+        return "it needs Director's Cut or Retcon"
+    boss = (G.get("blinds") or {}).get("boss") or {}
+    if boss.get("status") not in ("UPCOMING", "SELECT"):
+        return "this ante's boss is already being played or beaten"
+    luna = G.get("luna") or {}
+    if int(luna.get("boss_rerolls") or 0) >= BOSS_REROLL_MAX_PER_ANTE:
+        return "the boss was already rerolled this ante (one per ante)"
+    if "v_retcon" not in vouchers and (G.get("round") or {}).get("boss_rerolled"):
+        return "Director's Cut was already used this ante"
+    money = int(G.get("money") or 0)
+    if money < BOSS_REROLL_COST:
+        return f"it costs ${BOSS_REROLL_COST} and you have ${money}"
+    if int(G.get("ante_num") or 1) >= BOSS_REROLL_KEEP_FROM_ANTE and money - BOSS_REROLL_COST < BOSS_REROLL_KEEP:
+        return f"from Ante 4 ${BOSS_REROLL_KEEP} must stay after the ${BOSS_REROLL_COST} reroll (you have ${money})"
     return None
 
 
@@ -3982,8 +4020,14 @@ def validate_action(
                     "You already own a Blue Seal card: pick a different card or skip."
                 )
     if method == "reroll_boss":
+        if G.get("state") == "SHOP":  # C4: Luna asks; the harness runs it at blind select
+            if (luna := G.get("luna") or {}).get("boss_reroll_request"):
+                return "Boss reroll refused: you already asked for one; it runs at the next blind select."
+            if why := luna_reroll_refusal(G):
+                return f"Boss reroll refused: {why}. Buy something else or call next_round."
+            return None
         if G.get("state") != "BLIND_SELECT":
-            return "reroll_boss only works on the blind select screen."
+            return "reroll_boss only works in the shop (request) or on the blind select screen."
         if not boss_reroll_available(G):
             return (
                 "Boss reroll refused: it needs Director's Cut (once per ante) or "

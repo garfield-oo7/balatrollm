@@ -42,6 +42,11 @@
 {%- elif bc %}
 - BOSS CHECK: {{ bc.name }}: beatable with your current build (about {{ bc.hands }} of {{ bc.allowed }} hands)
 {%- endif %}
+{%- if S.boss_reroll_request %}
+- BOSS REROLL queued: {{ S.boss_reroll_request.boss }} is rerolled at the next blind select ($10 then)
+{%- elif S.boss_reroll_ok %}
+- BOSS REROLL available ($10{% if S.ante >= 4 %}, $10 stays after it{% endif %}, one per ante): call reroll_boss and {{ boss.name }} is rerolled at the next blind select{% if boss.name == "The Plant" %}. The Plant turns off your face-card jokers: you may ask for a boss reroll{% endif %}
+{%- endif %}
 - GOALS for Ante {{ S.ante }}: {% for g in S.goals %}[{{ "x" if g.done else " " }}] {{ g.text }}{% if not loop.last %}; {% endif %}{% endfor %}
 - PRIORITY: {{ S.priority }}.
 {%- if S.observatory %}
@@ -220,6 +225,6 @@
 {%- if G.used_vouchers %}
 - Vouchers owned: {{ G.used_vouchers.keys() | join(", ") }}
 {%- if "v_retcon" in G.used_vouchers or "v_directors_cut" in G.used_vouchers %}
-- Boss reroll: {% if "v_retcon" in G.used_vouchers %}Retcon, as often as needed{% elif (G.round or {}).boss_rerolled %}Director's Cut already used this ante{% else %}Director's Cut, 1 left this ante{% endif %} ($10 each; the harness rerolls a bad boss at blind select, keep $10 for it)
+- Boss reroll: {% if "v_retcon" in G.used_vouchers %}Retcon, as often as needed{% elif (G.round or {}).boss_rerolled %}Director's Cut already used this ante{% else %}Director's Cut, 1 left this ante{% endif %} ($10 each; the harness rerolls a bad boss at blind select, keep $10 for it; in a shop you may ask for one with reroll_boss)
 {%- endif %}
 {%- endif %}

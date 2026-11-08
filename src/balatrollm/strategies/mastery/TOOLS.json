@@ -239,6 +239,26 @@
     {
       "type": "function",
       "function": {
+        "name": "reroll_boss",
+        "strict": false,
+        "description": "Ask for a reroll of this ante's upcoming boss ($10; needs Director's Cut, once per ante, or Retcon; one per ante; from Ante 4 $10 must stay after it). Only when STATUS shows BOSS REROLL available. The harness rerolls it at the next blind select; you then see the new boss.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "reasoning": {
+              "type": "string",
+              "description": "Write this FIRST, 1-3 short sentences: the STATUS facts you used (NEED/PER_HAND or SPENDABLE/MAIN_HAND), what you will do and why. Name cards as 'King of Hearts', not only indices."
+            }
+          },
+          "required": [
+            "reasoning"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
         "name": "sell",
         "strict": false,
         "description": "Sell a joker or consumable for money. Provide exactly one of: joker or consumable.",
