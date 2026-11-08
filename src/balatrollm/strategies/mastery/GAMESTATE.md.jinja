@@ -102,7 +102,7 @@
 {% endfor %}
 ## Listed plays (best per hand type, FLOOR score estimates)
 {% for p in A.plays -%}
-- {{ p.hand }} {{ p.cards }} = {% for i in p.cards %}{{ G.hand.cards[i] | card_name }}{% if not loop.last %}, {% endif %}{% endfor %} -> {{ p.score | fmt_num }}
+- {{ p.hand }} {{ p.cards }} = {% for i in p.cards %}{{ G.hand.cards[i] | card_name }}{% if not loop.last %}, {% endif %}{% endfor %} -> {% if p.floor is defined and p.floor < p.score %}about {{ p.score | fmt_num }}, at worst {{ p.floor | fmt_num }}{% else %}{{ p.score | fmt_num }}{% endif %}
 {%- if p.blocked %} BLOCKED: {{ p.blocked }}
 {%- elif p.wins %} WINS
 {%- elif p.reaches_pace %} (reaches PER_HAND)

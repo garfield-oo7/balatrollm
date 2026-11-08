@@ -510,7 +510,7 @@ def _joker_effect(
         return (0, 0, 3) if int(rnd.get("hands_left", 0)) == 1 else (0, 0, 1)
     if key == "j_blackboard":
         held = ctx["held"]
-        ok = all(c["suit"] in ("S", "C") or c["enh"] == "WILD" for c in held)
+        ok = all(c["suit"] in ("S", "C") or c["enh"] == "WILD" for c in held) and not ctx.get("held_masked")
         return (0, 0, 3) if held and ok else (0, 0, 1)
     if key == "j_flower_pot":
         suits = {c["suit"] for c in ctx["scored"] if c["suit"]}
@@ -776,6 +776,11 @@ def estimate_play(
                 mult += 13 * moons
     if "j_raised_fist" in keyset:
         ranks = [c for c in held if c["rank"] and not c["debuff"] and not c["hidden"]]
+        # The Mark: a held face-down card is a J/Q/K (worth 10), or with
+        # Pareidolia any card (counted as a 2): a lower bound (review r4 opus F2b)
+        masked = [c for c in held if c["hidden"] and c["face"] and not c["debuff"]]
+        if masked:
+            ranks.append({"rank": "2" if "j_pareidolia" in keyset else "J"})
         if ranks:
             low = min(ranks, key=lambda c: RANK_VALUE[c["rank"]])
             mult += 2 * CHIP_VALUE[low["rank"]]
@@ -789,6 +794,8 @@ def estimate_play(
         "htype": htype,
         "n_played": len(played),
         "held": [c for c in held if not c["hidden"]],
+        # The Mark: a held face-down card may be red, so Blackboard does not count (review r4 opus F2b)
+        "held_masked": any(c["hidden"] and c["face"] for c in held),
         "scored": scored_cards,
         "keys": keys,
         "expected": expected,
@@ -1028,13 +1035,17 @@ def analyze_hand(G: dict[str, Any], top: int = 6, real: dict[str, Any] | None = 
     if fills is not None:
         for htype, group in cands.items():
             if fills == "unknown":
-                for p in group:
-                    p["floor_unknown"] = True
+                # too many fillings: the masked score is a proven floor (held
+                # face-down cards only add, or count as the worst case)
                 pick = max(group, key=lambda p: p["score"])
-                pick_nb = max((p for p in group if not blue & set(p["cards"])), key=lambda p: p["score"], default=None)
+                pick_nb = max((p for p in group if not blue & set(p["cards"])), key=lambda p: p["score"], default=None) if blue else None
             else:
                 pick = _best_by_floor(real, fills, group)
                 pick_nb = _best_by_floor(real, fills, [p for p in group if not blue & set(p["cards"])]) if blue else None
+            # score = the mean Luna is told (and MEMORY records); floor = for WINS
+            for q in {id(q): q for q in (pick, pick_nb) if q is not None}.values():
+                q["floor"] = int(q["score"])
+                q["score"] = max(q["floor"], _mark_about(real, q["cards"]))
             best[htype] = pick
             if blue and pick_nb is not None:
                 best_no_blue[htype] = pick_nb
@@ -2000,6 +2011,16 @@ def play_estimate(G: dict[str, Any], chosen: list[int]) -> int:
         seen = mark_view(G)
         cards = _area_cards(seen, "hand")
         return int(estimate_play(seen, [cards[i] for i in chosen], [c for i, c in enumerate(cards) if i not in chosen])["score"])
+    return _mark_about(G, chosen)
+
+
+def _mark_about(G: dict[str, Any], chosen: list[int]) -> int:
+    """Under The Mark, the mean score of playing hand slots ``chosen`` over
+    MARK_PLAY_SAMPLES draws of the face-down cards from the unseen face-card
+    pool: the "about" of a listed face-up play and its MEMORY estimate."""
+    hand = _area_cards(G, "hand")
+    chosen = sorted(set(chosen))
+    hidden = [i for i, c in enumerate(hand) if (c.get("state") or {}).get("hidden")]
     pool = _mark_pool(G)
     if len(pool) < len(hidden):
         return 0
@@ -2020,8 +2041,8 @@ def _mark_held_fills(G: dict[str, Any]) -> list[list[dict[str, Any]]] | str | No
     """Under The Mark, when cards held in hand can score (Baron, Shoot the
     Moon, Mime, Blackboard, Raised Fist, or a Steel face card unseen): every
     distinct way the unseen face cards fill the face-down slots, as full hands.
-    "unknown" when there are more than MARK_HELD_FLOOR_MAX (then no face-up
-    play is marked WINS); None when held face-down cards cannot change a
+    "unknown" when there are more than MARK_HELD_FLOOR_MAX (then the masked
+    score is the floor: it is a proven lower bound); None when held face-down cards cannot change a
     face-up play's score. Review rounds 3 (opus R1) and 4 (codex R4-1)."""
     hand = _area_cards(G, "hand")
     hidden = [i for i, c in enumerate(hand) if (c.get("state") or {}).get("hidden")]
@@ -2138,10 +2159,11 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         alt = p.pop("no_blue", None)
         margin = 1.0 if exact and not p["unknown"] else WIN_MARGIN
         # Prefer the version that keeps a Blue Seal card held if it still wins.
-        if alt and alt["score"] >= margin * remaining and not alt["blocked"]:
+        if alt and alt.get("floor", alt["score"]) >= margin * remaining and not alt["blocked"]:
             p = alt
         p = _blackboard_pad(G, hand_raw, hand, p)
-        wins = p["score"] >= margin * remaining and not p["blocked"] and not p.get("floor_unknown")
+        # The Mark with held-card scoring: WINS from the floor, the rest from the mean (review r4 opus F1)
+        wins = p.get("floor", p["score"]) >= margin * remaining and not p["blocked"]
         plays.append({**p, "wins": wins, "reaches_pace": p["score"] >= per_hand})
     plays.sort(key=lambda p: -p["score"])
     _mark_repeats(G, plays)
