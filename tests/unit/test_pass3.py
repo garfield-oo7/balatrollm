@@ -1017,3 +1017,18 @@ class TestReviewRound9Opus:
 
     def test_other_blind_unchanged(self) -> None:
         assert analysis.validate_action(self._tower(False), "use", {"consumable": 0, "cards": [0]}) is None
+
+
+class TestReviewRound10Codex:
+    """codex R10-1: a null or junk entry in the target list does not hide a
+    face-down target from the Mark Tarot rule."""
+
+    @pytest.mark.parametrize("cards", [[0, None], [None, 0], ["0"], [0.0], ["x", 0], [3, None, 0]])
+    def test_face_down_target_found_among_junk(self, cards: list[Any]) -> None:
+        G = TestReviewRound9Opus()._tower(True)
+        msg = analysis.validate_action(G, "use", {"consumable": 0, "cards": cards})
+        assert msg and "face-down" in msg
+
+    @pytest.mark.parametrize("cards", [[3, None], [None], [], ["x"]])
+    def test_no_face_down_target_allowed(self, cards: list[Any]) -> None:
+        assert analysis.validate_action(TestReviewRound9Opus()._tower(True), "use", {"consumable": 0, "cards": cards}) is None

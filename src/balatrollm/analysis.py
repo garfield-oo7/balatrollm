@@ -4395,10 +4395,12 @@ def validate_action(
         # down, so the harness can no longer tell what it is (review r9 opus R9-1)
         hand = _area_cards(G, "hand")
         hidden = {i for i, c in enumerate(hand) if (c.get("state") or {}).get("hidden")}
-        try:
-            picked = {int(i) for i in cards}
-        except (TypeError, ValueError):
-            picked = set()
+        picked = set()
+        for i in cards:  # each target on its own: a null or junk entry must not hide the others (review r10 codex R10-1)
+            try:
+                picked.add(int(i))
+            except (TypeError, ValueError):
+                continue
         if picked & hidden:
             return ("The Mark: you cannot see face-down cards, so do not target them. "
                     "Target face-up cards, or keep the card for later.")
