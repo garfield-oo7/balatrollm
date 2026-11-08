@@ -760,14 +760,9 @@ def estimate_play(
     barons = keys.count("j_baron") + copied.count("j_baron")
     moons = keys.count("j_shoot_the_moon") + copied.count("j_shoot_the_moon")
     for c in held:
-        if c["face"] and c["mix"]:
-            # C3: a face-down card held under The Mark: King / Queen by the
-            # unseen J/Q/K mix (Baron x1.5 per King, Shoot the Moon +13 per Queen)
-            for _ in range(1 + mime):
-                for _k in range(barons):
-                    mult *= 1 + 0.5 * float(c["mix"].get("K", 0))
-                mult += 13 * moons * float(c["mix"].get("Q", 0))
-            continue
+        # a face-down card held under The Mark counts nothing here (a floor);
+        # play_advice replaces the listed score by the exact floor over every
+        # possible face-down set when held cards matter (review round 3)
         if c["debuff"] or c["hidden"]:
             continue
         triggers = 1 + mime + (1 if c["seal"] == "RED" else 0)
@@ -1927,11 +1922,13 @@ def _mark_minimum(pool: list[dict[str, Any]], n: int) -> str | None:
 
 
 MARK_FLOOR_MAX = 2000
-MARK_FLOOR_RAW_MAX = 60000  # raw slot fillings walked before de-duplication
+MARK_FLOOR_RAW_MAX = 60000
+MARK_HELD_FLOOR_MAX = 300  # per listed face-up play, when face-down held cards can change its score
+HELD_KEYS = {"j_baron", "j_shoot_the_moon", "j_mime", "j_blackboard", "j_raised_fist"}  # raw slot fillings walked before de-duplication
 
 
 def _mark_floor(G: dict[str, Any], pool: list[dict[str, Any]], hand: list[dict[str, Any]],
-                hidden: list[int], played: list[int]) -> int | None:
+                hidden: list[int], played: list[int], cap: int | None = None) -> int | None:
     """The lowest FLOOR score of playing hand slots ``played`` over every
     distinct way the unseen face cards can fill the face-down slots ``hidden``
     (which card is where: played or held, in hand order, so the order of the
@@ -1949,7 +1946,7 @@ def _mark_floor(G: dict[str, Any], pool: list[dict[str, Any]], hand: list[dict[s
         if key in seen:
             continue
         seen.add(key)
-        if len(seen) > MARK_FLOOR_MAX:
+        if len(seen) > (cap or MARK_FLOOR_MAX):
             return None
         cards = list(hand)
         for slot, i in zip(hidden, pick):
@@ -1998,6 +1995,30 @@ def play_estimate(G: dict[str, Any], chosen: list[int]) -> int:
     return int(sum(scores) / len(scores))
 
 
+def _mark_held_floors(G: dict[str, Any], plays: list[dict[str, Any]]) -> None:
+    """Under The Mark, when cards held in hand can score (Baron, Shoot the
+    Moon, Mime, Blackboard, Raised Fist, or a Steel face card unseen), each
+    listed face-up play's score = its exact floor over every way the unseen
+    face cards fill the face-down slots; ``exact`` False when too many ways
+    (then the play is never marked WINS). Review round 3 (opus R1)."""
+    hand = _area_cards(G, "hand")
+    hidden = [i for i, c in enumerate(hand) if (c.get("state") or {}).get("hidden")]
+    if not hidden:
+        return
+    pool = _mark_pool(G)
+    keys = set(_joker_keys(G)) | set(copied_keys(G))
+    if not (keys & HELD_KEYS or any(_norm(c)["enh"] == "STEEL" for c in pool)):
+        return
+    for p in plays:
+        if set(p["cards"]) & set(hidden):
+            continue
+        f = _mark_floor(G, pool, hand, hidden, list(p["cards"]), cap=MARK_HELD_FLOOR_MAX)
+        if f is None:
+            p["floor_unknown"] = True
+        else:
+            p["score"] = f
+
+
 def mark_play(G: dict[str, Any]) -> dict[str, Any] | None:
     """C3 (ii): "play the face-down cards" under The Mark: all of them, up to
     5. Expected (mean FLOOR estimate over the unseen J/Q/K mix), lowest seen,
@@ -2043,6 +2064,7 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
     """Everything the PLAY phase needs: plays with WINS flags, discard, suggestion."""
     # C3: under The Mark the advice sees face-down cards as masked face cards
     mark = mark_play(G)
+    G_real = G
     G = mark_view(G)
     plan = main_hand_plan(G)
     analysis_ = analyze_hand(G, top=top)
@@ -2058,6 +2080,11 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
     # once jokers (or effects the estimator skips) are involved.
     exact = not _joker_keys(G)
     plays = []
+    if mark:
+        _mark_held_floors(G_real, analysis_["plays"])
+        for p in analysis_["plays"]:
+            if p.get("no_blue"):
+                _mark_held_floors(G_real, [p["no_blue"]])
     for p in analysis_["plays"]:
         alt = p.pop("no_blue", None)
         margin = 1.0 if exact and not p["unknown"] else WIN_MARGIN
@@ -2065,7 +2092,7 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         if alt and alt["score"] >= margin * remaining and not alt["blocked"]:
             p = alt
         p = _blackboard_pad(G, hand_raw, hand, p)
-        wins = p["score"] >= margin * remaining and not p["blocked"]
+        wins = p["score"] >= margin * remaining and not p["blocked"] and not p.get("floor_unknown")
         plays.append({**p, "wins": wins, "reaches_pace": p["score"] >= per_hand})
     plays.sort(key=lambda p: -p["score"])
     _mark_repeats(G, plays)
