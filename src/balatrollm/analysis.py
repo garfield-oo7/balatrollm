@@ -1484,6 +1484,11 @@ def main_commit(G: dict[str, Any], previous: dict[str, Any] | None) -> dict[str,
     decisions). A new joker call re-commits; losing the joker does not
     un-commit (sticky only against joker loss)."""
     call = joker_call(G)
+    sharp = next((str(j.get("label") or j.get("key")) for j in _area_cards(G, "jokers") if j.get("key") == "j_card_sharp"), None)
+    if call and previous and previous.get("deadline") and call[1] == sharp:
+        # review round 1: Card Sharp sets no hand type (X3 on any repeated hand),
+        # so it does not replace the end-of-Ante-2 commit
+        return previous
     if call and (not previous or previous.get("hand") != call[0]):
         return {
             "hand": call[0],
@@ -1905,6 +1910,36 @@ def _mark_floor(G: dict[str, Any], pool: list[dict[str, Any]], k: int, n: int,
             est = int(estimate_play(G, [cards[j] for j in played], visible + held)["score"])
             low = est if low is None else min(low, est)
     return low
+
+
+def play_estimate(G: dict[str, Any], chosen: list[int]) -> int:
+    """The FLOOR estimate of playing hand indices ``chosen`` as Luna can know
+    it (MEMORY "[estimate was X]"). Under The Mark, face-down cards are given
+    identities from the unseen face-card pool and the score is the mean over
+    the same kind of draws as the face-down play line, so it never depends on
+    which face card is which (C3, review round 1)."""
+    hand = _area_cards(G, "hand")
+    chosen = sorted(set(chosen))
+    hidden = [i for i, c in enumerate(hand) if (c.get("state") or {}).get("hidden")]
+    if not mark_active(G) or not hidden:
+        seen = mark_view(G)
+        cards = _area_cards(seen, "hand")
+        return int(estimate_play(seen, [cards[i] for i in chosen], [c for i, c in enumerate(cards) if i not in chosen])["score"])
+    pool = _mark_pool(G)
+    if len(pool) < len(hidden):
+        return 0
+    visible = {i: c for i, c in enumerate(hand) if i not in hidden}
+    ids = sorted(_card_id(c) for c in pool)
+    seen_ids = sorted(_card_id(c) for c in visible.values())
+    n_chosen = sum(1 for i in chosen if i in hidden)
+    seed = int(hashlib.md5(json.dumps([ids, seen_ids, len(hidden), n_chosen, "estimate"]).encode()).hexdigest()[:12], 16)
+    rng = random.Random(seed)
+    scores = []
+    for _ in range(MARK_SAMPLES):
+        pick = iter(rng.sample(pool, len(hidden)))
+        cards = {i: (visible[i] if i in visible else next(pick)) for i in range(len(hand))}
+        scores.append(int(estimate_play(G, [cards[i] for i in chosen], [cards[i] for i in cards if i not in chosen])["score"]))
+    return int(sum(scores) / len(scores))
 
 
 def mark_play(G: dict[str, Any]) -> dict[str, Any] | None:
@@ -4327,6 +4362,7 @@ TEMPLATE_GLOBALS = {
     "grows_xmult": grows_xmult,
     "past_lessons": past_lessons,
     "first_shop_tight": first_shop_tight,
+    "play_estimate": play_estimate,
     "clash_note": clash_note,
     "joker_tag": knowledge.joker_tag,
     "consumable_tag": knowledge.consumable_tag,
