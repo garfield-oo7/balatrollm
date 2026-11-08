@@ -487,7 +487,7 @@ BOSSES: dict[str, str] = {
     "The Head": "Hearts give 0 chips and trigger nothing: score with other suits",
     "The Tooth": "lose $1 per card played: play only the scoring cards, no filler",
     "The Flint": "hand base chips/mult halved: jokers matter more",
-    "The Mark": "face cards drawn face down: they still score",
+    "The Mark": "face cards are drawn face down: each face-down card is a J, Q or K and still scores; keep and play them, never discard them as unknown",
     "Amber Acorn": "jokers flipped and shuffled: nothing to do, play normally",
     "Verdant Leaf": "all cards give 0 until you SELL 1 joker: sell your weakest joker first",
     "Violet Vessel": "target is 6x: every hand must be maximum score",
