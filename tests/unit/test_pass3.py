@@ -912,3 +912,39 @@ class TestReviewRound6Opus:
         assert isinstance(fills, list)
         for idx in ([3, 4], [5], [6], [3, 4, 7]):
             assert min(analysis._fill_score(G, f, idx) for f in fills) == analysis._mark_floor(G, pool, hand, hidden, idx), idx
+
+
+class TestReviewRound7Opus:
+    """opus R7-1: with Pareidolia a Stone card comes face down too, so it is in
+    the pool a face-down card can be (no false WINS, no missing play line)."""
+
+    def _stone(self, deck: list[str]) -> dict[str, Any]:
+        G = mark_hand("S_2 S_4 S_6 S_8 S_9", "", jokers=[joker("j_pareidolia", "Pareidolia")])
+        G["hand"]["cards"] = G["hand"]["cards"][:5]
+        G["hand"]["cards"][4]["modifier"] = {"enhancement": "STONE"}
+        G["cards"]["cards"] = [card(k) for k in deck]
+        G["cards"]["count"] = len(deck)
+        G["blinds"]["boss"]["score"] = 150
+        G["round"].update(hands_left=1, discards_left=0)
+        return G
+
+    def test_stone_in_pool_means_no_false_win(self) -> None:
+        G = self._stone(["S_3"])  # 6 unseen: small enough for the exact floor
+        pool = analysis._mark_pool(G)
+        assert len(pool) == 6 and sum(1 for c in pool if analysis._norm(c)["stone"]) == 1
+        A = analysis.play_advice(G)
+        mp = A["mark_play"]
+        assert mp["floor"] is not None and mp["floor"] < 150 and not mp["wins"]
+        assert mp["minimum"] is None  # the Stone card can make it High Card
+
+    def test_empty_deck_still_lists_the_face_down_play(self) -> None:
+        G = self._stone([])
+        A = analysis.play_advice(G)
+        assert A["mark_play"] is not None and A["mark_play"]["cards"] == [0, 1, 2, 3, 4]
+        assert A["action"]["tool"] == "play"
+
+    def test_minimum_with_a_stone_card(self) -> None:
+        stone = card("S_9")
+        stone["modifier"] = {"enhancement": "STONE"}
+        pool = [card("S_Q"), card("H_Q"), card("D_Q"), stone]
+        assert analysis._mark_minimum(pool, 3) == "Pair"  # Q Q + Stone at the least
