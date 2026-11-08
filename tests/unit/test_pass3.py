@@ -481,3 +481,93 @@ class TestFirstShop:
         later = first_shop(8)
         later["luna"] = {"first_shop": False}
         assert "TIGHT MONEY" not in render(later)
+
+
+# ---------------------------------------------------------------------------
+# C8: lesson P2-C1, shown only in hand prompts while The Mark is the current blind
+# ---------------------------------------------------------------------------
+def render_flags(G: dict[str, Any], lessons_on: bool = True) -> str:
+    from balatrollm.strategy import StrategyManager
+
+    return StrategyManager("mastery").render_gamestate(G, rounds=[], history=[], flags={"lessons": lessons_on, "suggest_action": True})
+
+
+class TestMarkLesson:
+    def test_shown_under_the_mark_in_hand(self) -> None:
+        text = render_flags(mark_hand())
+        assert "- Past games: [P2-C1] when the blind is The Mark" in text
+        assert "(SEED-F, SEED-H, SEED-S)" in text
+
+    def test_not_in_the_small_or_big_blind_of_a_mark_ante(self) -> None:
+        G = make_state("H_2 S_3 D_7", boss="The Mark")  # Small Blind current, The Mark later this ante
+        assert "Past games" not in render_flags(G)
+
+    def test_not_in_the_shop_and_not_under_other_bosses(self) -> None:
+        assert "Past games" not in render_flags(shop(boss="The Mark"))
+        G = mark_hand()
+        G["blinds"]["boss"]["name"] = "The Hook"
+        assert "Past games" not in render_flags(G)
+
+    def test_flag_off_shows_nothing(self) -> None:
+        assert "Past games" not in render_flags(mark_hand(), lessons_on=False)
+
+    def test_check_must_name_a_known_card_set(self) -> None:
+        from balatrollm import lessons
+
+        shipped = lessons.load(analysis.LESSONS_FILE)[0]
+        assert lessons.problems(shipped) == []
+        bad = {**shipped, "check": {"action": "discard", "expect": "avoid", "cards": "red"}}
+        assert any("check.cards" in p for p in lessons.problems(bad))
+
+
+def _digest() -> Any:
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[2] / "scripts" / "digest.py"
+    spec = importlib.util.spec_from_file_location("digest_p3", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class TestDigestPass3:
+    def test_lesson_followed_by_face_down_cards(self) -> None:
+        digest = _digest()
+        shown = ["[P2-C1] when the blind is The Mark, ..."]
+        base = {"lessons": shown, "face_down": [0, 1, 2]}
+        ds = [
+            {**base, "action": "discard", "args": {"cards": [3, 4]}},  # face-up only: followed
+            {**base, "action": "discard", "args": {"cards": [0, 5]}},  # a face-down card: ignored
+            {**base, "action": "play", "args": {"cards": [0, 1, 2]}},  # not a discard: followed
+        ]
+        assert digest.lesson_follow(ds) == {"P2-C1": {"shown": 3, "followed": 2, "ignored": 1}}
+
+    def test_mark_rounds_counts(self) -> None:
+        digest = _digest()
+        d = {"phase": "HAND", "round_blind": "The Mark", "face_down": [0, 1], "lessons": []}
+        ds = [{**d, "action": "discard", "args": {"cards": [0, 4]}}, {**d, "action": "play", "args": {"cards": [0, 1]}},
+              {**d, "round_blind": "Small Blind", "action": "discard", "args": {"cards": [0]}}]
+        out = digest.mark_rounds(ds)
+        assert out["decisions"] == 2 and out["face_down_discarded"] == 1 and out["face_down_played"] == 2
+
+    def test_harness_log_reads_luna_rerolls_and_the_deadline(self, tmp_path: Any) -> None:
+        digest = _digest()
+        (tmp_path / "run.log").write_text(
+            "x - INFO - Luna asked for a boss reroll of The Plant (queued for the next blind select)\n"
+            "x - INFO - Luna asked for a boss reroll: The Plant -> The Hook\n"
+            "x - WARNING - Vetoed call: Boss reroll refused: it costs $10 and you have $4. Buy something else\n"
+            "x - INFO - Harness rerolled boss The Wall -> The Club (The Wall in Ante 2 (rerolled in Antes 1-3))\n"
+            "x - INFO - Harness MAIN_HAND deadline commit: Two Pair (end of Ante 2: played 7 times, 312 per hand with your jokers)\n"
+        )
+        hl = digest.harness_log(tmp_path)
+        assert hl["luna_reroll_asked"] == 1 and hl["luna_reroll_done"] == 1 and hl["luna_reroll_refused"] == 1
+        assert hl["luna_reroll_list"] == [["The Plant", "The Hook"]] and hl["boss_rerolls"] == 1
+        assert hl["deadline"] == {"hand": "Two Pair", "trigger": "end of Ante 2: played 7 times, 312 per hand with your jokers"}
+
+    def test_commit_reason_with_the_deadline_trigger(self) -> None:
+        digest = _digest()
+        ds = [{"ante": 3, "round": 7, "main_hand": "Two Pair",
+               "main_reason": "committed: end of Ante 2: played 7 times, 312 per hand with your jokers (round 7)"}]
+        assert digest.main_commit(ds) == {"ante": 3, "round": 7, "hand": "Two Pair",
+                                          "trigger": "end of Ante 2: played 7 times, 312 per hand with your jokers"}

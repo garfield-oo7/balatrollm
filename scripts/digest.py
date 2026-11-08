@@ -30,12 +30,22 @@ HARNESS = {
     "tag_skips": re.compile(r"Skipping .+? for (.+)$"),
     "harness_sells": re.compile(r"Harness sold (.+?) to make room for"),
     "phase_orders": re.compile(r"Harness joker phase order for discard"),
+    # pass 3 C4: Luna's own boss-reroll requests (separate from the harness's)
+    "luna_reroll_asked": re.compile(r"Luna asked for a boss reroll of (.+?) \(queued"),
+    "luna_reroll_done": re.compile(r"Luna asked for a boss reroll: (.+?) -> (.+)$"),
+    "luna_reroll_refused": re.compile(r"Vetoed call: Boss reroll refused"),
+    "luna_reroll_not_run": re.compile(r"Luna's boss reroll could not run at blind select"),
+    # pass 3 C6
+    "deadline_commit": re.compile(r"Harness MAIN_HAND deadline commit: (.+?) \((.+)\)$"),
 }
 BLIND = re.compile(r"- Ante (\d+) (.+?): scored ([\d,]+) / ([\d,]+), (\d+) hands left")
 OFFER = re.compile(r"^- (\d+): (.+?) \$(\d+)(.*)$", re.M)
 VETO = re.compile(r"Your last action FAILED\*\*: (?:Refused by harness: )?(.+)")
 LESSON = re.compile(r"^- Past games: (.+)$", re.M)
 LEVEL = re.compile(r"- ([A-Za-z ]+?) \(MAIN_HAND\): Lv(\d+)")
+ROUND_BLIND = re.compile(r"^# ROUND\n- Blind: (.+?), target", re.M)
+HAND_CARD = re.compile(r"^- (\d+): (.+)$", re.M)
+TIGHT = "- FIRST SHOP, TIGHT MONEY:"
 
 
 def _text(req: dict[str, Any]) -> str:
@@ -111,6 +121,9 @@ def decisions(run: Path) -> list[dict[str, Any]]:
                 packs = [{"label": m.group(2).strip(), "price": int(m.group(3))}
                          for m in PACKS.finditer(shop[pk:].split("\n\n")[0])]
         veto = VETO.search(u)
+        rb = ROUND_BLIND.search(u)
+        hand_part = _section(u, "## Your hand").split("\n## ")[0] if phase == "HAND" else ""
+        face_down = [int(m.group(1)) for m in HAND_CARD.finditer(hand_part) if m.group(2).startswith("face-down card")]
         out.append({
             "ante": int(m.group(1)), "round": int(m.group(2)), "money": int(m.group(3)),
             "phase": phase,
@@ -125,6 +138,9 @@ def decisions(run: Path) -> list[dict[str, Any]]:
             "blinds": [(int(b[0]), b[1], _num(b[2]), _num(b[3]), int(b[4])) for b in BLIND.findall(u)],
             "offers": offers,
             "lessons": LESSON.findall(u),
+            "round_blind": rb.group(1).strip() if rb else None,
+            "face_down": face_down,
+            "tight_first_shop": TIGHT in u,
             "veto_of_previous": veto.group(1).strip()[:200] if veto else None,
             "action": name, "args": args,
         })
@@ -235,6 +251,8 @@ def harness_log(run: Path) -> dict[str, Any]:
     out: dict[str, Any] = {k: 0 for k in HARNESS}
     out["boss_reroll_list"] = []
     out["tag_skip_list"] = []
+    out["luna_reroll_list"] = []
+    out["deadline"] = None
     path = run / "run.log"
     if not path.exists():
         return out
@@ -248,6 +266,10 @@ def harness_log(run: Path) -> dict[str, Any]:
                 out["boss_reroll_list"].append([m.group(1), m.group(2)])
             if k == "tag_skips":
                 out["tag_skip_list"].append(m.group(1).strip())
+            if k == "luna_reroll_done":
+                out["luna_reroll_list"].append([m.group(1), m.group(2).strip()])
+            if k == "deadline_commit":
+                out["deadline"] = {"hand": m.group(1), "trigger": m.group(2)}
     out["boss_reroll_cost"] = 10 * out["boss_rerolls"]
     return out
 
@@ -282,7 +304,7 @@ def ended_game_over(run: Path) -> bool:
     return bool(last) and json.loads(last).get("state") == "GAME_OVER"
 
 
-LESSON_ID = re.compile(r"\[([A-Za-z]+\d+)\]")
+LESSON_ID = re.compile(r"\[([A-Za-z0-9-]+)\]")
 DEFAULT_LESSONS = Path(__file__).resolve().parents[1] / "src" / "balatrollm" / "strategies" / "mastery" / "lessons.json"
 
 
@@ -307,9 +329,51 @@ def lesson_follow(ds: list[dict[str, Any]], lessons_path: Path = DEFAULT_LESSONS
             if not check or not check.get("action"):
                 continue
             did = d["action"] == check["action"]
+            if did and check.get("cards") == "face_down":
+                # pass 3 C8: the check is about the cards: a discard counts only if it took a face-down card
+                did = bool(set(_int_list(d["args"].get("cards"))) & set(d.get("face_down") or []))
             ok = did if check.get("expect") == "do" else not did
             row["followed" if ok else "ignored"] += 1
     return out
+
+
+def _int_list(v: Any) -> list[int]:
+    try:
+        return [int(x) for x in v or []]
+    except (TypeError, ValueError):
+        return []
+
+
+def mark_rounds(ds: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Pass 3 C3/C8: hand decisions while The Mark was the blind: face-down cards
+    discarded / played, and how many decisions showed the Mark lesson."""
+    mark = [d for d in ds if d["phase"] == "HAND" and d.get("round_blind") == "The Mark"]
+    if not mark:
+        return None
+    out = {"decisions": len(mark), "face_down_seen": 0, "face_down_discarded": 0, "face_down_played": 0,
+           "lesson_shown": sum(1 for d in mark if d["lessons"])}
+    for d in mark:
+        fd = set(d.get("face_down") or [])
+        out["face_down_seen"] = max(out["face_down_seen"], len(fd))
+        chosen = set(_int_list(d["args"].get("cards")))
+        if d["action"] == "discard":
+            out["face_down_discarded"] += len(chosen & fd)
+        elif d["action"] == "play":
+            out["face_down_played"] += len(chosen & fd)
+    return out
+
+
+def tight_first_shop(visits: list[dict[str, Any]], ds: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Pass 3 C7: the first shop showed the tight-money line: what Luna bought there."""
+    if not visits:
+        return None
+    k = visits[0]["decision_index"]
+    shown = False
+    for d in ds[k:]:
+        if d["phase"] == "HAND":
+            break
+        shown = shown or d.get("tight_first_shop", False)
+    return {"shown": True, "buys": visits[0]["buys"]} if shown else {"shown": False}
 
 
 def digest(run: Path) -> dict[str, Any]:
@@ -355,6 +419,12 @@ def digest(run: Path) -> dict[str, Any]:
         "repeated_dips": dip_flag(visits),
         "harness": hl,
         "lessons": lesson_follow(ds),
+        "mark_rounds": mark_rounds(ds),
+        "tight_first_shop": tight_first_shop(visits, ds),
+        "luna_boss_rerolls": {"asked": hl["luna_reroll_asked"], "done": hl["luna_reroll_done"],
+                              "refused": hl["luna_reroll_refused"], "not_run_at_select": hl["luna_reroll_not_run"],
+                              "list": hl["luna_reroll_list"]},
+        "deadline_commit": hl["deadline"],
         "blinds": [{"ante": b[0], "blind": b[1], "hands_left": b[4], "margin": round(b[2] / max(b[3], 1), 2)} for b in blinds],
         "vetoes": sum(len(v["vetoes"]) for v in visits),
         "refusals_logged": hl["refusals"],
