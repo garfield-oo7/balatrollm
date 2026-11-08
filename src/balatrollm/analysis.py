@@ -1843,6 +1843,7 @@ def _blackboard_pad(
 
 MARK = "The Mark"
 MARK_SAMPLES = 60
+MARK_PLAY_SAMPLES = 300  # the face-down play's "about" (review round 2: 60 draws were up to ~30% off)
 
 
 def mark_active(G: dict[str, Any]) -> bool:
@@ -1963,6 +1964,8 @@ def play_estimate(G: dict[str, Any], chosen: list[int]) -> int:
     hand = _area_cards(G, "hand")
     chosen = sorted(set(chosen))
     hidden = [i for i, c in enumerate(hand) if (c.get("state") or {}).get("hidden")]
+    if mark_active(G) and hidden and (mp := mark_play(G)) and chosen == sorted(mp["cards"]):
+        return int(mp["expected"])  # the face-down play: exactly the number Luna was shown
     if not mark_active(G) or not hidden:
         seen = mark_view(G)
         cards = _area_cards(seen, "hand")
@@ -2006,7 +2009,7 @@ def mark_play(G: dict[str, Any]) -> dict[str, Any] | None:
     seed = int(hashlib.md5(json.dumps([ids, seen, len(hidden)]).encode()).hexdigest()[:12], 16)
     rng = random.Random(seed)
     scores, types = [], Counter()
-    for _ in range(MARK_SAMPLES):
+    for _ in range(MARK_PLAY_SAMPLES):
         pick = rng.sample(pool, len(hidden))
         est = estimate_play(G, pick[:n], visible + pick[n:])
         scores.append(int(est["score"]))
