@@ -230,8 +230,11 @@ class TestLookAheadAndRefusals:
         G["blinds"]["small"]["status"] = "DEFEATED"
         G["blinds"]["big"]["status"] = "UPCOMING"
         G["blinds"]["boss"].update(name="The Needle", score=10_000_000)
+        # an easy Big Blind: 2 hands at the K5 low per hand
+        G["blinds"]["big"]["score"] = 2 * analysis.power_check(G)["per_hand_low"]
+        analysis._CACHE.clear()
         S = analysis.run_status(G, [], [])
-        assert S["status"] == "COMFORTABLE"  # Big Blind 450 is easy
+        assert S["status"] == "COMFORTABLE"
         assert not S["boss_check"]["ok"] and S["boss_check"]["allowed"] == 1
         G["blinds"]["big"]["status"] = "DEFEATED"
         assert analysis.run_status(G, [], [])["status"] == "SHORT"
@@ -241,9 +244,15 @@ class TestLookAheadAndRefusals:
         G["blinds"]["small"]["status"] = "DEFEATED"
         G["blinds"]["big"].update(status="UPCOMING", score=10_000_000)
         easy = [{"hands_left": 2}, {"hands_left": 3}]
+        # C2 (pass 3): the safety net never lifts SHORT ...
+        S = analysis.run_status(G, easy, [])
+        assert S["status"] == "SHORT" and not S["safety_net"]
+        # ... it lifts THIN: a Big Blind that takes all 4 hands at the low per hand
+        G["blinds"]["big"]["score"] = 4 * analysis.power_check(G)["per_hand_low"]
         S = analysis.run_status(G, easy, [])
         assert S["status"] == "COMFORTABLE" and S["safety_net"]
-        assert analysis.run_status(G, [{"hands_left": 1}, {"hands_left": 3}], [])["status"] == "SHORT"
+        assert analysis.run_status(G, [{"hands_left": 1}, {"hands_left": 3}], [])["status"] == "THIN"
+        G["blinds"]["big"]["score"] = 10_000_000
         G["blinds"]["big"]["status"] = "DEFEATED"
         G["blinds"]["boss"]["score"] = 10_000_000
         assert analysis.run_status(G, easy, [])["status"] == "SHORT"
@@ -1137,8 +1146,8 @@ class TestBossReroll:
         """The Flint halves the score: pick a target only a neutral boss allows."""
         G = blind_select("The Flint", on_deck="boss")
         power = analysis.power_check(G)
-        assert power["boss_per_hand"] < power["per_hand"]
-        G["blinds"]["boss"]["score"] = power["per_hand"] * 3
+        assert power["boss_per_hand_low"] < power["per_hand_low"]
+        G["blinds"]["boss"]["score"] = power["per_hand_low"] * 3  # K5: the trigger reads the low value
         return G
 
     def test_strength_check_only_when_boss_is_on_deck(self) -> None:

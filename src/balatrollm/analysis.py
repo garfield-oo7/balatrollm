@@ -2213,14 +2213,16 @@ def situation(
     ahead"); the boss counts only when it is that blind, against its hands.
 
     hands_needed = ceil(target / per hand): <= hands - 1 COMFORTABLE (a hand to
-    spare), == hands THIN, > hands SHORT (K4). Last blind won on its final
-    hand -> at least THIN. Safety net (fix 2): THIN/SHORT becomes COMFORTABLE
-    when the last 2 blinds were each won with 2+ hands left, never for a boss.
+    spare), == hands THIN, > hands SHORT (K4); per hand = the K5 low
+    percentile. Last blind won on its final hand -> at least THIN. Safety net
+    (fix 2, pass 3 C2): THIN (never SHORT) becomes COMFORTABLE when the last 2
+    blinds were each won with 2+ hands left, never for a boss.
     """
     cur = current_blind(G) if G.get("state") == "SELECTING_HAND" else None
     nxt = cur or next_blind(G) or {}
     kind = nxt.get("kind")
-    per = int(power["boss_per_hand"] if kind == "boss" else power["per_hand"])
+    # K5: the strength check reads the low percentile, not the mean
+    per = int(power["boss_per_hand_low"] if kind == "boss" else power["per_hand_low"])
     if cur:
         prog = blind_progress(G) or {}
         target, hands = int(prog.get("remaining") or 0), int(prog.get("hands_left") or 0)
@@ -2239,7 +2241,7 @@ def situation(
         status = "THIN"
     net = False
     if (
-        status in ("THIN", "SHORT")
+        status == "THIN"  # C2: the safety net never lifts SHORT
         and kind != "boss"
         and rounds
         and len(rounds) >= 2
@@ -2287,8 +2289,8 @@ def run_status(
     status = sit["status"]
     hands_needed = sit["hands_needed"]
     boss_hands = (
-        -(-boss_target // max(int(power["boss_per_hand"]), 1))
-        if power["boss_per_hand"] and boss_target
+        -(-boss_target // max(int(power["boss_per_hand_low"]), 1))
+        if power["boss_per_hand_low"] and boss_target
         else None
     )
     bcheck = boss_check(G, history) if boss.get("status") in ("SELECT", "UPCOMING") else None
@@ -2669,6 +2671,10 @@ def _debuffed(card: dict[str, Any]) -> dict[str, Any]:
 # gamestate. Knobs (pass2_build_plan.md "Pre-registered calibration knobs").
 # ---------------------------------------------------------------------------
 SAMPLES = 150  # K1
+# K5 (pass 3, owner Q1): STATUS, the boss check / boss line and the boss-reroll
+# strength trigger read this percentile of the sampled per-round scores (nearest
+# rank); shop SCORE (shop_impact, swap_plan) stays on the mean.
+K5_PERCENTILE = 25
 SHOP_SAMPLES = 60  # shop variants reuse the first draws (common random numbers)
 REFILL = 5
 DISCARD_FROM = {"High Card", "Pair"}  # K2: one discard per hand from these
@@ -2936,7 +2942,7 @@ def _score_hands(G: dict[str, Any], dealt: list[list], *, boss: str = "") -> dic
         s, t, play = reuse[n] if n in reuse else _best_play(G, hand, pad, memo=memos[n] if memos else None)
         chosen.append((s, t, hand, play))
     if not chosen:
-        return {"per_hand": 0, "types": Counter(), "chosen": []}
+        return {"per_hand": 0, "per_hand_low": 0, "types": Counter(), "chosen": []}
     types = Counter(t for _, t, _, _ in chosen)
     keys = set(_joker_keys(G)) | set(copied_keys(G))
     scores = [s for s, _, _, _ in chosen]
@@ -2980,7 +2986,17 @@ def _score_hands(G: dict[str, Any], dealt: list[list], *, boss: str = "") -> dic
         last = rescore({**G, "round": {**rnd, "hands_left": 1}})
         per_round = [pr - s + l for pr, s, l in zip(per_round, scores, last)]
     per_hand = int(sum(per_round) / len(per_round) / hands)
-    return {"per_hand": per_hand, "types": types, "chosen": chosen}
+    per_hand_low = int(percentile(per_round, K5_PERCENTILE) / hands)
+    return {"per_hand": per_hand, "per_hand_low": per_hand_low, "types": types, "chosen": chosen}
+
+
+def percentile(values: list[float] | list[int], p: float) -> float:
+    """Nearest-rank percentile: sorted(values)[ceil(p/100 * n) - 1] (K5)."""
+    if not values:
+        return 0
+    ordered = sorted(values)
+    k = max(int(-(-p * len(ordered) // 100)) - 1, 0)
+    return ordered[min(k, len(ordered) - 1)]
 
 
 def _boss_view(G: dict[str, Any], draws: list) -> tuple[dict[str, Any], list]:
@@ -3111,11 +3127,13 @@ def _power_check(G: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
     return {
         "typical": now["per_hand"],
         "per_hand": now["per_hand"],
+        "per_hand_low": now["per_hand_low"],
         "make_rate": made,
         "best_types": [t for t, _ in now["types"].most_common(3)],
         "types": dict(now["types"]),
         "boss_make_rate": made,
         "boss_per_hand": bstr["per_hand"],
+        "boss_per_hand_low": bstr["per_hand_low"],
         "boss_hands_allowed": 1 if name == "The Needle" else _hands_per_round(G),
     }
 
@@ -3148,9 +3166,9 @@ def boss_check(
         Gg = _with_jokers(Gg, _area_cards(Gg, "jokers"))
         Gb, bdraws = _boss_view(Gg, sample_draws(G))
         if name in ("The Eye", "The Mouth"):
-            per = _strength(Gg, sample_draws(G))["per_hand"]
+            per = _strength(Gg, sample_draws(G))["per_hand_low"]
         else:
-            per = _strength(Gb, bdraws, boss=name, discards=name != "The Water")["per_hand"]
+            per = _strength(Gb, bdraws, boss=name, discards=name != "The Water")["per_hand_low"]
         allowed = 1 if name == "The Needle" else _hands_per_round(G)
         hands = -(-target // max(per, 1))
         return {
@@ -3236,11 +3254,11 @@ def boss_reroll_reason(G: dict[str, Any]) -> str | None:
     if boss.get("status") == "SELECT":
         power = power_check(G, plan)
         target = int(boss.get("score") or 0)
-        per_hand = int(power["boss_per_hand"] or 0)
+        per_hand = int(power["boss_per_hand_low"] or 0)  # K5
         # Reroll only when THIS boss is the problem: with a boss that does not
         # cut the score, the same target must be beatable. Otherwise every new
         # boss fails too and Retcon would spend all the money for nothing.
-        neutral_ok = -(-target // max(int(power["per_hand"] or 0), 1)) <= _hands_per_round(G)
+        neutral_ok = -(-target // max(int(power["per_hand_low"] or 0), 1)) <= _hands_per_round(G)
         if target and per_hand and neutral_ok:
             hands = -(-target // per_hand)
             if hands > power["boss_hands_allowed"]:
