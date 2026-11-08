@@ -720,3 +720,49 @@ class TestReviewRound3Opus:
         for k in ("plays", "discard", "action", "mark_play"):
             assert A1[k] == A2[k], k
         assert render(a) == render(b)
+
+
+class TestReviewRound4Codex:
+    """codex R4-1: face-up plays are chosen on their corrected held-card score,
+    not corrected after the best of each hand type was already picked."""
+
+    def _state(self) -> dict[str, Any]:
+        G = mark_hand("S_Q", "H_T D_A C_2 S_4 D_6 H_8 C_9", jokers=[joker("j_shoot_the_moon", "Shoot the Moon")])
+        G["hand"]["cards"][1]["modifier"] = {"enhancement": "BONUS"}
+        G["hand"]["cards"][2]["modifier"] = {"enhancement": "MULT"}
+        G["cards"]["cards"] = [card("S_2")]
+        G["cards"]["count"] = 1
+        G["blinds"]["boss"]["score"] = 300
+        G["round"].update(hands_left=1, discards_left=0)
+        return G
+
+    def test_winning_bonus_ten_is_listed_and_played(self) -> None:
+        A = analysis.play_advice(self._state())
+        hc = next(p for p in A["plays"] if p["hand"] == "High Card")
+        assert hc["cards"] == [1] and hc["score"] == 630 and hc["wins"]
+        assert A["action"] == {"tool": "play", "cards": [1], "why": "High Card WINS"}
+
+    def test_selection_matches_brute_force(self) -> None:
+        jk = [joker("j_baron", "Baron"), joker("j_shoot_the_moon", "Shoot the Moon")]
+        for faces, visible in (("S_K H_Q", "H_T D_A C_K S_Q D_6 H_8"), ("S_K H_Q D_J", "H_5 D_5 C_2 H_3 S_7")):
+            G = mark_hand(faces, visible, jokers=jk)
+            G["round"].update(hands_left=1, discards_left=0)
+            hand = G["hand"]["cards"]
+            hidden = [i for i, c in enumerate(hand) if (c.get("state") or {}).get("hidden")]
+            pool = analysis._mark_pool(G)
+            got = {p["hand"]: p["score"] for p in analysis.play_advice(G)["plays"]}
+            V = analysis.mark_view(G)
+            vh = V["hand"]["cards"]
+            want: dict[str, int] = {}
+            from itertools import combinations
+            visible_i = [i for i in range(len(vh)) if i not in hidden]
+            for k in range(1, 6):
+                for idx in combinations(visible_i, k):
+                    est = analysis.estimate_play(V, [vh[i] for i in idx], [c for i, c in enumerate(vh) if i not in idx])
+                    if len(est["scoring"]) != k:
+                        continue
+                    f = analysis._mark_floor(G, pool, hand, hidden, list(idx))
+                    assert f is not None
+                    want[est["hand"]] = max(want.get(est["hand"], 0), f)
+            for htype, score in got.items():
+                assert score == want[htype], (htype, score, want[htype])
