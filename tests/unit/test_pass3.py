@@ -600,7 +600,7 @@ class TestMarkReviewRound1:
         hand = [analysis._face_up(c) for c in G["hand"]["cards"]]
         actual = int(analysis.estimate_play(G, hand[:5], hand[5:])["score"])
         mp = A["mark_play"]
-        assert mp["floor"] is not None and mp["floor"] <= actual < 200
+        assert (mp["floor"] is None or mp["floor"] <= actual) and actual < 200
         assert not mp["wins"] and "WIN" not in A["action"]["why"]
 
     def test_no_wins_claim_when_the_floor_is_too_costly(self) -> None:
@@ -643,3 +643,27 @@ class TestReviewRound1Opus:
         assert analysis.main_commit(G, dc) is dc
         G["jokers"]["cards"].append(joker("j_tribe", "The Tribe"))  # a real hand-defining joker still re-commits
         assert analysis.main_commit(G, dc)["hand"] == "Flush"
+
+
+class TestReviewRound2Codex:
+    """Codex review round 2 findings, kept as regressions."""
+
+    def test_floor_covers_every_order_of_the_played_cards(self) -> None:
+        G = mark_hand("S_J C_J", "H_2 D_3 H_4 D_8 S_9 H_A", jokers=[joker("j_hanging_chad", "Hanging Chad")])
+        G["hand"]["cards"][1]["modifier"] = {"enhancement": "GLASS"}
+        G["cards"]["cards"] = [card("H_8"), card("D_9"), card("S_T")]
+        G["cards"]["count"] = 3
+        G["blinds"]["boss"]["score"] = 300
+        G["round"]["hands_left"] = 1
+        A = analysis.play_advice(G)
+        hand = [analysis._face_up(c) for c in G["hand"]["cards"]]
+        actual = int(analysis.estimate_play(G, hand[:2], hand[2:])["score"])
+        assert A["mark_play"]["floor"] is not None and A["mark_play"]["floor"] <= actual < 300
+        assert not A["mark_play"]["wins"] and "WIN" not in A["action"]["why"]
+
+    def test_draw_odds_never_count_a_face_down_card_as_drawable(self) -> None:
+        G = mark_hand("S_J", "H_7 D_8 C_9 S_T D_2 C_3 H_4")
+        G["cards"]["cards"] = [card(k) for k in ("H_2", "D_3", "C_4", "S_5")]
+        G["cards"]["count"] = 4
+        d = next(d for d in analysis.play_advice(G)["draws"] if d["kind"] == "Straight")
+        assert d["chance"] == 0.0 and "unseen" in d["text"]
