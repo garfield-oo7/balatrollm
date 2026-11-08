@@ -2056,14 +2056,20 @@ def _mark_held_fills(G: dict[str, Any]) -> list[list[dict[str, Any]]] | str | No
     if k > len(pool):
         return "unknown"
     # A held card changes a face-up play's score only through what
-    # estimate_play reads of HELD cards: rank, Steel, Red Seal, black suit
-    # (or Wild) for Blackboard, debuff. Fillings that agree on these, slot by
-    # slot, score the same, so each such class sequence is walked once (exact,
-    # and far fewer than card-by-card fillings; review r5 opus R5-1).
+    # estimate_play reads of HELD cards, and only under the jokers that read
+    # it: full rank for Raised Fist, "is a King" for Baron, "is a Queen" for
+    # Shoot the Moon, black suit or Wild for Blackboard (own or copied);
+    # Steel, Red Seal and debuff always. Fillings that agree on these, slot by
+    # slot, score the same, so each such class sequence is walked once (exact;
+    # review r5 opus R5-1, joker-aware r6 opus R6-1).
+    fist, baron, moon, board = ("j_raised_fist" in keys, "j_baron" in keys, "j_shoot_the_moon" in keys,
+                                "j_blackboard" in keys)
     classes: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
     for c in pool:
         n = _norm(c)
-        key = (n["rank"], n["enh"] == "STEEL", n["seal"] == "RED", n["suit"] in ("S", "C") or n["enh"] == "WILD", n["debuff"])
+        rank = n["rank"] if fist else (baron and n["rank"] == "K", moon and n["rank"] == "Q")
+        black = board and (n["suit"] in ("S", "C") or n["enh"] == "WILD")
+        key = (rank, n["enh"] == "STEEL", n["seal"] == "RED", black, n["debuff"])
         classes.setdefault(key, []).append(c)
     reps = [v[0] for v in classes.values()]
     left = [len(v) for v in classes.values()]
