@@ -18,7 +18,7 @@ import random
 import re
 from collections import Counter, OrderedDict
 from collections.abc import Iterable
-from itertools import combinations, combinations_with_replacement
+from itertools import combinations, combinations_with_replacement, permutations
 from math import comb
 from pathlib import Path
 from typing import Any
@@ -909,6 +909,36 @@ def _discard_choice(
     return sorted(candidates[:limit])
 
 
+def _mark_draw_odds(G: dict[str, Any], hand: list[dict[str, Any]], deck: list[dict[str, Any]],
+                    draws: list[dict[str, Any]], need_flush: int) -> None:
+    """Under The Mark the analysis deck is the unseen pile (deck + face-down
+    cards). The face-down cards are in hand, so they cannot be drawn: each
+    draw's chance = the average over the possible face-down cards (sampled
+    from the unseen face cards) of the chance with those cards removed from
+    the deck. Never uses which face card is which (review round 2)."""
+    k = sum(1 for c in hand if c["face"])
+    pareidolia = "j_pareidolia" in set(_joker_keys(G))
+    faces = [i for i, c in enumerate(deck) if not c["stone"] and c["rank"] and (pareidolia or c["rank"] in FACE_RANKS)]
+    if not k or len(faces) < k:
+        return
+    ids = sorted(f"{c['rank']}{c['suit']}{c['enh']}{c['seal']}{c['ed']}" for c in deck)
+    rng = random.Random(int(hashlib.md5(json.dumps([ids, k, "draws"]).encode()).hexdigest()[:12], 16))
+    picks = [set(rng.sample(faces, k)) for _ in range(MARK_SAMPLES)]
+    for d in draws:
+        total = 0.0
+        for pick in picks:
+            rest = [c for i, c in enumerate(deck) if i not in pick]
+            if d["kind"] == "Flush":
+                outs = sum(1 for c in rest if c["suit"] == d["suit"])
+                need = d["need"]
+            else:
+                outs = sum(1 for c in rest if c["rank"] in d["missing_ranks"])
+                need = 1
+            total += _hypergeom_at_least(len(rest), outs, len(d["discard"]), need)
+        d["chance"] = total / len(picks)
+        d["text"] = d["text"].replace(" left in deck", " among the unseen cards")
+
+
 def _red(c: dict[str, Any]) -> bool:
     """A card that breaks Blackboard while held (not a Spade/Club, not Wild)."""
     return c["enh"] != "WILD" and (c["stone"] or c["suit"] not in ("S", "C"))
@@ -1027,6 +1057,7 @@ def analyze_hand(G: dict[str, Any], top: int = 6) -> dict[str, Any]:
                 {
                     "kind": "Flush",
                     "suit": suit,
+                    "need": need_flush - have_total,
                     "text": f"Flush draw in {SUIT_NAME[suit]}: {have_total}/{need_flush} in hand, "
                     f"{outs} {SUIT_NAME[suit]} left in deck",
                     "keep": keep,
@@ -1063,12 +1094,15 @@ def analyze_hand(G: dict[str, Any], top: int = 6) -> dict[str, Any]:
                 {
                     "kind": "Straight",
                     "missing": min(missing, key=lambda r: CHIP_VALUE[r]),
+                    "missing_ranks": sorted(missing),
                     "text": f"Straight draw: need a {need_txt} ({outs} left in deck)",
                     "keep": sorted(keep),
                     "discard": discard,
                     "chance": p,
                 }
             )
+    if G.get("mark_unseen") and draws:
+        _mark_draw_odds(G, hand, deck, draws, need_flush)
     for d in draws:
         d["if_complete"] = _projected_score(G, hand_raw, d)
     draws.sort(key=lambda d: -d["chance"])
@@ -1897,19 +1931,27 @@ MARK_FLOOR_MAX = 2000
 def _mark_floor(G: dict[str, Any], pool: list[dict[str, Any]], k: int, n: int,
                 visible: list[dict[str, Any]]) -> int | None:
     """The lowest FLOOR score the face-down play can make over every set of
-    ``k`` unseen face cards (``n`` of them played). None when there are more
-    than MARK_FLOOR_MAX cases: then no WINS claim is made."""
-    cases = comb(len(pool), k) * (comb(k, n) if k > n else 1)
-    if cases > MARK_FLOOR_MAX or k > len(pool):
+    ``k`` unseen face cards, every choice of the ``n`` played, and every
+    distinct order of them (order matters: Hanging Chad, Photograph, Glass).
+    None when there are more than MARK_FLOOR_MAX cases: then no WINS claim."""
+    if k > len(pool) or comb(len(pool), k) * (comb(k, n) if k > n else 1) > MARK_FLOOR_MAX:
         return None
-    low = None
+    cases: list[tuple[list[dict[str, Any]], list[dict[str, Any]]]] = []
+    seen: set[tuple[tuple[str, ...], tuple[str, ...]]] = set()
     for pick in combinations(range(len(pool)), k):
         cards = [pool[i] for i in pick]
         for played in (combinations(range(k), n) if k > n else [tuple(range(k))]):
             held = [c for j, c in enumerate(cards) if j not in played]
-            est = int(estimate_play(G, [cards[j] for j in played], visible + held)["score"])
-            low = est if low is None else min(low, est)
-    return low
+            held_key = tuple(sorted(_card_id(c) for c in held))
+            for order in permutations([cards[j] for j in played]):
+                key = (tuple(_card_id(c) for c in order), held_key)
+                if key in seen:
+                    continue
+                seen.add(key)
+                cases.append((list(order), held))
+                if len(cases) > MARK_FLOOR_MAX:
+                    return None
+    return min(int(estimate_play(G, order, visible + held)["score"]) for order, held in cases)
 
 
 def play_estimate(G: dict[str, Any], chosen: list[int]) -> int:
