@@ -984,7 +984,7 @@ def _projected_score(
     return int(est["score"]) if est["hand"] == draw["kind"] else 0
 
 
-def analyze_hand(G: dict[str, Any], top: int = 6) -> dict[str, Any]:
+def analyze_hand(G: dict[str, Any], top: int = 6, real: dict[str, Any] | None = None) -> dict[str, Any]:
     """Enumerate the best play per hand type and the best draws.
 
     Returns a dict with:
@@ -1003,6 +1003,11 @@ def analyze_hand(G: dict[str, Any], top: int = 6) -> dict[str, Any]:
     best_no_blue: dict[str, dict[str, Any]] = {}  # same, keeping Blue Seals held
     blue = {i for i, c in enumerate(hand) if c["seal"] == "BLUE"}
     visible = [i for i, c in enumerate(hand) if not c["hidden"]]
+    # The Mark with held-card scoring: each face-up play is judged by its exact
+    # floor over every filling of the face-down slots, BEFORE choosing the best
+    # play of its hand type (review round 4, codex R4-1)
+    fills = _mark_held_fills(real) if real is not None else None
+    cands: dict[str, list[dict[str, Any]]] = {}
     for k in range(1, min(limit, len(visible)) + 1):
         for idx in combinations(visible, k):
             played = [hand_raw[i] for i in idx]
@@ -1010,6 +1015,9 @@ def analyze_hand(G: dict[str, Any], top: int = 6) -> dict[str, Any]:
             est = estimate_play(G, played, held)
             if "j_splash" not in keyset and len(est["scoring"]) != k:
                 continue  # keep minimal plays: every selected card scores
+            if fills is not None:
+                cands.setdefault(est["hand"], []).append({"cards": list(idx), **est})
+                continue
             prev = best.get(est["hand"])
             if prev is None or est["score"] > prev["score"]:
                 best[est["hand"]] = {"cards": list(idx), **est}
@@ -1017,6 +1025,19 @@ def analyze_hand(G: dict[str, Any], top: int = 6) -> dict[str, Any]:
                 prev = best_no_blue.get(est["hand"])
                 if prev is None or est["score"] > prev["score"]:
                     best_no_blue[est["hand"]] = {"cards": list(idx), **est}
+    if fills is not None:
+        for htype, group in cands.items():
+            if fills == "unknown":
+                for p in group:
+                    p["floor_unknown"] = True
+                pick = max(group, key=lambda p: p["score"])
+                pick_nb = max((p for p in group if not blue & set(p["cards"])), key=lambda p: p["score"], default=None)
+            else:
+                pick = _best_by_floor(real, fills, group)
+                pick_nb = _best_by_floor(real, fills, [p for p in group if not blue & set(p["cards"])]) if blue else None
+            best[htype] = pick
+            if blue and pick_nb is not None:
+                best_no_blue[htype] = pick_nb
     for htype, play in best.items():
         alt = best_no_blue.get(htype)
         if alt is not None and blue & set(play["cards"]):
@@ -1995,28 +2016,61 @@ def play_estimate(G: dict[str, Any], chosen: list[int]) -> int:
     return int(sum(scores) / len(scores))
 
 
-def _mark_held_floors(G: dict[str, Any], plays: list[dict[str, Any]]) -> None:
+def _mark_held_fills(G: dict[str, Any]) -> list[list[dict[str, Any]]] | str | None:
     """Under The Mark, when cards held in hand can score (Baron, Shoot the
-    Moon, Mime, Blackboard, Raised Fist, or a Steel face card unseen), each
-    listed face-up play's score = its exact floor over every way the unseen
-    face cards fill the face-down slots; ``exact`` False when too many ways
-    (then the play is never marked WINS). Review round 3 (opus R1)."""
+    Moon, Mime, Blackboard, Raised Fist, or a Steel face card unseen): every
+    distinct way the unseen face cards fill the face-down slots, as full hands.
+    "unknown" when there are more than MARK_HELD_FLOOR_MAX (then no face-up
+    play is marked WINS); None when held face-down cards cannot change a
+    face-up play's score. Review rounds 3 (opus R1) and 4 (codex R4-1)."""
     hand = _area_cards(G, "hand")
     hidden = [i for i, c in enumerate(hand) if (c.get("state") or {}).get("hidden")]
-    if not hidden:
-        return
+    if not hidden or not mark_active(G):
+        return None
     pool = _mark_pool(G)
     keys = set(_joker_keys(G)) | set(copied_keys(G))
     if not (keys & HELD_KEYS or any(_norm(c)["enh"] == "STEEL" for c in pool)):
-        return
-    for p in plays:
-        if set(p["cards"]) & set(hidden):
+        return None
+    k = len(hidden)
+    if k > len(pool) or perm(len(pool), k) > MARK_FLOOR_RAW_MAX:
+        return "unknown"
+    ids = [_card_id(c) for c in pool]
+    seen: set[tuple[str, ...]] = set()
+    fills: list[list[dict[str, Any]]] = []
+    for pick in permutations(range(len(pool)), k):
+        key = tuple(ids[i] for i in pick)
+        if key in seen:
             continue
-        f = _mark_floor(G, pool, hand, hidden, list(p["cards"]), cap=MARK_HELD_FLOOR_MAX)
-        if f is None:
-            p["floor_unknown"] = True
-        else:
-            p["score"] = f
+        seen.add(key)
+        if len(seen) > MARK_HELD_FLOOR_MAX:
+            return "unknown"
+        fills.append(_mark_fill(hand, hidden, [pool[i] for i in pick]))
+    return fills
+
+
+def _fill_score(G: dict[str, Any], cards: list[dict[str, Any]], played: list[int]) -> int:
+    return int(estimate_play(G, [cards[i] for i in played], [c for i, c in enumerate(cards) if i not in played])["score"])
+
+
+def _best_by_floor(G: dict[str, Any], fills: list[list[dict[str, Any]]],
+                   group: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The play in ``group`` (one hand type, face-up cards only) with the
+    highest exact floor over ``fills``; its ``score`` becomes that floor.
+    Exact: a play's score under the first filling bounds its floor from
+    above, so plays are floored in that order until no bound can beat the best."""
+    if not group:
+        return None
+    bounds = sorted(((_fill_score(G, fills[0], p["cards"]), n) for n, p in enumerate(group)), reverse=True)
+    best_p, best_f = None, None
+    for bound, n in bounds:
+        if best_f is not None and bound <= best_f:
+            break
+        p = group[n]
+        f = min(bound, min((_fill_score(G, cards, p["cards"]) for cards in fills[1:]), default=bound))
+        if best_f is None or f > best_f:
+            best_p, best_f = p, f
+    assert best_p is not None and best_f is not None
+    return {**best_p, "score": best_f}
 
 
 def mark_play(G: dict[str, Any]) -> dict[str, Any] | None:
@@ -2067,7 +2121,7 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
     G_real = G
     G = mark_view(G)
     plan = main_hand_plan(G)
-    analysis_ = analyze_hand(G, top=top)
+    analysis_ = analyze_hand(G, top=top, real=G_real if mark else None)
     progress = blind_progress(G) or {"remaining": 0, "per_hand": 0, "hands_left": 0}
     remaining = progress["remaining"]
     per_hand = progress["per_hand"]
@@ -2080,11 +2134,6 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
     # once jokers (or effects the estimator skips) are involved.
     exact = not _joker_keys(G)
     plays = []
-    if mark:
-        _mark_held_floors(G_real, analysis_["plays"])
-        for p in analysis_["plays"]:
-            if p.get("no_blue"):
-                _mark_held_floors(G_real, [p["no_blue"]])
     for p in analysis_["plays"]:
         alt = p.pop("no_blue", None)
         margin = 1.0 if exact and not p["unknown"] else WIN_MARGIN
