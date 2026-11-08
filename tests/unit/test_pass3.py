@@ -696,7 +696,8 @@ class TestReviewRound3Opus:
         G["round"]["hands_left"] = 1
         G["round"]["discards_left"] = 0
         pair = next(p for p in analysis.play_advice(G)["plays"] if p["hand"] == "Pair")
-        assert pair["score"] == 40 and not pair["wins"]  # two Jacks face down: 40 < 56
+        assert pair["floor"] == 40 and not pair["wins"]  # two Jacks face down: 40 < 56
+        assert pair["score"] > 40  # the mean (review r4 opus F1)
 
     def test_steel_kings_held_face_down_count(self) -> None:
         G = mark_hand("S_K H_K D_K", "H_5 D_5 C_2 H_3 S_7", jokers=[joker("j_baron", "Baron")])
@@ -750,7 +751,7 @@ class TestReviewRound4Codex:
             hand = G["hand"]["cards"]
             hidden = [i for i, c in enumerate(hand) if (c.get("state") or {}).get("hidden")]
             pool = analysis._mark_pool(G)
-            got = {p["hand"]: p["score"] for p in analysis.play_advice(G)["plays"]}
+            got = {p["hand"]: p["floor"] for p in analysis.play_advice(G)["plays"]}
             V = analysis.mark_view(G)
             vh = V["hand"]["cards"]
             want: dict[str, int] = {}
@@ -766,3 +767,53 @@ class TestReviewRound4Codex:
                     want[est["hand"]] = max(want.get(est["hand"], 0), f)
             for htype, score in got.items():
                 assert score == want[htype], (htype, score, want[htype])
+
+
+class TestReviewRound4Opus:
+    """opus F1/F2: face-up plays under The Mark carry a mean (score: sorting,
+    pace, the face-down comparison, MEMORY) and a proven floor (WINS); over the
+    case cap the masked score is that floor (Blackboard / Raised Fist count a
+    held face-down card at its worst)."""
+
+    @staticmethod
+    def _last_hand(G: dict[str, Any], need: int, keep: set[str]) -> dict[str, Any]:
+        G["cards"]["cards"] = [c for c in G["cards"]["cards"] if c["value"]["rank"] not in ("J", "Q", "K") or c["key"] in keep]
+        G["cards"]["count"] = len(G["cards"]["cards"])
+        G["blinds"]["boss"]["score"] = need
+        G["round"].update(hands_left=1, discards_left=0)
+        return G
+
+    def test_mean_not_minimum_against_the_face_down_play(self) -> None:
+        G = mark_hand("C_J S_K", "H_5 D_5 C_2 H_3 S_7 D_8", jokers=[joker("j_baron", "Baron")])
+        for c in G["cards"]["cards"]:
+            if c["key"] == "H_K":
+                c["modifier"] = {"enhancement": "GLASS"}
+        A = analysis.play_advice(self._last_hand(G, 56, {"D_J", "H_K"}))
+        pair = next(p for p in A["plays"] if p["hand"] == "Pair")
+        assert pair["floor"] == 40 and pair["score"] == 61 and not pair["wins"] and pair["reaches_pace"]
+        assert A["action"]["tool"] == "play" and set(pair["cards"]) <= set(A["action"]["cards"])
+        assert analysis.play_estimate(G, pair["cards"]) == pair["score"]
+        assert "-> about 61, at worst 40 (reaches PER_HAND)" in render(G)
+
+    def test_sure_win_over_the_cap_keeps_wins(self) -> None:
+        G = mark_hand("S_J H_J S_Q", "H_2 H_4 H_6 H_8 H_T", jokers=[joker("j_baron", "Baron")])
+        for c in G["cards"]["cards"]:
+            if c["value"]["rank"] == "K":
+                c["modifier"] = {"enhancement": "GLASS", "edition": "POLYCHROME"}
+        G = self._last_hand(G, 236, {"S_K", "H_K", "D_K", "C_K", "D_Q"})
+        assert analysis._mark_held_fills(G) == "unknown"
+        A = analysis.play_advice(G)
+        fl = next(p for p in A["plays"] if p["hand"] == "Flush")
+        assert fl["floor"] == 260 and fl["wins"]
+        assert A["action"] == {"tool": "play", "cards": fl["cards"], "why": "Flush WINS"}
+
+    @pytest.mark.parametrize(("key", "name", "visible", "want"), [
+        ("j_blackboard", "Blackboard", "H_9 D_9 S_2 C_3", 56),
+        ("j_raised_fist", "Raised Fist", "H_9 D_9 S_A", 616),
+    ])
+    def test_masked_floor_never_above_the_real_score(self, key: str, name: str, visible: str, want: int) -> None:
+        G = mark_hand("H_J D_Q H_K", visible, jokers=[joker(key, name)])
+        G = self._last_hand(G, 120, {"H_J", "D_J", "H_Q", "D_Q", "H_K", "D_K", "S_K", "C_K"})
+        assert analysis._mark_held_fills(G) == "unknown"
+        pair = next(p for p in analysis.play_advice(G)["plays"] if p["hand"] == "Pair")
+        assert pair["floor"] == want and pair["score"] == want
