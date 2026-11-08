@@ -175,16 +175,6 @@ class TestMark:
         photo = analysis.mark_play(mark_hand(jokers=[joker("j_photograph", "Photograph", "X2 first face card")]))
         assert smiley["expected"] > plain["expected"] and photo["expected"] > plain["expected"]
 
-    def test_held_face_down_kings_count_for_baron_by_the_mix(self) -> None:
-        baron = [joker("j_baron", "Baron", "Each King held in hand gives X1.5 Mult")]
-        G = mark_hand("S_K H_K D_K", "H_2 H_3 S_3 D_7 C_8", jokers=baron)
-        V = analysis.mark_view(G)
-        hand = V["hand"]["cards"]
-        with_held = analysis.estimate_play(V, [hand[4], hand[5]], [c for i, c in enumerate(hand) if i not in (4, 5)])
-        no_baron = analysis.estimate_play(analysis.mark_view(mark_hand("S_K H_K D_K", "H_2 H_3 S_3 D_7 C_8")),
-                                          [hand[4], hand[5]], [c for i, c in enumerate(hand) if i not in (4, 5)])
-        assert with_held["score"] > no_baron["score"]
-
     def test_permuting_the_real_face_down_cards_changes_nothing(self) -> None:
         """Leak test: the advice and the prompt never depend on which face card is which."""
         a = mark_hand("S_K H_Q D_J C_K H_K", "H_2 S_3 D_7")
@@ -693,3 +683,40 @@ class TestReviewRound3Codex:
         mp = A["mark_play"]
         assert (mp["floor"] is None or mp["floor"] <= actual) and actual < 13050
         assert not mp["wins"] and "WIN" not in A["action"]["why"]
+
+
+class TestReviewRound3Opus:
+    """Opus R1: face-up plays under The Mark with cards held face down that can score."""
+
+    def test_no_false_wins_from_an_averaged_baron_bonus(self) -> None:
+        G = mark_hand("D_J C_J", "H_5 D_5 C_2 H_3 S_7 D_8", jokers=[joker("j_baron", "Baron")])
+        G["cards"]["cards"] = [c for c in G["cards"]["cards"] if c["value"]["rank"] not in ("J", "Q", "K") or c["key"] in ("S_K", "H_K")]
+        G["cards"]["count"] = len(G["cards"]["cards"])
+        G["blinds"]["boss"]["score"] = 56
+        G["round"]["hands_left"] = 1
+        G["round"]["discards_left"] = 0
+        pair = next(p for p in analysis.play_advice(G)["plays"] if p["hand"] == "Pair")
+        assert pair["score"] == 40 and not pair["wins"]  # two Jacks face down: 40 < 56
+
+    def test_steel_kings_held_face_down_count(self) -> None:
+        G = mark_hand("S_K H_K D_K", "H_5 D_5 C_2 H_3 S_7", jokers=[joker("j_baron", "Baron")])
+        for c in G["hand"]["cards"][:3]:
+            c["modifier"] = {"enhancement": "STEEL"}
+        G["cards"]["cards"] = [c for c in G["cards"]["cards"] if c["value"]["rank"] not in ("J", "Q", "K")]
+        G["cards"]["count"] = len(G["cards"]["cards"])
+        G["blinds"]["boss"]["score"] = 200
+        G["round"]["hands_left"] = 1
+        G["round"]["discards_left"] = 0
+        A = analysis.play_advice(G)
+        pair = next(p for p in A["plays"] if p["hand"] == "Pair")
+        assert pair["score"] == 455 and pair["wins"]
+        assert A["action"]["tool"] == "play" and A["action"]["cards"] == pair["cards"]
+
+    def test_permuting_still_changes_nothing_with_held_jokers(self) -> None:
+        jk = [joker("j_baron", "Baron"), joker("j_shoot_the_moon", "Shoot the Moon")]
+        a = mark_hand("S_K H_Q D_J", "H_5 D_5 C_2 H_3 S_7", jokers=jk)
+        b = mark_hand("D_J S_K H_Q", "H_5 D_5 C_2 H_3 S_7", jokers=jk)
+        A1, A2 = analysis.play_advice(a), analysis.play_advice(b)
+        for k in ("plays", "discard", "action", "mark_play"):
+            assert A1[k] == A2[k], k
+        assert render(a) == render(b)
