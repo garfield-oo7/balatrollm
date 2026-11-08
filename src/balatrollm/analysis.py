@@ -920,7 +920,7 @@ def _mark_draw_odds(G: dict[str, Any], hand: list[dict[str, Any]], deck: list[di
     the deck. Never uses which face card is which (review round 2)."""
     k = sum(1 for c in hand if c["face"])
     pareidolia = "j_pareidolia" in set(_joker_keys(G))
-    faces = [i for i, c in enumerate(deck) if not c["stone"] and c["rank"] and (pareidolia or c["rank"] in FACE_RANKS)]
+    faces = [i for i, c in enumerate(deck) if pareidolia or (not c["stone"] and c["rank"] in FACE_RANKS)]
     if not k or len(faces) < k:
         return
     ids = sorted(f"{c['rank']}{c['suit']}{c['enh']}{c['seal']}{c['ed']}" for c in deck)
@@ -1887,7 +1887,9 @@ def _mark_pool(G: dict[str, Any]) -> list[dict[str, Any]]:
     hand = [c for c in _area_cards(G, "hand") if (c.get("state") or {}).get("hidden")]
     for c in _area_cards(G, "cards") + hand:
         n = _norm(c)
-        if n["stone"] or not n["rank"]:
+        # with Pareidolia every card is a face card, Stone cards too (the game's
+        # is_face; review r7 opus R7-1); without it a Stone card is never face down
+        if not pareidolia and (n["stone"] or not n["rank"]):
             continue
         if pareidolia or n["rank"] in FACE_RANKS:
             up = _face_up(c)
@@ -1936,15 +1938,19 @@ def _mark_minimum(pool: list[dict[str, Any]], n: int) -> str | None:
     """The hand type ``n`` face-down cards make at the least, whatever their
     ranks (the pool's rank counts; suits ignored: a Flush only adds). None
     when no hand beyond High Card is sure."""
-    counts = Counter(_norm(c)["rank"] for c in pool)
-    ranks = sorted(counts)
+    counts = Counter(_norm(c)["rank"] for c in pool)  # rank None = a Stone card (Pareidolia)
+    ranks = sorted(counts, key=lambda r: (r is None, r or ""))
     if n <= 0 or sum(counts.values()) < n:
         return None
     worst = None
     for combo in combinations_with_replacement(ranks, n):
         if any(combo.count(r) > counts[r] for r in set(combo)):
             continue
-        cards = [_norm(_synthetic_card("HDCS"[k % 4], r)) for k, r in enumerate(combo)]
+        # a Stone card adds no rank, so it only weakens the hand
+        cards = [_norm(_synthetic_card("HDCS"[k % 4], r)) for k, r in enumerate(combo) if r is not None]
+        if not cards:
+            worst = "High Card"
+            break
         htype = classify(cards)[0]
         if worst is None or HAND_ORDER.index(htype) > HAND_ORDER.index(worst):
             worst = htype
