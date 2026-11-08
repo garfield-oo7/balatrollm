@@ -948,3 +948,22 @@ class TestReviewRound7Opus:
         stone["modifier"] = {"enhancement": "STONE"}
         pool = [card("S_Q"), card("H_Q"), card("D_Q"), stone]
         assert analysis._mark_minimum(pool, 3) == "Pair"  # Q Q + Stone at the least
+
+
+class TestReviewRound8Codex:
+    """codex R8-1: with Pareidolia every held face-down card may be a Stone
+    card, so the masked Raised Fist bound adds nothing unless a visible ranked
+    card is held."""
+
+    def test_all_held_stone_no_false_win(self) -> None:
+        G = mark_hand("S_9 H_T C_J D_Q", "S_2 H_2 C_2 D_2",
+                      jokers=[joker("j_pareidolia", "Pareidolia"), joker("j_raised_fist", "Raised Fist")])
+        for c in G["hand"]["cards"][:4]:
+            c["modifier"] = {"enhancement": "STONE"}
+        deck = [card(f"S_{r}") for r in "345678"]
+        G["cards"].update(cards=deck, count=len(deck))
+        G["blinds"]["boss"]["score"] = 600
+        G["round"].update(hands_left=1, discards_left=0)
+        assert analysis._mark_held_fills(G) == "unknown"
+        four = next(p for p in analysis.play_advice(G)["plays"] if p["cards"] == [4, 5, 6, 7])
+        assert four["floor"] == 476 and not four["wins"]
