@@ -308,7 +308,7 @@ class TestLookAheadAndRefusals:
 
     def test_first_shop_prefers_buffoon_over_a_zero_joker(self) -> None:
         G = make_state("H_2", state="SHOP")
-        G["money"] = 9
+        G["money"] = 10  # covers pack + joker (pass 3 C7: a tight case is Luna's call)
         G["shop"] = {"cards": [{**joker("j_ride_the_bus", "Ride the Bus", "(Currently +0 Mult)"), "cost": {"buy": 6}}]}
         G["packs"] = {"cards": [{"key": "p_buffoon_normal_1", "label": "Buffoon Pack", "set": "BOOSTER", "cost": {"buy": 4}}]}
         assert "Buffoon" in analysis.validate_action(G, "buy", {"card": 0})

@@ -3909,10 +3909,43 @@ def _sell_veto(G: dict[str, Any], joker: dict[str, Any], full: bool) -> str | No
     return None
 
 
+def _cheapest_buffoon(G: dict[str, Any]) -> dict[str, Any] | None:
+    money = int(G.get("money") or 0)
+    packs = [
+        p
+        for p in _area_cards(G, "packs")
+        if "buffoon" in str(p.get("label", "")).lower() and int((p.get("cost") or {}).get("buy") or 0) <= money
+    ]
+    return min(packs, key=lambda p: int((p.get("cost") or {}).get("buy") or 0)) if packs else None
+
+
+def first_shop_tight(G: dict[str, Any]) -> dict[str, Any] | None:
+    """C7: first shop visit, money cannot cover the cheapest affordable Buffoon
+    pack AND a shop joker: Luna's call (no refusal). None otherwise."""
+    luna = G.get("luna") or {}
+    if G.get("state") != "SHOP" or not luna.get("first_shop"):
+        return None
+    pack = _cheapest_buffoon(G)
+    if pack is None:
+        return None
+    money = int(G.get("money") or 0)
+    cost = int((pack.get("cost") or {}).get("buy") or 0)
+    jokers = [
+        str(c.get("label"))
+        for c in _area_cards(G, "shop")
+        if c.get("set") == "JOKER" and int((c.get("cost") or {}).get("buy") or 0) <= money
+        and money < int((c.get("cost") or {}).get("buy") or 0) + cost
+    ]
+    if not jokers:
+        return None
+    return {"pack": str(pack.get("label")), "pack_cost": cost, "jokers": jokers, "money": money}
+
+
 def _first_shop_veto(G: dict[str, Any], index: Any) -> str | None:
     """First shop VISIT of the run (owner C1, P2-6): open an affordable Buffoon
-    pack before buying any shop joker. Exception (owner Q2 (c)): Supernova may
-    come first when money cannot cover both."""
+    pack before buying any shop joker. Pass 3 C7 (owner, after pass 2 Q4,
+    before pass 3 Q5a): when money cannot cover both, any shop joker may come
+    first (Luna's call; the prompt shows the trade-off)."""
     try:
         card = _area_cards(G, "shop")[int(index)]
     except (IndexError, TypeError, ValueError):
@@ -3930,7 +3963,7 @@ def _first_shop_veto(G: dict[str, Any], index: Any) -> str | None:
         return None
     price = int((card.get("cost") or {}).get("buy") or 0)
     pack = min(int((p.get("cost") or {}).get("buy") or 0) for p in buffoon)
-    if card.get("key") == "j_supernova" and money < price + pack:
+    if money < price + pack:  # C7: tight money: Luna's call
         return None
     return (
         f"First shop: open the Buffoon pack before buying {card.get('label')} "
@@ -4260,6 +4293,7 @@ TEMPLATE_GLOBALS = {
     "joker_order": joker_order,
     "grows_xmult": grows_xmult,
     "past_lessons": past_lessons,
+    "first_shop_tight": first_shop_tight,
     "clash_note": clash_note,
     "joker_tag": knowledge.joker_tag,
     "consumable_tag": knowledge.consumable_tag,
