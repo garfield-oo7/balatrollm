@@ -674,3 +674,22 @@ class TestReviewRound2Opus:
         G = mark_hand(jokers=[joker("j_smiley", "Smiley Face", "+5 Mult for face cards")])
         mp = analysis.mark_play(G)
         assert analysis.play_estimate(G, mp["cards"]) == mp["expected"]
+
+
+class TestReviewRound3Codex:
+    def test_floor_covers_the_order_of_held_face_down_cards(self) -> None:
+        G = mark_hand("S_Q S_Q S_Q S_Q S_Q S_Q S_Q", "D_2", jokers=[joker("j_shoot_the_moon", "Shoot the Moon")])
+        for i, c in enumerate(G["hand"]["cards"][:7]):
+            c["modifier"] = {"enhancement": "STEEL" if i < 6 else "GLASS"}
+            if i in (4, 5):
+                c["modifier"]["edition"] = "POLYCHROME"
+        G["cards"]["cards"] = [card("S_2")]
+        G["cards"]["count"] = 1
+        G["blinds"]["boss"]["score"] = 13050
+        G["round"]["hands_left"] = 1
+        A = analysis.play_advice(G)
+        hand = [analysis._face_up(c) for c in G["hand"]["cards"]]
+        actual = int(analysis.estimate_play(G, hand[:5], hand[5:])["score"])
+        mp = A["mark_play"]
+        assert (mp["floor"] is None or mp["floor"] <= actual) and actual < 13050
+        assert not mp["wins"] and "WIN" not in A["action"]["why"]
