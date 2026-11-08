@@ -1491,6 +1491,63 @@ def main_commit(G: dict[str, Any], previous: dict[str, Any] | None) -> dict[str,
     return previous
 
 
+DEADLINE_ANTE = 3  # C6: the first shop after the Ante 2 boss (the game shows Ante 3)
+DEADLINE_TOP = 3
+DEADLINE_NEAR = 0.10  # plays break a near-tie (within 10% of the best score)
+DEADLINE_ORDER = ["Pair", "Two Pair", "Three of a Kind", "Straight", "Flush", "Full House", "Four of a Kind"]
+
+
+def deadline_commit(G: dict[str, Any], history: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """C6 (owner, after pass 2 Q2 / before pass 3 Q4a): MAIN_HAND still OPEN at
+    the end of Ante 2 -> commit to one of the 3 hands played most in Antes 1-2
+    (not High Card; the game's own counts): the one scoring most per hand with
+    the jokers Luna owns and her levels (mean over the sampled draws, one
+    discard; 0 where the type is not made). Within 10%: played more, then
+    levelled more, then Pair first. No plays: the leaning hand. Flush: MAIN_SUIT
+    = the suit of most Flush plays (history ``flush_suit``), else main_suit."""
+    hands = G.get("hands") or {}
+
+    def played(t: str) -> int:
+        return int((hands.get(t) or {}).get("played", 0))
+
+    def level(t: str) -> int:
+        return int((hands.get(t) or {}).get("level", 1))
+
+    ante, rnd = int(G.get("ante_num") or 1), int(G.get("round_num") or 0)
+    top = sorted((t for t in hands if t != "High Card" and played(t) > 0), key=lambda t: (-played(t), DEADLINE_ORDER.index(t) if t in DEADLINE_ORDER else 99))[:DEADLINE_TOP]
+    if not top:
+        # the hand levelled most (never High Card), else Pair
+        hand = max(DEADLINE_ORDER, key=lambda t: (level(t), -DEADLINE_ORDER.index(t)))
+        hand = hand if level(hand) > 1 else "Pair"
+        return {"hand": hand, "trigger": f"end of Ante 2: no hand beyond High Card played; leaning {hand}",
+                "ante": ante, "round": rnd, "deadline": True}
+    G_owned = _with_jokers(G, _area_cards(G, "jokers"))
+    G_owned["blinds"] = {
+        k: {**v, "status": "UPCOMING"} if v.get("status") == "CURRENT" else v
+        for k, v in (G.get("blinds") or {}).items()
+    }
+    dealt = _dealt_hands(G_owned, sample_draws(G))
+    scores = {}
+    for t in top:
+        vals = [_best_play(G_owned, hand, 0, only=t, memo=dealt.memo[n])[0] for n, hand in enumerate(dealt)]
+        scores[t] = int(sum(vals) / max(len(vals), 1))
+    best = max(scores.values())
+    near = [t for t in top if scores[t] >= (1 - DEADLINE_NEAR) * best]
+    hand = max(near, key=lambda t: (played(t), level(t), t == "Pair"))
+    out = {
+        "hand": hand,
+        "trigger": f"end of Ante 2: played {played(hand)} times, {fmt_num(scores[hand])} per hand with your jokers",
+        "ante": ante,
+        "round": rnd,
+        "deadline": True,
+        "scores": scores,
+    }
+    if hand == "Flush":
+        suits = Counter(str(h.get("flush_suit")) for h in history or [] if h.get("flush_suit"))
+        out["suit"] = suits.most_common(1)[0][0] if suits else main_suit(G)
+    return out
+
+
 def main_hand_plan(G: dict[str, Any]) -> dict[str, Any]:
     """MAIN_HAND: OPEN until jokers call for a hand, then committed (P2-4).
 
@@ -1512,6 +1569,8 @@ def main_hand_plan(G: dict[str, Any]) -> dict[str, Any]:
         hand = leaning_hand(G)
         reason = "OPEN: no joker calls for a hand yet; play the best hand dealt"
         is_open = True
+    if commit and commit.get("suit") and hand == "Flush":
+        suit = commit["suit"]  # C6: the suit of most Flush plays
     return {
         "hand": hand,
         "family": knowledge.HAND_FAMILY.get(hand, "pair"),

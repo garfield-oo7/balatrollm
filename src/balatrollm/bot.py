@@ -14,6 +14,8 @@ from openai.types.chat import ChatCompletion
 from . import seeds
 from .analysis import (
     BOSS_REROLL_MAX_PER_ANTE,
+    DEADLINE_ANTE,
+    deadline_commit,
     luna_reroll_refusal,
     main_commit,
     run_status,
@@ -656,6 +658,7 @@ class Bot:
                     logger.warning(f"Auto joker reorder failed: {e}")
 
         estimate: int | None = None
+        flush_suit: str | None = None
         if fn_name == "play" and before.get("state") == "SELECTING_HAND":
             try:
                 # C3: under The Mark face-down cards are masked (the estimate
@@ -665,7 +668,11 @@ class Bot:
                 chosen = [int(i) for i in params.get("cards", [])]
                 played = [hand[i] for i in sorted(chosen)]
                 held = [c for i, c in enumerate(hand) if i not in chosen]
-                estimate = int(estimate_play(seen, played, held)["score"])
+                est = estimate_play(seen, played, held)
+                estimate = int(est["score"])
+                if "Flush" in est["hand"]:  # C6: the suit of Flush plays (MAIN_SUIT at the deadline)
+                    suits = [str((c.get("value") or {}).get("suit") or "") for c in played]
+                    flush_suit = max(set(suits) - {""}, key=suits.count, default=None)
             except (IndexError, TypeError, ValueError):
                 estimate = None
 
@@ -710,6 +717,7 @@ class Bot:
                     "result": result,
                     "score": score,
                     "estimate": estimate,
+                    **({"flush_suit": flush_suit} if flush_suit else {}),
                 }
             )
 
@@ -784,6 +792,10 @@ class Bot:
         """Harness facts the templates and validate_action read from ``G["luna"]``."""
         self._main_commit = main_commit(gamestate, self._main_commit)
         ante = int(gamestate.get("ante_num") or 1)
+        if self._main_commit is None and gamestate.get("state") == "SHOP" and ante >= DEADLINE_ANTE:
+            # C6: still OPEN at the end of Ante 2 -> commit (sticky like a joker commit)
+            self._main_commit = deadline_commit(gamestate, self._history)
+            logger.info(f"Harness MAIN_HAND deadline commit: {self._main_commit['hand']} ({self._main_commit['trigger']})")
         self._clear_stale_request(gamestate)
         # Investment Tag pays at this ante's boss cash-out: gone once the ante moves on
         self._pending_tags = [t for t in getattr(self, "_pending_tags", []) if t["ante"] >= ante]

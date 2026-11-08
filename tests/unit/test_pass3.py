@@ -365,3 +365,90 @@ class TestWall:
         broke = self.wall(4, 19)  # $10 must stay
         broke["blinds"]["boss"]["score"] = 10_000_000
         assert analysis.boss_reroll_reason(broke) is None
+
+
+# ---------------------------------------------------------------------------
+# C6: MAIN_HAND commit at the end of Ante 2
+# ---------------------------------------------------------------------------
+def ante3_shop(played: dict[str, int], jokers: Any = None, levels: dict[str, int] | None = None) -> dict[str, Any]:
+    G = shop()
+    G["ante_num"] = 3
+    G["round_num"] = 7
+    if jokers:
+        G["jokers"]["cards"] = jokers
+        G["jokers"]["count"] = len(jokers)
+    for t, n in played.items():
+        G["hands"][t]["played"] = n
+    for t, lv in (levels or {}).items():
+        G["hands"][t]["level"] = lv
+    return G
+
+
+class TestDeadlineCommit:
+    def test_commits_to_the_best_scoring_of_the_top_3(self) -> None:
+        # Two Pair played less, but Mad Joker (+10 Mult on Two Pair) makes it score most
+        G = ante3_shop({"Pair": 9, "Two Pair": 4, "Three of a Kind": 2, "Flush": 1, "High Card": 20},
+                       jokers=[joker("j_mad", "Mad Joker", "+10 Mult if played hand contains a Two Pair")])
+        c = analysis.deadline_commit(G)
+        assert set(c["scores"]) == {"Pair", "Two Pair", "Three of a Kind"}  # top 3, no High Card, no Flush
+        assert c["hand"] == max(c["scores"], key=lambda t: c["scores"][t]) or c["scores"][c["hand"]] >= 0.9 * max(c["scores"].values())
+        assert c["trigger"].startswith("end of Ante 2: played ") and "per hand with your jokers" in c["trigger"]
+
+    def test_near_tie_goes_to_the_hand_played_more(self) -> None:
+        G = ante3_shop({"Pair": 9, "Two Pair": 8})
+        c = analysis.deadline_commit(G)
+        s = c["scores"]
+        if min(s.values()) >= 0.9 * max(s.values()):
+            assert c["hand"] == "Pair"
+        else:
+            assert c["hand"] == max(s, key=lambda t: s[t])
+
+    def test_a_rare_type_scores_low(self) -> None:
+        # Four of a Kind is made on few draws: its mean counts 0 elsewhere
+        c = analysis.deadline_commit(ante3_shop({"Pair": 5, "Four of a Kind": 6}))
+        assert c["scores"]["Four of a Kind"] < c["scores"]["Pair"] and c["hand"] == "Pair"
+
+    def test_no_plays_takes_the_leaning_hand(self) -> None:
+        c = analysis.deadline_commit(ante3_shop({"High Card": 12}))
+        assert c["hand"] == "Pair" and "leaning" in c["trigger"]
+
+    def test_flush_suit_from_flush_plays(self) -> None:
+        G = ante3_shop({"Flush": 9})
+        c = analysis.deadline_commit(G, [{"method": "play", "flush_suit": "S"}, {"method": "play", "flush_suit": "S"},
+                                         {"method": "play", "flush_suit": "H"}])
+        assert c["hand"] == "Flush" and c["suit"] == "S"
+        G["luna"] = {"main_commit": c}
+        plan = analysis.main_hand_plan(G)
+        assert plan["hand"] == "Flush" and plan["suit"] == "S" and not plan["open"]
+
+    def test_bot_commits_at_the_first_ante_3_shop_and_keeps_it(self) -> None:
+        from unittest.mock import AsyncMock
+
+        from .test_bot_swap import _bot as make
+
+        bot = make(AsyncMock())
+        early = ante3_shop({"Two Pair": 5})
+        early["ante_num"] = 2
+        bot._annotate(early)
+        assert bot._main_commit is None  # Ante 2: still OPEN
+        G = ante3_shop({"Two Pair": 5})
+        bot._annotate(G)
+        assert bot._main_commit["hand"] == "Two Pair" and bot._main_commit["deadline"]
+        assert "end of Ante 2" in analysis.main_hand_plan(G)["reason"]
+        bot._annotate(ante3_shop({"Two Pair": 5, "Pair": 30}))
+        assert bot._main_commit["hand"] == "Two Pair"  # sticky
+
+    def test_joker_commit_before_the_deadline_wins_and_a_later_joker_recommits(self) -> None:
+        from unittest.mock import AsyncMock
+
+        from .test_bot_swap import _bot as make
+
+        bot = make(AsyncMock())
+        G = ante3_shop({"Two Pair": 5}, jokers=[joker("j_baron", "Baron", "Each King held in hand gives X1.5 Mult")])
+        bot._annotate(G)
+        assert bot._main_commit["hand"] == "Pair" and not bot._main_commit.get("deadline")
+        bot2 = make(AsyncMock())
+        bot2._annotate(ante3_shop({"Two Pair": 5}))
+        assert bot2._main_commit["hand"] == "Two Pair"
+        bot2._annotate(ante3_shop({"Two Pair": 5}, jokers=[joker("j_tribe", "The Tribe")]))
+        assert bot2._main_commit["hand"] == "Flush"
