@@ -2903,7 +2903,7 @@ SAMPLES = 150  # K1
 # K5 (pass 3, owner Q1): STATUS, the boss check / boss line and the boss-reroll
 # strength trigger read this percentile of the sampled per-round scores (nearest
 # rank); shop SCORE (shop_impact, swap_plan) stays on the mean.
-K5_PERCENTILE = 25
+K5_PERCENTILE = 40  # owner 2026-11-08: "Run the 40th percentile for now" (band 20-40 failed its targets)
 SHOP_SAMPLES = 60  # shop variants reuse the first draws (common random numbers)
 REFILL = 5
 DISCARD_FROM = {"High Card", "Pair"}  # K2: one discard per hand from these
