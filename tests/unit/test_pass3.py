@@ -869,3 +869,46 @@ class TestReviewRound5Opus:
             want = analysis._mark_floor(G, pool, hand, hidden, idx)
             got = min(analysis._fill_score(G, f, idx) for f in fills)
             assert got == want, (idx, got, want)
+
+
+class TestReviewRound6Opus:
+    """opus R6-1: the held-card class key splits only on what the owned
+    jokers read, so decks built toward one joker stay under the cap."""
+
+    def test_five_face_down_with_shoot_the_moon(self) -> None:
+        G = mark_hand("S_Q H_Q D_Q C_Q S_J", "H_T D_A C_2", jokers=[joker("j_shoot_the_moon", "Shoot the Moon")])
+        G["hand"]["cards"][5]["modifier"] = {"enhancement": "BONUS"}
+        G["hand"]["cards"][6]["modifier"] = {"enhancement": "MULT"}
+        deck = [card(k) for k in ("S_Q", "C_Q", "H_Q", "D_Q", "H_J", "S_K", "H_K", "S_9", "H_7", "D_3")]
+        G["cards"]["cards"] = deck
+        G["cards"]["count"] = len(deck)
+        G["blinds"]["boss"]["score"] = 500
+        G["round"].update(hands_left=1, discards_left=0)
+        fills = analysis._mark_held_fills(G)
+        assert isinstance(fills, list) and len(fills) == 31  # Queen or not, 5 slots, at most 4 non-Queens
+        A = analysis.play_advice(G)
+        hc = next(p for p in A["plays"] if p["hand"] == "High Card")
+        assert hc["cards"] == [5] and hc["floor"] == 630 and hc["wins"]
+        assert A["action"] == {"tool": "play", "cards": [5], "why": "High Card WINS"}
+
+    @pytest.mark.parametrize("jk", [
+        [("j_baron", "Baron")], [("j_shoot_the_moon", "Shoot the Moon")], [("j_blackboard", "Blackboard")],
+        [("j_raised_fist", "Raised Fist")], [("j_mime", "Mime")], [("j_blueprint", "Blueprint"), ("j_baron", "Baron")],
+    ])
+    def test_joker_aware_walk_equals_card_by_card_floor(self, jk: list[tuple[str, str]]) -> None:
+        G = mark_hand("S_K H_Q D_J", "H_5 D_5 C_2 S_3 S_7", jokers=[joker(*j) for j in jk])
+        for c in G["cards"]["cards"]:
+            if c["key"] in ("C_K", "S_J"):
+                c["modifier"] = {"enhancement": "STEEL", "seal": "RED"}
+            if c["key"] == "H_K":
+                c["modifier"] = {"enhancement": "WILD"}
+        G["cards"]["cards"] = [c for c in G["cards"]["cards"] if c["value"]["rank"] not in ("J", "Q", "K")
+                               or c["key"] in ("C_K", "S_J", "D_K", "H_J", "H_K", "C_Q")]
+        G["cards"]["count"] = len(G["cards"]["cards"])
+        hand = G["hand"]["cards"]
+        hidden = [i for i, c in enumerate(hand) if (c.get("state") or {}).get("hidden")]
+        pool = analysis._mark_pool(G)
+        fills = analysis._mark_held_fills(G)
+        assert isinstance(fills, list)
+        for idx in ([3, 4], [5], [6], [3, 4, 7]):
+            assert min(analysis._fill_score(G, f, idx) for f in fills) == analysis._mark_floor(G, pool, hand, hidden, idx), idx
