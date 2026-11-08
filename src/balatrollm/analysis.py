@@ -18,7 +18,7 @@ import random
 import re
 from collections import Counter, OrderedDict
 from collections.abc import Iterable
-from itertools import combinations
+from itertools import combinations, combinations_with_replacement
 from math import comb
 from pathlib import Path
 from typing import Any
@@ -283,6 +283,10 @@ def _norm(card: dict[str, Any]) -> dict[str, Any]:
         "debuff": bool(state.get("debuff")),
         "hidden": bool(state.get("hidden")),
         "stone": stone,
+        # C3: a face-down card under The Mark, masked by mark_view(): a face
+        # card of unknown rank (J/Q/K mix of the unseen cards in ``mix``)
+        "face": bool(state.get("mark_face")),
+        "mix": state.get("mark_mix"),
     }
 
 
@@ -389,7 +393,8 @@ def classify(
     n = len(cards)
     allidx = list(range(n))
     stones = [i for i, c in enumerate(cards) if c["stone"]]
-    ranked = [(i, c) for i, c in enumerate(cards) if not c["stone"]]
+    # a masked face-down card (rank unknown) pairs with nothing
+    ranked = [(i, c) for i, c in enumerate(cards) if not c["stone"] and c["rank"] is not None]
     rc = Counter(c["rank"] for _, c in ranked)
     counts = sorted(rc.values(), reverse=True) + [0, 0]
     need = 4 if four_fingers else 5
@@ -657,7 +662,7 @@ def estimate_play(
     ancient = ctx["ancient"]
 
     def is_face(c: dict[str, Any]) -> bool:
-        return not c["stone"] and (pareidolia or (c["rank"] in FACE_RANKS))
+        return not c["stone"] and (pareidolia or c["face"] or (c["rank"] in FACE_RANKS))
 
     # Photograph fires on every trigger of the first scored face card, so
     # Hanging Chad / Sock and Buskin / Red Seal retriggers multiply it again.
@@ -693,7 +698,8 @@ def estimate_play(
         if "j_selzer" in keyset:
             triggers += 1
         for _ in range(triggers):
-            chips += 50 if c["stone"] else CHIP_VALUE.get(c["rank"] or "", 0)
+            # a masked face-down card is a J, Q or K: 10 chips (C3)
+            chips += 50 if c["stone"] else 10 if c["face"] else CHIP_VALUE.get(c["rank"] or "", 0)
             if c["enh"] == "BONUS":
                 chips += 30
             elif c["enh"] == "MULT":
@@ -754,6 +760,14 @@ def estimate_play(
     barons = keys.count("j_baron") + copied.count("j_baron")
     moons = keys.count("j_shoot_the_moon") + copied.count("j_shoot_the_moon")
     for c in held:
+        if c["face"] and c["mix"]:
+            # C3: a face-down card held under The Mark: King / Queen by the
+            # unseen J/Q/K mix (Baron x1.5 per King, Shoot the Moon +13 per Queen)
+            for _ in range(1 + mime):
+                for _k in range(barons):
+                    mult *= 1 + 0.5 * float(c["mix"].get("K", 0))
+                mult += 13 * moons * float(c["mix"].get("Q", 0))
+            continue
         if c["debuff"] or c["hidden"]:
             continue
         triggers = 1 + mime + (1 if c["seal"] == "RED" else 0)
@@ -873,7 +887,10 @@ def _discard_choice(
     candidates = [
         i
         for i, c in enumerate(hand)
-        if i not in keep and c["enh"] not in ("STEEL", "GOLD") and c["seal"] != "BLUE"
+        if i not in keep
+        and c["enh"] not in ("STEEL", "GOLD")
+        and c["seal"] != "BLUE"
+        and not c.get("face")  # C3: a face-down card under The Mark is a face card: keep it
     ]
     faces_first = (
         "j_faceless" in keys
@@ -1628,6 +1645,7 @@ def suggested_discard(
         }
     keep |= protect
     keep |= {i for i, c in enumerate(hand) if c["stone"] and plan["hand"] != "Flush"}
+    keep |= {i for i, c in enumerate(hand) if c["face"]}  # C3: never discard face-down cards under The Mark
     keys = set(_joker_keys(G)) | set(copied_keys(G))
     return _discard_choice(hand, keep, limit, mail_rank(G), keys)
 
@@ -1722,8 +1740,128 @@ def _blackboard_pad(
     return {**p, "cards": cards, "score": int(est["score"]), "padded": "red cards added: every held card is black (Blackboard X3)"}
 
 
+MARK = "The Mark"
+MARK_SAMPLES = 60
+
+
+def mark_active(G: dict[str, Any]) -> bool:
+    """The Mark is the blind being played (its face cards come face down)."""
+    return _active_boss(G) == MARK
+
+
+def _mark_pool(G: dict[str, Any]) -> list[dict[str, Any]]:
+    """Cards a face-down card under The Mark can be: the face cards (J, Q, K;
+    every card with Pareidolia) among the unseen cards (deck + face-down hand),
+    face up. A multiset Luna can know from her deck; never which is which."""
+    pareidolia = "j_pareidolia" in set(_joker_keys(G))
+    pool = []
+    hand = [c for c in _area_cards(G, "hand") if (c.get("state") or {}).get("hidden")]
+    for c in _area_cards(G, "cards") + hand:
+        n = _norm(c)
+        if n["stone"] or not n["rank"]:
+            continue
+        if pareidolia or n["rank"] in FACE_RANKS:
+            up = _face_up(c)
+            pool.append({**up, "state": {k: v for k, v in (up.get("state") or {}).items() if k != "debuff"}})
+    return sorted(pool, key=_card_id)
+
+
+def mark_view(G: dict[str, Any]) -> dict[str, Any]:
+    """C3: G with each face-down hand card masked while The Mark is current:
+    a face card (10 chips) of unknown rank, suit and enhancement. BalatroBot
+    sends a face-down card's real rank and suit; Luna cannot see them, so the
+    advice must not use them. Other blinds: G unchanged."""
+    if not mark_active(G):
+        return G
+    cards = _area_cards(G, "hand")
+    if not any((c.get("state") or {}).get("hidden") for c in cards):
+        return G
+    pool = _mark_pool(G)
+    ranks = Counter(_norm(c)["rank"] for c in pool)
+    total = max(len(pool), 1)
+    mix = {r: ranks.get(r, 0) / total for r in ("J", "Q", "K")}
+    masked = []
+    for c in cards:
+        if (c.get("state") or {}).get("hidden"):
+            masked.append({
+                "id": c.get("id"),
+                "key": "",
+                "set": "DEFAULT",
+                "label": "face-down card",
+                "value": {"rank": None, "suit": None, "effect": ""},
+                "modifier": {},
+                "state": {"hidden": True, "mark_face": True, "mark_mix": mix},
+                "cost": c.get("cost"),
+            })
+        else:
+            masked.append(c)
+    return {**G, "hand": {**(G.get("hand") or {}), "cards": masked}}
+
+
+def _mark_minimum(pool: list[dict[str, Any]], n: int) -> str | None:
+    """The hand type ``n`` face-down cards make at the least, whatever their
+    ranks (the pool's rank counts; suits ignored: a Flush only adds). None
+    when no hand beyond High Card is sure."""
+    counts = Counter(_norm(c)["rank"] for c in pool)
+    ranks = sorted(counts)
+    if n <= 0 or sum(counts.values()) < n:
+        return None
+    worst = None
+    for combo in combinations_with_replacement(ranks, n):
+        if any(combo.count(r) > counts[r] for r in set(combo)):
+            continue
+        cards = [_norm(_synthetic_card("HDCS"[k % 4], r)) for k, r in enumerate(combo)]
+        htype = classify(cards)[0]
+        if worst is None or HAND_ORDER.index(htype) > HAND_ORDER.index(worst):
+            worst = htype
+            if worst == "High Card":
+                break
+    return None if worst in (None, "High Card") else worst
+
+
+def mark_play(G: dict[str, Any]) -> dict[str, Any] | None:
+    """C3 (ii): "play the face-down cards" under The Mark: all of them, up to
+    5. Expected (mean FLOOR estimate over the unseen J/Q/K mix), lowest seen,
+    the hand type sure at the least, and the most likely type. Sampled from
+    the unseen pool only (permutation-invariant: the real face-down cards are
+    never used one by one)."""
+    if not mark_active(G):
+        return None
+    hand = _area_cards(G, "hand")
+    hidden = [i for i, c in enumerate(hand) if (c.get("state") or {}).get("hidden")]
+    if not hidden:
+        return None
+    n = min(5, len(hidden))
+    pool = _mark_pool(G)
+    if len(pool) < len(hidden):
+        return None
+    visible = [c for c in hand if not (c.get("state") or {}).get("hidden")]
+    ids = sorted(_card_id(c) for c in pool)
+    seen = sorted(_card_id(c) for c in visible)
+    seed = int(hashlib.md5(json.dumps([ids, seen, len(hidden)]).encode()).hexdigest()[:12], 16)
+    rng = random.Random(seed)
+    scores, types = [], Counter()
+    for _ in range(MARK_SAMPLES):
+        pick = rng.sample(pool, len(hidden))
+        est = estimate_play(G, pick[:n], visible + pick[n:])
+        scores.append(int(est["score"]))
+        types[est["hand"]] += 1
+    return {
+        "cards": hidden[:n],
+        "n": n,
+        "expected": int(sum(scores) / len(scores)),
+        "low": min(scores),
+        "minimum": _mark_minimum(pool, n),
+        "likely": types.most_common(1)[0][0],
+        "any_rank": "j_pareidolia" in set(_joker_keys(G)),
+    }
+
+
 def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
     """Everything the PLAY phase needs: plays with WINS flags, discard, suggestion."""
+    # C3: under The Mark the advice sees face-down cards as masked face cards
+    mark = mark_play(G)
+    G = mark_view(G)
     plan = main_hand_plan(G)
     analysis_ = analyze_hand(G, top=top)
     progress = blind_progress(G) or {"remaining": 0, "per_hand": 0, "hands_left": 0}
@@ -1750,6 +1888,11 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
     plays.sort(key=lambda p: -p["score"])
     _mark_repeats(G, plays)
     winners = [p for p in plays if p["wins"]]
+    if mark:
+        margin_m = 1.0 if exact else WIN_MARGIN
+        mark["wins"] = remaining > 0 and mark["low"] >= margin_m * remaining
+        mark["reaches_pace"] = mark["expected"] >= per_hand
+    mark_pace = bool(mark and mark["reaches_pace"])
     # P1: with no winner, dig toward a winning play but keep the best play
     # that is on pace (it is still there if the dig misses)
     on_pace = next((p for p in plays if p["reaches_pace"] and not p["blocked"]), None)
@@ -1834,6 +1977,12 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
             cards = sorted(cards + _filler(G, hand, cards, plan, 4 - len(cards)))
             why += "; 4 cards grow Square Joker"
         action = {"tool": "play", "cards": cards, "why": why}
+    elif mark and mark["wins"]:
+        action = {
+            "tool": "play",
+            "cards": mark["cards"],
+            "why": "The Mark: the face-down cards WIN even at their lowest (they still score)",
+        }
     elif discards > 0 and discard and chase_draw:
         action = {
             "tool": "discard",
@@ -1847,7 +1996,7 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
             "cards": discard,
             "why": f"{strong_draw['kind']} draw completes {round(strong_draw['chance'] * 100)}% of the time",
         }
-    elif discards > 0 and discard and not any(p["reaches_pace"] for p in plays):
+    elif discards > 0 and discard and not any(p["reaches_pace"] for p in plays) and not mark_pace:
         action = {
             "tool": "discard",
             "cards": discard,
@@ -1859,6 +2008,18 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
             "cards": discard,
             "why": f"no play wins yet: dig toward a winning play and keep your {on_pace['hand']} "
             "(play on pace only with no discards left)",
+        }
+    elif discards > 0 and discard and mark_pace and not _discard_hurts(G):
+        action = {
+            "tool": "discard",
+            "cards": discard,
+            "why": "no play wins yet: dig with the face-up cards and keep the face-down cards (The Mark: they score)",
+        }
+    elif mark and (not plays or mark["expected"] > max((p["score"] for p in plays if not p["blocked"]), default=0)):
+        action = {
+            "tool": "play",
+            "cards": mark["cards"],
+            "why": f"The Mark: play the face-down cards (about {fmt_num(mark['expected'])}, more than any face-up play)",
         }
     elif plays:
         best = plays[0]
@@ -1916,6 +2077,7 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         "discard_costs": discard_costs(G),
         "mail_rank": mail_rank(G),
         "blind_play": blind,
+        "mark_play": mark,
         "repeats": repeat_note(G),
         "acrobat": "j_acrobat" in (set(_joker_keys(G)) | set(copied_keys(G))),
         "hand_suits": analysis_["hand_suits"],
@@ -2097,6 +2259,8 @@ def boss_impact(
             )
     elif plan["family"] == "pair" and name in PAIR_BOSS_IMPACT:
         impact = PAIR_BOSS_IMPACT[name]
+    elif name == MARK:
+        impact = "The Mark: your face cards come face down; they still score: keep and play them"
     elif name == "The Plant":
         faces = sum(
             1
@@ -3895,8 +4059,17 @@ def summarize_outcome(
                 f"(now {chips_a:,}/{target:,}, {hands_left} hands left)"
             )
         if method == "discard":
-            gone = [k for k in _hand_keys(before) if k not in _hand_keys(after)]
-            new = [k for k in _hand_keys(after) if k not in _hand_keys(before)]
+            # C3: a face-down card is never named (BalatroBot sends its real key)
+            def ident(c: dict[str, Any]) -> Any:
+                return c.get("id") if c.get("id") is not None else c.get("key")
+
+            def name(c: dict[str, Any]) -> str:
+                return "face-down card" if (c.get("state") or {}).get("hidden") else str(c.get("key", ""))
+
+            hb, ha = _area_cards(before, "hand"), _area_cards(after, "hand")
+            ib, ia = {ident(c) for c in hb}, {ident(c) for c in ha}
+            gone = [name(c) for c in hb if ident(c) not in ia]
+            new = [name(c) for c in ha if ident(c) not in ib]
             return f"discarded {', '.join(gone) or '-'}; drew {', '.join(new) or '-'}"
         if method == "buy":
             money = after.get("money", "?")

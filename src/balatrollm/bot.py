@@ -20,6 +20,7 @@ from .analysis import (
     estimate_play,
     discard_phase_order,
     joker_order,
+    mark_view,
     round_record,
     summarize_outcome,
     swap_plan,
@@ -563,11 +564,14 @@ class Bot:
         estimate: int | None = None
         if fn_name == "play" and before.get("state") == "SELECTING_HAND":
             try:
-                hand = before.get("hand", {}).get("cards", [])
+                # C3: under The Mark face-down cards are masked (the estimate
+                # lands in MEMORY; it must not use their real ranks)
+                seen = mark_view(before)
+                hand = seen.get("hand", {}).get("cards", [])
                 chosen = [int(i) for i in params.get("cards", [])]
                 played = [hand[i] for i in sorted(chosen)]
                 held = [c for i, c in enumerate(hand) if i not in chosen]
-                estimate = int(estimate_play(before, played, held)["score"])
+                estimate = int(estimate_play(seen, played, held)["score"])
             except (IndexError, TypeError, ValueError):
                 estimate = None
 
