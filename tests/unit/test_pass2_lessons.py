@@ -62,10 +62,13 @@ def test_template_shows_lessons_only_with_the_flag(tmp_path: Path) -> None:
     assert analysis.past_lessons(G, "SHORT", str(path))[0].startswith("[L1]")
 
 
-def test_mastery_ships_lessons_off_and_empty() -> None:
+def test_mastery_ships_lessons_on_with_p2_c1_only() -> None:
+    """Pass 3 (C8): lessons on, one trial lesson (P2-C1, The Mark)."""
     root = Path(analysis.__file__).parent / "strategies" / "mastery"
-    assert json.loads((root / "manifest.json").read_text())["harness"]["lessons"] is False
-    assert json.loads((root / "lessons.json").read_text()) == {"lessons": []}
+    assert json.loads((root / "manifest.json").read_text())["harness"]["lessons"] is True
+    shipped = json.loads((root / "lessons.json").read_text())["lessons"]
+    assert [x["id"] for x in shipped] == ["P2-C1"] and shipped[0]["status"] == "trial"
+    assert lessons.problems(shipped[0]) == []
 
 
 def test_digest_followed_and_ignored(tmp_path: Path) -> None:
