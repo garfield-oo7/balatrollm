@@ -1029,6 +1029,6 @@ class TestReviewRound10Codex:
         msg = analysis.validate_action(G, "use", {"consumable": 0, "cards": cards})
         assert msg and "face-down" in msg
 
-    @pytest.mark.parametrize("cards", [[3, None], [None], [], ["x"]])
+    @pytest.mark.parametrize("cards", [[3, None], [None], [], ["x"], [float("inf")], [3, float("nan")]])
     def test_no_face_down_target_allowed(self, cards: list[Any]) -> None:
         assert analysis.validate_action(TestReviewRound9Opus()._tower(True), "use", {"consumable": 0, "cards": cards}) is None

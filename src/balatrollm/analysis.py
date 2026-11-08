@@ -4399,7 +4399,7 @@ def validate_action(
         for i in cards:  # each target on its own: a null or junk entry must not hide the others (review r10 codex R10-1)
             try:
                 picked.add(int(i))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 continue
         if picked & hidden:
             return ("The Mark: you cannot see face-down cards, so do not target them. "
