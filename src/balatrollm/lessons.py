@@ -5,9 +5,15 @@ A lesson (``lessons.json`` in the strategy folder) is::
     {"id": "L1", "status": "candidate" | "trial" | "kept" | "retired",
      "text": "when <situation>, do <action>, because <reason>",
      "situation": {"ante": [lo, hi], "situation": ["SHORT"], "phase": ["SHOP"],
-                   "boss": ["The Wall"], "jokers": ["j_card_sharp"]},
+                   "boss": ["The Wall"], "current_blind": ["The Mark"],
+                   "jokers": ["j_card_sharp"]},
      "evidence": ["SEED-A", "SEED-K"],
      "check": {"action": "reroll", "expect": "avoid"}}
+
+``boss`` is the ANTE's boss (it also matches the Small/Big rounds of that
+ante); ``current_blind`` is the blind being played now (pass 3). A check may
+name a card set: {"action": "discard", "expect": "avoid", "cards": "face_down"}
+= the decision's discard must not include a face-down card.
 
 Only ``trial`` and ``kept`` lessons are shown to Luna, at most ``LIMIT`` per
 prompt, and only when the strategy's harness flag ``lessons`` is true (it is
@@ -25,6 +31,7 @@ SHOWN = ("trial", "kept")
 STATUSES = ("candidate", "trial", "kept", "retired")
 TEXT = re.compile(r"^when .+, do .+, because .+", re.IGNORECASE | re.DOTALL)
 LABEL = re.compile(r"^SEED-[A-Z]{1,3}$")
+CARD_SETS = ("face_down",)
 
 _CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
@@ -60,6 +67,8 @@ def problems(lesson: dict[str, Any]) -> list[str]:
     check = lesson.get("check") or {}
     if check and check.get("expect") not in ("do", "avoid"):
         out.append('check.expect must be "do" or "avoid"')
+    if check and check.get("cards") not in (None, *CARD_SETS):
+        out.append(f"check.cards must be one of {CARD_SETS}")
     return out
 
 
@@ -82,6 +91,10 @@ def matches(lesson: dict[str, Any], G: dict[str, Any], status: str | None) -> bo
     if "boss" in sit:
         boss = ((G.get("blinds") or {}).get("boss") or {}).get("name")
         if boss not in sit["boss"]:
+            return False
+    if "current_blind" in sit:
+        cur = next((b.get("name") for b in (G.get("blinds") or {}).values() if (b or {}).get("status") == "CURRENT"), None)
+        if cur not in sit["current_blind"]:
             return False
     if "jokers" in sit:
         owned = {j.get("key") for j in (G.get("jokers") or {}).get("cards") or []}

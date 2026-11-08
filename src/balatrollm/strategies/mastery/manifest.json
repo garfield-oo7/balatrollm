@@ -22,6 +22,6 @@
     "reroll_boss": true,
     "joker_phase_order": true,
     "sell_in_pack": true,
-    "lessons": false
+    "lessons": true
   }
 }
