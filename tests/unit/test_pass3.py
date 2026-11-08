@@ -452,3 +452,32 @@ class TestDeadlineCommit:
         assert bot2._main_commit["hand"] == "Two Pair"
         bot2._annotate(ante3_shop({"Two Pair": 5}, jokers=[joker("j_tribe", "The Tribe")]))
         assert bot2._main_commit["hand"] == "Flush"
+
+
+# ---------------------------------------------------------------------------
+# C7: first shop, tight money: Luna's call
+# ---------------------------------------------------------------------------
+def first_shop(money: int) -> dict[str, Any]:
+    G = shop()
+    G["luna"] = {"first_shop": True}
+    G["money"] = money
+    G["shop"] = {"cards": [{**joker("j_joker", "Joker", "+4 Mult"), "cost": {"buy": 5}}]}
+    G["packs"] = {"cards": [{"key": "p_buffoon_normal_1", "label": "Buffoon Pack", "set": "BOOSTER", "cost": {"buy": 4}}]}
+    return G
+
+
+class TestFirstShop:
+    def test_tight_case_allows_any_joker(self) -> None:
+        assert analysis.validate_action(first_shop(8), "buy", {"card": 0}) is None
+
+    def test_covered_case_still_refuses(self) -> None:
+        assert "Buffoon" in analysis.validate_action(first_shop(9), "buy", {"card": 0})
+
+    def test_hint_only_in_the_tight_case(self) -> None:
+        tight = render(first_shop(8))
+        assert "FIRST SHOP, TIGHT MONEY: $8 cannot cover the Buffoon Pack ($4) and Joker" in tight
+        assert "+50% or more is often worth buying before the pack" in tight and "buy neither" in tight
+        assert "TIGHT MONEY" not in render(first_shop(9))
+        later = first_shop(8)
+        later["luna"] = {"first_shop": False}
+        assert "TIGHT MONEY" not in render(later)

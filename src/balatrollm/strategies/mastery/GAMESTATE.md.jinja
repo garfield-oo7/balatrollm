@@ -131,6 +131,10 @@
 {% endif %}
 {%- if G.state == "SHOP" %}
 # SHOP
+{%- set FT = first_shop_tight(G) %}
+{%- if FT %}
+- FIRST SHOP, TIGHT MONEY: ${{ FT.money }} cannot cover the {{ FT.pack }} (${{ FT.pack_cost }}) and {{ FT.jokers | join(" / ") }}. Your call: the pack offers a choice of jokers; each shop joker shows its SCORE now (and in 3 rounds when it grows); the next blind is {{ S.status }}. About +50% or more is often worth buying before the pack; if the next blind is COMFORTABLE you may buy neither and keep the money.
+{%- endif %}
 {%- if I and I.score %}
 - TYPICAL: your best play scores about {{ I.score | fmt_num }} per hand now ({{ I.plays }} hands dealt from your deck, mostly {{ I.mix | join(", ") }}).{% set nb0 = next_blind(G) %}{% if nb0 and nb0.score %} Next blind {{ nb0.score | fmt_num }} = about {{ ((nb0.score + I.score - 1) // I.score) | int }} such hands.{% endif %}
 - SCORE = change per hand if you buy the item (growing jokers show now and in 3 rounds).{% if not S.slots_free %} Slots are full: each shop joker also shows its best swap.{% endif %}{% if I.chips_sources %} CHIPS sources owned: {{ I.chips_sources }} (one is usually enough: a second [CHIPS] joker adds little; prefer Mult/xMult).{% endif %}
