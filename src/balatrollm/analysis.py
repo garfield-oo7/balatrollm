@@ -1020,7 +1020,9 @@ def analyze_hand(G: dict[str, Any], top: int = 6) -> dict[str, Any]:
             ]
             n = min(limit, len(hand) - len(keep), deck_size)
             outs = deck_suits.get(suit, 0)
-            p = _hypergeom_at_least(deck_size, outs, n, need_flush - have_total)
+            discard = _discard_choice(hand, keep, n)
+            # odds from the cards actually suggested (some are never discarded)
+            p = _hypergeom_at_least(deck_size, outs, len(discard), need_flush - have_total)
             draws.append(
                 {
                     "kind": "Flush",
@@ -1028,7 +1030,7 @@ def analyze_hand(G: dict[str, Any], top: int = 6) -> dict[str, Any]:
                     "text": f"Flush draw in {SUIT_NAME[suit]}: {have_total}/{need_flush} in hand, "
                     f"{outs} {SUIT_NAME[suit]} left in deck",
                     "keep": keep,
-                    "discard": _discard_choice(hand, keep, n),
+                    "discard": discard,
                     "chance": p,
                 }
             )
@@ -1054,7 +1056,8 @@ def analyze_hand(G: dict[str, Any], top: int = 6) -> dict[str, Any]:
                 )
             n = min(limit, len(hand) - len(keep), deck_size)
             outs = sum(deck_ranks.get(r, 0) for r in missing)
-            p = _hypergeom_at_least(deck_size, outs, n, 1)
+            discard = _discard_choice(hand, keep, n)
+            p = _hypergeom_at_least(deck_size, outs, len(discard), 1)
             need_txt = " or ".join(RANK_NAME.get(r, r) for r in sorted(missing))
             draws.append(
                 {
@@ -1062,7 +1065,7 @@ def analyze_hand(G: dict[str, Any], top: int = 6) -> dict[str, Any]:
                     "missing": min(missing, key=lambda r: CHIP_VALUE[r]),
                     "text": f"Straight draw: need a {need_txt} ({outs} left in deck)",
                     "keep": sorted(keep),
-                    "discard": _discard_choice(hand, keep, n),
+                    "discard": discard,
                     "chance": p,
                 }
             )
@@ -1854,7 +1857,12 @@ def mark_view(G: dict[str, Any]) -> dict[str, Any]:
             })
         else:
             masked.append(c)
-    return {**G, "hand": {**(G.get("hand") or {}), "cards": masked}}
+    # The deck counts Luna sees must not tell which face cards are in hand:
+    # the face-down cards join the deck as one unseen pile (deck + face-down)
+    unseen = _area_cards(G, "cards") + [_face_up(c) for c in cards if (c.get("state") or {}).get("hidden")]
+    deck = {**(G.get("cards") or {}), "cards": sorted(unseen, key=_card_id)}
+    deck["count"] = len(unseen)
+    return {**G, "hand": {**(G.get("hand") or {}), "cards": masked}, "cards": deck, "mark_unseen": True}
 
 
 def _mark_minimum(pool: list[dict[str, Any]], n: int) -> str | None:
@@ -1876,6 +1884,27 @@ def _mark_minimum(pool: list[dict[str, Any]], n: int) -> str | None:
             if worst == "High Card":
                 break
     return None if worst in (None, "High Card") else worst
+
+
+MARK_FLOOR_MAX = 2000
+
+
+def _mark_floor(G: dict[str, Any], pool: list[dict[str, Any]], k: int, n: int,
+                visible: list[dict[str, Any]]) -> int | None:
+    """The lowest FLOOR score the face-down play can make over every set of
+    ``k`` unseen face cards (``n`` of them played). None when there are more
+    than MARK_FLOOR_MAX cases: then no WINS claim is made."""
+    cases = comb(len(pool), k) * (comb(k, n) if k > n else 1)
+    if cases > MARK_FLOOR_MAX or k > len(pool):
+        return None
+    low = None
+    for pick in combinations(range(len(pool)), k):
+        cards = [pool[i] for i in pick]
+        for played in (combinations(range(k), n) if k > n else [tuple(range(k))]):
+            held = [c for j, c in enumerate(cards) if j not in played]
+            est = int(estimate_play(G, [cards[j] for j in played], visible + held)["score"])
+            low = est if low is None else min(low, est)
+    return low
 
 
 def mark_play(G: dict[str, Any]) -> dict[str, Any] | None:
@@ -1905,11 +1934,13 @@ def mark_play(G: dict[str, Any]) -> dict[str, Any] | None:
         est = estimate_play(G, pick[:n], visible + pick[n:])
         scores.append(int(est["score"]))
         types[est["hand"]] += 1
+    floor = _mark_floor(G, pool, len(hidden), n, visible)
     return {
         "cards": hidden[:n],
         "n": n,
         "expected": int(sum(scores) / len(scores)),
-        "low": min(scores),
+        "low": min(scores),  # lowest of the sampled draws (not a guarantee)
+        "floor": floor,  # lowest over every possible set of face cards (None: too many to check)
         "minimum": _mark_minimum(pool, n),
         "likely": types.most_common(1)[0][0],
         "any_rank": "j_pareidolia" in set(_joker_keys(G)),
@@ -1949,7 +1980,8 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
     winners = [p for p in plays if p["wins"]]
     if mark:
         margin_m = 1.0 if exact else WIN_MARGIN
-        mark["wins"] = remaining > 0 and mark["low"] >= margin_m * remaining
+        # WINS only from the exact floor (every possible set of face cards)
+        mark["wins"] = remaining > 0 and mark["floor"] is not None and mark["floor"] >= margin_m * remaining
         mark["reaches_pace"] = mark["expected"] >= per_hand
     mark_pace = bool(mark and mark["reaches_pace"])
     # P1: with no winner, dig toward a winning play but keep the best play
@@ -2040,7 +2072,7 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         action = {
             "tool": "play",
             "cards": mark["cards"],
-            "why": "The Mark: the face-down cards WIN even at their lowest (they still score)",
+            "why": "The Mark: the face-down cards WIN whichever face cards they are (they still score)",
         }
     elif discards > 0 and discard and chase_draw:
         action = {
@@ -2142,6 +2174,7 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         "hand_suits": analysis_["hand_suits"],
         "deck_size": analysis_["deck_size"],
         "deck_suits": analysis_["deck_suits"],
+        "mark_unseen": bool(G.get("mark_unseen")),
     }
 
 
