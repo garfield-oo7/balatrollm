@@ -4390,6 +4390,18 @@ def validate_action(
                 "Boss reroll refused: it needs Director's Cut (once per ante) or "
                 f"Retcon and ${BOSS_REROLL_COST}. Select the blind instead."
             )
+    if method == "use" and mark_active(G) and isinstance(cards, list):
+        # The Mark: a Tarot on a face-down card changes it but keeps it face
+        # down, so the harness can no longer tell what it is (review r9 opus R9-1)
+        hand = _area_cards(G, "hand")
+        hidden = {i for i, c in enumerate(hand) if (c.get("state") or {}).get("hidden")}
+        try:
+            picked = {int(i) for i in cards}
+        except (TypeError, ValueError):
+            picked = set()
+        if picked & hidden:
+            return ("The Mark: you cannot see face-down cards, so do not target them. "
+                    "Target face-up cards, or keep the card for later.")
     if method == "use":
         cons = _area_cards(G, "consumables")
         try:

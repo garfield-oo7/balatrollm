@@ -995,3 +995,25 @@ class TestReviewRound8Opus:
         assert analysis._mark_held_fills(G) == "unknown"
         pair = next(p for p in analysis.play_advice(G)["plays"] if p["hand"] == "Pair")
         assert pair["floor"] == 192 and pair["wins"]
+
+
+class TestReviewRound9Opus:
+    """opus R9-1: under The Mark a Tarot aimed at a face-down card is refused
+    (it would change the card but keep it face down)."""
+
+    def _tower(self, mark: bool) -> dict[str, Any]:
+        G = mark_hand("S_K", "H_A S_A H_5")
+        G["consumables"] = {"cards": [{"key": "c_tower", "set": "TAROT", "label": "The Tower"}], "count": 1, "limit": 2}
+        if not mark:
+            G["blinds"]["boss"]["name"] = "The Hook"
+        return G
+
+    def test_face_down_target_refused(self) -> None:
+        msg = analysis.validate_action(self._tower(True), "use", {"consumable": 0, "cards": [0]})
+        assert msg and "face-down" in msg
+
+    def test_face_up_target_allowed(self) -> None:
+        assert analysis.validate_action(self._tower(True), "use", {"consumable": 0, "cards": [3]}) is None
+
+    def test_other_blind_unchanged(self) -> None:
+        assert analysis.validate_action(self._tower(False), "use", {"consumable": 0, "cards": [0]}) is None
