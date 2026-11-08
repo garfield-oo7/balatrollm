@@ -612,3 +612,34 @@ class TestMarkReviewRound1:
         G = mark_hand("S_K H_Q D_J C_K", "H_2 H_3 H_4 S_6")
         d = next(d for d in analysis.play_advice(G)["draws"] if d["kind"] == "Flush")
         assert len(d["discard"]) < 5 - len(d["keep"]) and d["chance"] == 0.0
+
+
+class TestReviewRound1Opus:
+    """Opus review round 1 findings (proven by runs), kept as regressions."""
+
+    def test_memory_estimate_of_a_face_down_play_matches_the_prompt(self) -> None:
+        jk = [joker("j_smiley", "Smiley Face", "+5 Mult for face cards")]
+        G = mark_hand(jokers=jk)
+        mp = analysis.mark_play(G)
+        est = analysis.play_estimate(G, mp["cards"])
+        assert abs(est - mp["expected"]) <= 0.25 * mp["expected"]  # same kind of number (not High Card)
+        # and it does not depend on which face card is which
+        b = mark_hand("H_K C_K D_J H_Q S_K", jokers=jk)
+        assert analysis.play_estimate(b, mp["cards"]) == est
+
+    async def test_bot_logs_the_knowable_estimate(self) -> None:
+        bot, game = _bot()
+        G = mark_hand(jokers=[joker("j_smiley", "Smiley Face", "+5 Mult for face cards")])
+        game.call.return_value = {**G, "round": {**G["round"], "chips": 500}}
+        await bot._execute_tool_call(_call("play", cards=[0, 1, 2, 3, 4]), G)
+        assert bot._history[-1]["estimate"] == analysis.play_estimate(G, [0, 1, 2, 3, 4])
+
+    def test_card_sharp_keeps_the_deadline_commit(self) -> None:
+        G = ante3_shop({"Two Pair": 5, "Flush": 2})
+        dc = analysis.deadline_commit(G)
+        G["jokers"]["cards"] = [joker("j_card_sharp", "Card Sharp")]
+        G["jokers"]["count"] = 1
+        G["hands"]["Flush"]["level"] = 3  # Card Sharp alone would call the levelled-most hand
+        assert analysis.main_commit(G, dc) is dc
+        G["jokers"]["cards"].append(joker("j_tribe", "The Tribe"))  # a real hand-defining joker still re-commits
+        assert analysis.main_commit(G, dc)["hand"] == "Flush"

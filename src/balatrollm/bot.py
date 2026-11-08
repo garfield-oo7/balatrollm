@@ -24,6 +24,7 @@ from .analysis import (
     discard_phase_order,
     joker_order,
     mark_view,
+    play_estimate,
     round_record,
     summarize_outcome,
     swap_plan,
@@ -669,7 +670,8 @@ class Bot:
                 played = [hand[i] for i in sorted(chosen)]
                 held = [c for i, c in enumerate(hand) if i not in chosen]
                 est = estimate_play(seen, played, held)
-                estimate = int(est["score"])
+                # the estimate Luna can know (face-down cards: the face-card average)
+                estimate = play_estimate(before, chosen)
                 if "Flush" in est["hand"]:  # C6: the suit of Flush plays (MAIN_SUIT at the deadline)
                     suits = [str((c.get("value") or {}).get("suit") or "") for c in played]
                     flush_suit = max(set(suits) - {""}, key=suits.count, default=None)
