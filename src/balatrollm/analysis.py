@@ -1955,7 +1955,7 @@ def _mark_minimum(pool: list[dict[str, Any]], n: int) -> str | None:
 
 MARK_FLOOR_MAX = 2000
 MARK_FLOOR_RAW_MAX = 60000
-MARK_HELD_FLOOR_MAX = 300  # per listed face-up play, when face-down held cards can change its score
+MARK_HELD_FLOOR_MAX = 1000  # held face-down class sequences walked for face-up plays (review r5: was 300 card fillings)
 HELD_KEYS = {"j_baron", "j_shoot_the_moon", "j_mime", "j_blackboard", "j_raised_fist"}  # raw slot fillings walked before de-duplication
 
 
@@ -2043,7 +2043,7 @@ def _mark_held_fills(G: dict[str, Any]) -> list[list[dict[str, Any]]] | str | No
     distinct way the unseen face cards fill the face-down slots, as full hands.
     "unknown" when there are more than MARK_HELD_FLOOR_MAX (then the masked
     score is the floor: it is a proven lower bound); None when held face-down cards cannot change a
-    face-up play's score. Review rounds 3 (opus R1) and 4 (codex R4-1)."""
+    face-up play's score. Review rounds 3 (opus R1), 4 (codex R4-1) and 5 (opus R5-1)."""
     hand = _area_cards(G, "hand")
     hidden = [i for i, c in enumerate(hand) if (c.get("state") or {}).get("hidden")]
     if not hidden or not mark_active(G):
@@ -2053,19 +2053,40 @@ def _mark_held_fills(G: dict[str, Any]) -> list[list[dict[str, Any]]] | str | No
     if not (keys & HELD_KEYS or any(_norm(c)["enh"] == "STEEL" for c in pool)):
         return None
     k = len(hidden)
-    if k > len(pool) or perm(len(pool), k) > MARK_FLOOR_RAW_MAX:
+    if k > len(pool):
         return "unknown"
-    ids = [_card_id(c) for c in pool]
-    seen: set[tuple[str, ...]] = set()
+    # A held card changes a face-up play's score only through what
+    # estimate_play reads of HELD cards: rank, Steel, Red Seal, black suit
+    # (or Wild) for Blackboard, debuff. Fillings that agree on these, slot by
+    # slot, score the same, so each such class sequence is walked once (exact,
+    # and far fewer than card-by-card fillings; review r5 opus R5-1).
+    classes: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for c in pool:
+        n = _norm(c)
+        key = (n["rank"], n["enh"] == "STEEL", n["seal"] == "RED", n["suit"] in ("S", "C") or n["enh"] == "WILD", n["debuff"])
+        classes.setdefault(key, []).append(c)
+    reps = [v[0] for v in classes.values()]
+    left = [len(v) for v in classes.values()]
     fills: list[list[dict[str, Any]]] = []
-    for pick in permutations(range(len(pool)), k):
-        key = tuple(ids[i] for i in pick)
-        if key in seen:
-            continue
-        seen.add(key)
-        if len(seen) > MARK_HELD_FLOOR_MAX:
-            return "unknown"
-        fills.append(_mark_fill(hand, hidden, [pool[i] for i in pick]))
+    pick: list[dict[str, Any]] = []
+
+    def walk() -> bool:
+        if len(pick) == k:
+            fills.append(_mark_fill(hand, hidden, list(pick)))
+            return len(fills) <= MARK_HELD_FLOOR_MAX
+        for i, rep in enumerate(reps):
+            if left[i]:
+                left[i] -= 1
+                pick.append(rep)
+                ok = walk()
+                pick.pop()
+                left[i] += 1
+                if not ok:
+                    return False
+        return True
+
+    if not walk():
+        return "unknown"
     return fills
 
 
