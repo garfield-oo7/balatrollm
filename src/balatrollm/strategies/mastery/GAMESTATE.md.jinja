@@ -114,7 +114,7 @@
 - none
 {% endfor %}
 {%- if A.mark_play %}{% set mp = A.mark_play -%}
-- Face-down play {{ mp.cards }} = {{ mp.n }} face-down card{{ "s" if mp.n != 1 }} (The Mark: {% if mp.any_rank %}with Pareidolia any card can come face down; it{% else %}each is a J, Q or K and{% endif %} still scores) -> about {{ mp.expected | fmt_num }}, lowest {{ mp.low | fmt_num }}; {% if mp.minimum %}at least {{ mp.minimum }}{% else %}no sure hand{% endif %}, most often {{ mp.likely }}
+- Face-down play {{ mp.cards }} = {{ mp.n }} face-down card{{ "s" if mp.n != 1 }} (The Mark: {% if mp.any_rank %}with Pareidolia any card can come face down; it{% else %}each is a J, Q or K and{% endif %} still scores) -> about {{ mp.expected | fmt_num }}, {% if mp.floor is not none %}at worst {{ mp.floor | fmt_num }}{% else %}lowest of 60 tries {{ mp.low | fmt_num }}{% endif %}; {% if mp.minimum %}at least {{ mp.minimum }}{% else %}no sure hand{% endif %}, most often {{ mp.likely }}
 {%- if mp.wins %} WINS{% elif mp.reaches_pace %} (reaches PER_HAND){% else %} (below PER_HAND){% endif %}
 {% endif %}
 {%- if A.draws %}
@@ -127,7 +127,7 @@
 {%- if flags and flags.suggest_action %}
 - Suggested action: {% if A.action.tool == "use" %}use consumable {{ A.action.consumable }} with cards {{ A.action.cards }}{% else %}{{ A.action.tool }} {{ A.action.cards }}{% endif %} ({{ A.action.why }})
 {%- endif %}
-- Suits in hand: {% for s, n in A.hand_suits.items() %}{{ s }} {{ n }}{% if not loop.last %}, {% endif %}{% endfor %} | Deck left {{ A.deck_size }}: {% for s, n in A.deck_suits.items() %}{{ s }} {{ n }}{% if not loop.last %}, {% endif %}{% endfor %}
+- Suits in hand: {% for s, n in A.hand_suits.items() %}{{ s }} {{ n }}{% if not loop.last %}, {% endif %}{% endfor %} | {% if A.mark_unseen %}Unseen cards (deck + your face-down cards) {{ A.deck_size }}{% else %}Deck left {{ A.deck_size }}{% endif %}: {% for s, n in A.deck_suits.items() %}{{ s }} {{ n }}{% if not loop.last %}, {% endif %}{% endfor %}
 {% endif %}
 {%- if G.state == "SHOP" %}
 # SHOP

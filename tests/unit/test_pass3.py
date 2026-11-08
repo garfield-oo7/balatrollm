@@ -571,3 +571,44 @@ class TestDigestPass3:
                "main_reason": "committed: end of Ante 2: played 7 times, 312 per hand with your jokers (round 7)"}]
         assert digest.main_commit(ds) == {"ante": 3, "round": 7, "hand": "Two Pair",
                                           "trigger": "end of Ante 2: played 7 times, 312 per hand with your jokers"}
+
+
+class TestMarkReviewRound1:
+    """Codex review round 1 findings (proven by runs), kept as regressions."""
+
+    def test_swapping_a_face_down_card_with_the_deck_changes_nothing(self) -> None:
+        from copy import deepcopy
+
+        G = mark_hand("S_K H_Q D_J C_K", "H_2 H_3 H_4 S_6")
+        H = deepcopy(G)
+        a = H["hand"]["cards"][0]
+        b = next(c for c in H["cards"]["cards"] if c["key"] == "H_K")
+        for k in ("key", "value", "modifier", "label"):
+            a[k], b[k] = b[k], a[k]
+        x, y = analysis.play_advice(G), analysis.play_advice(H)
+        for k in ("plays", "draws", "discard", "action", "mark_play", "deck_suits", "deck_size"):
+            assert x[k] == y[k], k
+        assert render(G) == render(H)
+        assert "Unseen cards (deck + your face-down cards)" in render(G)
+
+    def test_wins_only_from_the_exact_floor(self) -> None:
+        jk = [joker("j_greedy_joker", "Greedy Joker"), joker("j_lusty_joker", "Lusty Joker")]
+        G = mark_hand("C_J S_J C_K S_K C_Q", "H_2 S_3 D_7", jokers=jk)
+        G["blinds"]["boss"]["score"] = 200
+        G["round"]["hands_left"] = 1
+        A = analysis.play_advice(G)
+        hand = [analysis._face_up(c) for c in G["hand"]["cards"]]
+        actual = int(analysis.estimate_play(G, hand[:5], hand[5:])["score"])
+        mp = A["mark_play"]
+        assert mp["floor"] is not None and mp["floor"] <= actual < 200
+        assert not mp["wins"] and "WIN" not in A["action"]["why"]
+
+    def test_no_wins_claim_when_the_floor_is_too_costly(self) -> None:
+        mp = analysis.play_advice(mark_hand("S_K H_Q D_J C_K H_K S_Q D_Q", "H_2"))["mark_play"]
+        assert mp["floor"] is None and not mp["wins"]
+        assert "lowest of 60 tries" in render(mark_hand("S_K H_Q D_J C_K H_K S_Q D_Q", "H_2"))
+
+    def test_draw_odds_use_the_cards_actually_discarded(self) -> None:
+        G = mark_hand("S_K H_Q D_J C_K", "H_2 H_3 H_4 S_6")
+        d = next(d for d in analysis.play_advice(G)["draws"] if d["kind"] == "Flush")
+        assert len(d["discard"]) < 5 - len(d["keep"]) and d["chance"] == 0.0
