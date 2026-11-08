@@ -74,10 +74,13 @@ def _boss_select(name: str, ante: int, money: int, jokers: list[str] | None = No
 def test_boss_reroll_keeps_10_from_ante_4_except_always_bosses() -> None:
     from balatrollm.analysis import boss_reroll_reason
 
-    assert boss_reroll_reason(_boss_select("The Wall", 4, 12))  # always-reroll boss
-    assert boss_reroll_reason(_boss_select("The Plant", 4, 19, ["Photograph"])) is None
-    assert boss_reroll_reason(_boss_select("The Plant", 4, 20, ["Photograph"]))
-    assert boss_reroll_reason(_boss_select("The Plant", 3, 12, ["Photograph"]))
+    assert boss_reroll_reason(_boss_select("The Needle", 4, 12))  # always-reroll boss
+    assert boss_reroll_reason(_boss_select("Violet Vessel", 4, 12))
+    # pass 3 C5: The Wall from Ante 4 keeps $10 (and needs a failed boss check)
+    assert boss_reroll_reason(_boss_select("The Wall", 4, 12)) is None
+    # pass 3 C4: The Plant is never rerolled automatically (Luna may ask)
+    assert boss_reroll_reason(_boss_select("The Plant", 4, 20, ["Photograph"])) is None
+    assert boss_reroll_reason(_boss_select("The Plant", 3, 12, ["Photograph"])) is None
 
 
 def test_the_plant_only_for_face_builds() -> None:

@@ -218,3 +218,150 @@ class TestMark:
         jk = [joker("j_pareidolia", "Pareidolia", "All cards are face cards")]
         mp = analysis.mark_play(mark_hand("S_K H_Q D_J C_K H_K", "H_2 S_3 D_7", jokers=jk))
         assert mp["any_rank"] and mp["minimum"] is None
+
+
+# ---------------------------------------------------------------------------
+# C4: Luna's own boss-reroll request; The Plant no longer automatic
+# C5: The Wall rerolled in Antes 1-3; from Ante 4 only when the boss check fails
+# ---------------------------------------------------------------------------
+def boss_shop(boss: str = "The Plant", ante: int = 2, money: int = 20, rerolls: int = 0) -> dict[str, Any]:
+    G = shop(boss=boss)
+    G["ante_num"] = ante
+    G["money"] = money
+    G["used_vouchers"] = {"v_directors_cut": ""}
+    G["round"]["boss_rerolled"] = False
+    G["luna"] = {"luna_reroll": True, "boss_rerolls": rerolls, "boss_reroll_request": None}
+    return G
+
+
+def _call(name: str, **args: Any) -> Any:
+    import json
+    from types import SimpleNamespace
+
+    call = SimpleNamespace(function=SimpleNamespace(name=name, arguments=json.dumps({"reasoning": "x", **args})))
+    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(tool_calls=[call]))])
+
+
+def _bot() -> Any:
+    from unittest.mock import AsyncMock
+
+    from .test_bot_swap import _bot as make
+
+    game = AsyncMock()
+    bot = make(game)
+    bot.harness = {"validate_actions": True, "reroll_boss": True}
+    bot._boss_rerolls = {}
+    bot._boss_reroll_request = None
+    return bot, game
+
+
+class TestLunaBossReroll:
+    def test_allowed_and_refused_in_the_shop(self) -> None:
+        assert analysis.validate_action(boss_shop(), "reroll_boss", {}) is None
+        no_voucher = boss_shop()
+        no_voucher["used_vouchers"] = {}
+        assert "Director's Cut or Retcon" in analysis.validate_action(no_voucher, "reroll_boss", {})
+        assert "costs $10" in analysis.validate_action(boss_shop(money=9), "reroll_boss", {})
+        assert "must stay" in analysis.validate_action(boss_shop(ante=4, money=19), "reroll_boss", {})
+        assert analysis.validate_action(boss_shop(ante=4, money=20), "reroll_boss", {}) is None
+        assert "one per ante" in analysis.validate_action(boss_shop(rerolls=1), "reroll_boss", {})
+        asked = boss_shop()
+        asked["luna"]["boss_reroll_request"] = {"ante": 2, "boss": "The Plant"}
+        assert "already asked" in analysis.validate_action(asked, "reroll_boss", {})
+        beaten = boss_shop()
+        beaten["blinds"]["boss"]["status"] = "DEFEATED"
+        assert "already" in analysis.validate_action(beaten, "reroll_boss", {})
+
+    def test_the_plant_is_not_rerolled_automatically(self) -> None:
+        G = blind_select("The Plant", on_deck="boss")
+        G["jokers"]["cards"] = [joker("j_photograph", "Photograph")]
+        G["jokers"]["count"] = 1
+        assert analysis.face_build(G) and analysis.boss_reroll_reason(G) is None
+
+    def test_status_line_only_when_available(self) -> None:
+        text = render(boss_shop())
+        assert "BOSS REROLL available ($10, one per ante)" in text and "The Plant turns off your face-card jokers" in text
+        assert "BOSS REROLL available" not in render(boss_shop(money=9))
+        assert "BOSS REROLL available" not in render(boss_shop(rerolls=1))
+        asked = boss_shop()
+        asked["luna"]["boss_reroll_request"] = {"ante": 2, "boss": "The Plant"}
+        assert "BOSS REROLL queued: The Plant" in render(asked)
+
+    def test_tool_offered_in_the_shop(self) -> None:
+        from balatrollm.strategy import StrategyManager
+
+        names = [t["function"]["name"] for t in StrategyManager("mastery").get_tools("SHOP")]
+        assert "reroll_boss" in names
+
+    async def test_request_queued_then_run_at_blind_select(self) -> None:
+        bot, game = _bot()
+        game.call.return_value = {"state": "SHOP"}
+        before = boss_shop()
+        await bot._execute_tool_call(_call("reroll_boss"), before)
+        assert [c.args[0] for c in game.call.call_args_list] == ["gamestate"]  # never sent to BalatroBot
+        assert bot._boss_reroll_request == {"ante": 2, "boss": "The Plant"}
+        assert "queued" in bot._history[-1]["result"]
+        # next blind select of the ante: the harness runs it, before its own check
+        game.call.reset_mock()
+        sel = blind_select("The Plant")
+        sel["ante_num"] = 2
+        after = blind_select("The Hook")
+        after["ante_num"] = 2
+        game.call.return_value = after
+        assert await bot._reroll_boss(sel) is after
+        assert [c.args[0] for c in game.call.call_args_list] == ["reroll_boss"]
+        assert bot._boss_reroll_request is None and bot._boss_rerolls == {2: 1}
+        assert "The Plant -> The Hook" in bot._history[-1]["result"]
+
+    async def test_execution_failure_keeps_the_ante_reroll(self) -> None:
+        bot, game = _bot()
+        bot._boss_reroll_request = {"ante": 2, "boss": "The Plant"}
+        sel = blind_select("The Plant")
+        sel["ante_num"] = 2
+        sel["money"] = 5  # spent below $10 after asking
+        assert await bot._reroll_boss(sel) is None
+        game.call.assert_not_called()
+        assert bot._boss_rerolls == {} and bot._boss_reroll_request is not None
+        sel["money"] = 20  # the next blind select of the ante: runs now
+        game.call.return_value = blind_select("The Hook")
+        assert await bot._reroll_boss(sel) is not None
+        assert bot._boss_rerolls == {2: 1}
+
+    async def test_request_lapses_when_the_ante_moves_on(self) -> None:
+        bot, game = _bot()
+        bot._boss_reroll_request = {"ante": 2, "boss": "The Plant"}
+        sel = blind_select("The Hook")
+        sel["ante_num"] = 3
+        await bot._reroll_boss(sel)
+        assert bot._boss_reroll_request is None
+
+    async def test_refused_request_is_a_veto(self) -> None:
+        bot, game = _bot()
+        game.call.return_value = {"state": "SHOP"}
+        await bot._execute_tool_call(_call("reroll_boss"), boss_shop(money=9))
+        assert bot._boss_reroll_request is None
+        assert "Boss reroll refused" in bot._last_failed_msg
+
+
+class TestWall:
+    def wall(self, ante: int, money: int) -> dict[str, Any]:
+        G = blind_select("The Wall")
+        G["ante_num"] = ante
+        G["money"] = money
+        return G
+
+    def test_antes_1_to_3_always(self) -> None:
+        for ante in (1, 2, 3):
+            assert "The Wall" in (analysis.boss_reroll_reason(self.wall(ante, 10)) or "")
+
+    def test_ante_4_only_when_the_boss_check_fails(self) -> None:
+        easy = self.wall(4, 20)
+        easy["blinds"]["boss"]["score"] = 1
+        assert analysis.boss_reroll_reason(easy) is None
+        hard = self.wall(4, 20)
+        hard["blinds"]["boss"]["score"] = 10_000_000
+        assert analysis.boss_check(hard)["ok"] is False
+        assert "hands" in (analysis.boss_reroll_reason(hard) or "")
+        broke = self.wall(4, 19)  # $10 must stay
+        broke["blinds"]["boss"]["score"] = 10_000_000
+        assert analysis.boss_reroll_reason(broke) is None

@@ -14,6 +14,7 @@ from openai.types.chat import ChatCompletion
 from . import seeds
 from .analysis import (
     BOSS_REROLL_MAX_PER_ANTE,
+    luna_reroll_refusal,
     main_commit,
     run_status,
     boss_reroll_reason,
@@ -101,8 +102,11 @@ class Bot:
         self._main_commit: dict[str, Any] | None = None
         # After a buy took money below $10 from Ante 4, the shop is locked (F1)
         self._shop_locked: bool = False
-        # Harness boss rerolls per ante (decision C: at most 1)
+        # Boss rerolls per ante, harness's and Luna's (decision C: at most 1)
         self._boss_rerolls: dict[int, int] = {}
+        # C4: Luna's boss-reroll request from a shop {ante, boss}, run at the
+        # next blind select of that ante
+        self._boss_reroll_request: dict[str, Any] | None = None
         # Jokers were moved for a discard (P2-15): restore before the next play
         self._phase_moved: bool = False
         # Tags the harness skipped for that have not paid yet (M1)
@@ -310,6 +314,11 @@ class Bot:
         if not self.harness.get("reroll_boss"):
             return None
         ante = int(gamestate.get("ante_num") or 1)
+        self._clear_stale_request(gamestate)
+        if getattr(self, "_boss_reroll_request", None) is not None:
+            done = await self._luna_reroll(gamestate)
+            if done is not None:
+                return done
         if self._boss_rerolls.get(ante, 0) >= BOSS_REROLL_MAX_PER_ANTE:
             return None
         reason = boss_reroll_reason(gamestate)
@@ -338,6 +347,84 @@ class Bot:
             }
         )
         return after
+
+    def _clear_stale_request(self, gamestate: dict[str, Any]) -> None:
+        """C4: a request lapses when the ante moves on or its boss is beaten."""
+        req = getattr(self, "_boss_reroll_request", None)
+        if req is None:
+            return
+        boss = (gamestate.get("blinds") or {}).get("boss") or {}
+        if int(gamestate.get("ante_num") or 1) != req["ante"] or boss.get("status") == "DEFEATED":
+            logger.info(f"Luna's boss reroll request for {req['boss']} lapsed (ante {req['ante']} is over)")
+            self._boss_reroll_request = None
+
+    async def _luna_reroll(self, gamestate: dict[str, Any]) -> dict[str, Any] | None:
+        """C4: run Luna's queued boss reroll at blind select, re-checked now
+        (she may have spent below $10 after asking). A failure is logged and
+        does not use the ante's reroll; the request stays for the next blind
+        select of the ante."""
+        assert self._balatro is not None
+        req = self._boss_reroll_request
+        assert req is not None
+        ante = int(gamestate.get("ante_num") or 1)
+        check = {**gamestate, "luna": {**(gamestate.get("luna") or {}), "boss_rerolls": self._boss_rerolls.get(ante, 0)}}
+        why = luna_reroll_refusal(check)
+        old = ((gamestate.get("blinds") or {}).get("boss") or {}).get("name", "")
+        if why is not None:
+            logger.info(f"Luna's boss reroll could not run at blind select: {why}")
+            return None
+        try:
+            after = await self._balatro.call("reroll_boss")
+        except BalatroError as e:
+            logger.warning(f"Luna's boss reroll could not run at blind select: {e}")
+            return None
+        self._boss_rerolls[ante] = self._boss_rerolls.get(ante, 0) + 1
+        self._boss_reroll_request = None
+        new = ((after.get("blinds") or {}).get("boss") or {}).get("name", "")
+        logger.info(f"Luna asked for a boss reroll: {old} -> {new}")
+        self._history.append(
+            {
+                "method": "reroll_boss",
+                "params": {},
+                "reasoning": f"your request ({req['boss']})",
+                "state": "BLIND_SELECT",
+                "ante": gamestate.get("ante_num"),
+                "round": gamestate.get("round_num"),
+                "result": f"boss rerolled for $10 as you asked: {old} -> {new}",
+                "score": None,
+                "estimate": None,
+            }
+        )
+        return after
+
+    async def _queue_boss_reroll(self, before: dict[str, Any], fn_args: dict[str, Any]) -> dict[str, Any]:
+        """C4: Luna's reroll_boss in a shop is a harness intent, never sent to
+        BalatroBot (the game rerolls only at blind select)."""
+        assert self._balatro is not None
+        assert self._collector is not None
+        boss = ((before.get("blinds") or {}).get("boss") or {}).get("name", "")
+        self._boss_reroll_request = {"ante": int(before.get("ante_num") or 1), "boss": boss}
+        logger.info(f"Luna asked for a boss reroll of {boss} (queued for the next blind select)")
+        self._collector.record_call("successful")
+        self._consecutive_vetoes = 0
+        self._consecutive_errors = 0
+        self._consecutive_faileds = 0
+        self._last_error_msg = None
+        self._last_failed_msg = None
+        self._history.append(
+            {
+                "method": "reroll_boss",
+                "params": {},
+                "reasoning": str(fn_args.get("reasoning", "")),
+                "state": before.get("state", ""),
+                "ante": before.get("ante_num"),
+                "round": before.get("round_num"),
+                "result": f"boss reroll queued for the next blind select ({boss}; $10 then)",
+                "score": None,
+                "estimate": None,
+            }
+        )
+        return await self._balatro.call("gamestate")
 
     def _skip_for_tag(self, gamestate: dict[str, Any]) -> bool:
         """True when the blind on deck offers a tag the strategy skips for."""
@@ -529,6 +616,12 @@ class Bot:
             self._consecutive_rearranges = 0
         if veto is not None:
             return await self._handle_veto(veto, before)
+        if fn_name == "reroll_boss" and before.get("state") in SHOP_STATES:
+            if not self.harness.get("reroll_boss"):
+                return await self._handle_veto("Boss reroll refused: not available in this strategy.", before)
+            if why := luna_reroll_refusal(before):
+                return await self._handle_veto(f"Boss reroll refused: {why}.", before)
+            return await self._queue_boss_reroll(before, fn_args)
         if fn_name == "reroll":
             self._shop_rerolls += 1
 
@@ -690,6 +783,7 @@ class Bot:
         """Harness facts the templates and validate_action read from ``G["luna"]``."""
         self._main_commit = main_commit(gamestate, self._main_commit)
         ante = int(gamestate.get("ante_num") or 1)
+        self._clear_stale_request(gamestate)
         # Investment Tag pays at this ante's boss cash-out: gone once the ante moves on
         self._pending_tags = [t for t in getattr(self, "_pending_tags", []) if t["ante"] >= ante]
         gamestate["luna"] = {
@@ -698,6 +792,10 @@ class Bot:
             "first_shop": self._in_shop and self._shop_visits == 1,
             "shop_locked": self._shop_locked,
             "sell_in_pack": bool(self.harness.get("sell_in_pack")),
+            # C4: Luna's boss reroll (harness flag reroll_boss runs it)
+            "luna_reroll": bool(self.harness.get("reroll_boss")),
+            "boss_rerolls": getattr(self, "_boss_rerolls", {}).get(ante, 0),
+            "boss_reroll_request": getattr(self, "_boss_reroll_request", None),
         }
         if gamestate.get("state") in SHOP_STATES:
             # The STATUS Luna sees (with the run's rounds: safety net, last
