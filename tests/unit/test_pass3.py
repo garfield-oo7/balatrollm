@@ -795,13 +795,15 @@ class TestReviewRound4Opus:
         assert analysis.play_estimate(G, pair["cards"]) == pair["score"]
         assert "-> about 61, at worst 40 (reaches PER_HAND)" in render(G)
 
-    def test_sure_win_over_the_cap_keeps_wins(self) -> None:
+    @pytest.mark.parametrize("cap", [1, analysis.MARK_HELD_FLOOR_MAX])
+    def test_sure_win_over_the_cap_keeps_wins(self, cap: int, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(analysis, "MARK_HELD_FLOOR_MAX", cap)
         G = mark_hand("S_J H_J S_Q", "H_2 H_4 H_6 H_8 H_T", jokers=[joker("j_baron", "Baron")])
         for c in G["cards"]["cards"]:
             if c["value"]["rank"] == "K":
                 c["modifier"] = {"enhancement": "GLASS", "edition": "POLYCHROME"}
         G = self._last_hand(G, 236, {"S_K", "H_K", "D_K", "C_K", "D_Q"})
-        assert analysis._mark_held_fills(G) == "unknown"
+        assert (analysis._mark_held_fills(G) == "unknown") == (cap == 1)
         A = analysis.play_advice(G)
         fl = next(p for p in A["plays"] if p["hand"] == "Flush")
         assert fl["floor"] == 260 and fl["wins"]
@@ -811,9 +813,59 @@ class TestReviewRound4Opus:
         ("j_blackboard", "Blackboard", "H_9 D_9 S_2 C_3", 56),
         ("j_raised_fist", "Raised Fist", "H_9 D_9 S_A", 616),
     ])
-    def test_masked_floor_never_above_the_real_score(self, key: str, name: str, visible: str, want: int) -> None:
+    def test_masked_floor_never_above_the_real_score(self, key: str, name: str, visible: str, want: int,
+                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(analysis, "MARK_HELD_FLOOR_MAX", 1)  # force the over-the-cap (masked floor) path
         G = mark_hand("H_J D_Q H_K", visible, jokers=[joker(key, name)])
         G = self._last_hand(G, 120, {"H_J", "D_J", "H_Q", "D_Q", "H_K", "D_K", "S_K", "C_K"})
         assert analysis._mark_held_fills(G) == "unknown"
         pair = next(p for p in analysis.play_advice(G)["plays"] if p["hand"] == "Pair")
         assert pair["floor"] == want and pair["score"] == want
+
+
+class TestReviewRound5Opus:
+    """opus R5-1: over the case cap the pick per hand type fell back to the
+    masked score. Held face-down cards are now walked by the classes
+    estimate_play can tell apart, so such hands are exact."""
+
+    def _moon(self) -> dict[str, Any]:
+        G = mark_hand("S_Q H_Q D_Q", "H_T D_A C_2 S_4 D_6", jokers=[joker("j_shoot_the_moon", "Shoot the Moon")])
+        G["hand"]["cards"][3]["modifier"] = {"enhancement": "BONUS"}
+        G["hand"]["cards"][4]["modifier"] = {"enhancement": "MULT"}
+        deck = [card("C_Q"), card("S_9"), card("H_7")]
+        for s in "SHDC":
+            q = card(f"{s}_Q")
+            q["modifier"] = {"enhancement": "GOLD"}
+            deck.append(q)
+        G["cards"]["cards"] = deck
+        G["cards"]["count"] = len(deck)
+        G["blinds"]["boss"]["score"] = 1000
+        G["round"].update(hands_left=1, discards_left=0)
+        return G
+
+    def test_sure_win_with_eight_unseen_queens(self) -> None:
+        G = self._moon()
+        assert isinstance(analysis._mark_held_fills(G), list)  # 336 card fillings, 8 class sequences
+        A = analysis.play_advice(G)
+        hc = next(p for p in A["plays"] if p["hand"] == "High Card")
+        assert hc["cards"] == [3] and hc["floor"] == 1800 and hc["wins"]
+        assert A["action"] == {"tool": "play", "cards": [3], "why": "High Card WINS"}
+
+    def test_class_walk_equals_card_by_card_floor(self) -> None:
+        jk = [joker("j_baron", "Baron"), joker("j_shoot_the_moon", "Shoot the Moon"), joker("j_blackboard", "Blackboard"),
+              joker("j_raised_fist", "Raised Fist"), joker("j_mime", "Mime")]
+        G = mark_hand("S_K H_Q D_J", "H_5 D_5 C_2 S_3 S_7", jokers=jk)
+        for c in G["cards"]["cards"]:
+            if c["key"] in ("C_K", "S_J"):
+                c["modifier"] = {"enhancement": "STEEL", "seal": "RED"}
+        G["cards"]["cards"] = [c for c in G["cards"]["cards"] if c["value"]["rank"] not in ("J", "Q", "K") or c["key"] in ("C_K", "S_J", "D_K", "H_J")]
+        G["cards"]["count"] = len(G["cards"]["cards"])
+        hand = G["hand"]["cards"]
+        hidden = [i for i, c in enumerate(hand) if (c.get("state") or {}).get("hidden")]
+        pool = analysis._mark_pool(G)
+        fills = analysis._mark_held_fills(G)
+        assert isinstance(fills, list)
+        for idx in ([3, 4], [5], [6], [3, 4, 7]):
+            want = analysis._mark_floor(G, pool, hand, hidden, idx)
+            got = min(analysis._fill_score(G, f, idx) for f in fills)
+            assert got == want, (idx, got, want)
