@@ -59,7 +59,7 @@ JSON-RPC 2.0 HTTP client for BalatroBot mod. Async client to `http://127.0.0.1:1
 
 #### LLMClient (`llm.py`)
 
-Async OpenAI client wrapper with retry logic. Provider-agnostic (works with OpenAI, OpenRouter, any compatible API). Default: OpenRouter. Exponential backoff (max 3 retries), aborts after 3 consecutive timeouts. Default timeout: 240s.
+Async OpenAI client wrapper with retry logic. Provider-agnostic (works with OpenAI, OpenRouter, any compatible API). Default: OpenRouter. Exponential backoff (max 3 retries), aborts after 3 consecutive timeouts. Default timeout: 120s per attempt, SDK-internal retries off (pass 4 B0b).
 
 #### StrategyManager (`strategy.py`)
 

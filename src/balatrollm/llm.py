@@ -497,8 +497,12 @@ class LLMClient:
 
     base_url: str | None
     api_key: str | None
-    timeout: float = 240.0  # We assume that LLMs respond in 240s
+    # B0b (pass 4): 120 s per attempt (baseline p99 12.6 s, p99.9 28.6 s; only
+    # SDK stalls of ~245 s were slower) and no SDK-internal retries, so this
+    # class's own attempts are the only retries (a stall cost up to 3 x 240 s).
+    timeout: float = 120.0
     max_retries: int = 3
+    sdk_max_retries: int = 0
     api: API = "chat"
 
     _client: openai.AsyncOpenAI | anthropic.AsyncAnthropic | None = field(
@@ -515,12 +519,14 @@ class LLMClient:
                 base_url=self.base_url,
                 api_key=self.api_key,
                 timeout=self.timeout,
+                max_retries=self.sdk_max_retries,
             )
         else:
             self._client = openai.AsyncOpenAI(
                 base_url=self.base_url or DEFAULT_OPENAI_BASE_URL,
                 api_key=self.api_key or "",
                 timeout=self.timeout,
+                max_retries=self.sdk_max_retries,
             )
         self._consecutive_timeouts = 0
         return self

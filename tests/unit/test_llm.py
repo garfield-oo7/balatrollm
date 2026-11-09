@@ -101,9 +101,10 @@ class TestLLMClientInit:
     """Tests for LLMClient initialization."""
 
     def test_default_timeout(self) -> None:
-        """Default timeout should be 240 seconds."""
+        """Default timeout is 120 seconds per attempt (B0b, pass 4)."""
         client = LLMClient(base_url="https://api.test.com", api_key="test-key")
-        assert client.timeout == 240.0
+        assert client.timeout == 120.0
+        assert client.sdk_max_retries == 0
 
     def test_default_max_retries(self) -> None:
         """Default max_retries should be 3."""
@@ -146,7 +147,8 @@ class TestLLMClientContextManager:
                 mock_openai.assert_called_once_with(
                     base_url="https://api.test.com",
                     api_key="test-key",
-                    timeout=240.0,
+                    timeout=120.0,
+                    max_retries=0,
                 )
 
     async def test_exit_closes_client(self) -> None:
@@ -920,7 +922,7 @@ class TestLLMClientAnthropicApi:
             async with client:
                 pass
         mock_anthropic.assert_called_once_with(
-            base_url=None, api_key=None, timeout=240.0
+            base_url=None, api_key=None, timeout=120.0, max_retries=0
         )
 
     async def test_routes_to_messages_endpoint(self) -> None:
