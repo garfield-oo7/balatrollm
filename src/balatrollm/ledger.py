@@ -151,7 +151,10 @@ def finish_row(
     row["chosen"] = chosen
     if fn_name and before.get("state") in SHOP_STATES:
         # computed for every shop decision, rendered / executed only under auto_swap_jokers
-        row["swap_plan"] = _safe(swap_plan, before, fn_name, params)
+        # the advice-on counterfactual: computed as if pack swaps were allowed (A1 turns
+        # sell_in_pack off for execution only; Sol g1 #2)
+        luna = {**(before.get("luna") or {}), "sell_in_pack": True}
+        row["swap_plan"] = _safe(swap_plan, {**before, "luna": luna}, fn_name, params)
     row["outcome"] = outcome
     row["money_after"] = (after or {}).get("money")
     row["state_after"] = (after or {}).get("state")
