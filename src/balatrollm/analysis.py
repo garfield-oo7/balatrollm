@@ -3769,13 +3769,20 @@ def boss_reroll_reason(G: dict[str, Any]) -> str | None:
     return None
 
 
-def luna_reroll_refusal(G: dict[str, Any]) -> str | None:
+def luna_reroll_refusal(G: dict[str, Any], legal_only: bool | None = None) -> str | None:
     """C4: why Luna's boss-reroll request is refused now (None: allowed).
 
     Director's Cut (once per ante) or Retcon, $10, one reroll per ante (shared
     with the harness's, ``G["luna"]["boss_rerolls"]``), from Ante 4 $10 kept
     after it, boss not yet defeated. Checked when Luna asks (SHOP) and again
-    at the blind select that runs it."""
+    at the blind select that runs it.
+
+    Pass 4 A1: ``legal_only`` (default: ``G["luna"]["advice_vetoes"] is False``)
+    keeps only the game's rules (voucher, Director's Cut once per ante, $10,
+    boss not yet played) and drops the advice rules (one per ante, $10 kept
+    from Ante 4)."""
+    if legal_only is None:
+        legal_only = (G.get("luna") or {}).get("advice_vetoes") is False
     vouchers = set(G.get("used_vouchers") or {})
     if not vouchers & {"v_directors_cut", "v_retcon"}:
         return "it needs Director's Cut or Retcon"
@@ -3783,13 +3790,15 @@ def luna_reroll_refusal(G: dict[str, Any]) -> str | None:
     if boss.get("status") not in ("UPCOMING", "SELECT"):
         return "this ante's boss is already being played or beaten"
     luna = G.get("luna") or {}
-    if int(luna.get("boss_rerolls") or 0) >= BOSS_REROLL_MAX_PER_ANTE:
+    if not legal_only and int(luna.get("boss_rerolls") or 0) >= BOSS_REROLL_MAX_PER_ANTE:
         return "the boss was already rerolled this ante (one per ante)"
     if "v_retcon" not in vouchers and (G.get("round") or {}).get("boss_rerolled"):
         return "Director's Cut was already used this ante"
     money = int(G.get("money") or 0)
     if money < BOSS_REROLL_COST:
         return f"it costs ${BOSS_REROLL_COST} and you have ${money}"
+    if legal_only:
+        return None
     if int(G.get("ante_num") or 1) >= BOSS_REROLL_KEEP_FROM_ANTE and money - BOSS_REROLL_COST < BOSS_REROLL_KEEP:
         return f"from Ante 4 ${BOSS_REROLL_KEEP} must stay after the ${BOSS_REROLL_COST} reroll (you have ${money})"
     return None
@@ -4271,12 +4280,84 @@ def reroll_veto(G: dict[str, Any], rerolls: int) -> str | None:
     return None
 
 
+def _legal_only_rest(
+    G: dict[str, Any], method: str, params: dict[str, Any], shop_rerolls: int, full: bool
+) -> str | None:
+    """Pass 4 A1 (advice_vetoes off): the legality / protection checks of
+    validate_action after the card-count checks, with the same messages."""
+    if method == "reroll" and shop_rerolls >= REROLL_RUNAWAY:  # loop guard only
+        return "Reroll refused: too many rerolls in one shop. Call next_round."
+    if method == "buy" and "card" in params and G.get("state") == "SHOP" and full:
+        # Legality (build thread, 2026-11-09): the game rejects a full-slot joker buy, and 3 game rejections in a row
+        # end the run; a refusal here instead counts toward leaving the shop. Negative jokers bring their own slot.
+        try:
+            card = _area_cards(G, "shop")[int(params["card"])]
+        except (IndexError, TypeError, ValueError):
+            card = {}
+        if card.get("set") == "JOKER" and _norm(card)["ed"] != "NEGATIVE":
+            return "Your joker slots are full. To buy a joker with full slots, sell one first."
+    if method == "pack":
+        if params.get("skip") and params.get("card") is not None:
+            return "Use either `card` or `skip`, not both."
+        if params.get("card") is not None:
+            pack = _area_cards(G, "pack")
+            try:
+                chosen = pack[int(params["card"])]
+            except (IndexError, TypeError, ValueError):
+                return None
+            key = chosen.get("key", "")
+            sell_in_pack = bool((G.get("luna") or {}).get("sell_in_pack"))
+            if (
+                (chosen.get("set") == "JOKER" and not sell_in_pack)
+                or key in ("c_judgement", "c_soul", "c_wraith")
+            ) and full:
+                return (
+                    "Your joker slots are full: this card would be wasted (you cannot sell inside a pack). "
+                    "Skip the pack or pick another card."
+                )
+            if key == "c_death" and len(params.get("targets") or []) != 2:
+                return "Death needs exactly 2 targets: [junk card, card to copy]."
+    if method == "reroll_boss":
+        if G.get("state") == "SHOP":
+            if (G.get("luna") or {}).get("boss_reroll_request"):
+                return "Boss reroll refused: you already asked for one; it runs at the next blind select."
+            if why := luna_reroll_refusal(G, legal_only=True):
+                return f"Boss reroll refused: {why}."
+            return None
+        if G.get("state") != "BLIND_SELECT":
+            return "reroll_boss only works in the shop (request) or on the blind select screen."
+        if not boss_reroll_available(G):
+            return (
+                "Boss reroll refused: it needs Director's Cut (once per ante) or "
+                f"Retcon and ${BOSS_REROLL_COST}."
+            )
+    if method == "use":
+        cons = _area_cards(G, "consumables")
+        try:
+            chosen = cons[int(params.get("consumable", -1))]
+        except (IndexError, TypeError, ValueError):
+            return None
+        key = chosen.get("key", "")
+        if key in ("c_judgement", "c_soul", "c_wraith") and full:
+            return "Your joker slots are full: sell a joker before using this card."
+        if key == "c_death" and len(params.get("cards") or []) != 2:
+            return "Death needs exactly 2 cards: [junk card, card to copy]."
+    return None
+
+
 def validate_action(
-    G: dict[str, Any], method: str, params: dict[str, Any], shop_rerolls: int = 0
+    G: dict[str, Any], method: str, params: dict[str, Any], shop_rerolls: int = 0, advice: bool = True
 ) -> str | None:
     """Return an error message for illegal or strictly bad actions, else None.
 
     ``shop_rerolls`` is how many rerolls the bot already made in this shop visit.
+    ``advice=False`` (pass 4 A1, harness flag ``advice_vetoes``) keeps only the
+    legality / format / protection checks (card counts, duplicates, pack
+    card+skip, full-slot pack joker / Judgement / Soul / Wraith, Death targets,
+    reroll_boss legality, the runaway reroll loop guard) and drops the advice
+    vetoes of legal choices (first-shop Buffoon, shop lock, reroll money lines,
+    Joker Stencil, sell veto, Buffoon pack with full slots, second Blue Seal,
+    reroll_boss advice rules, The Mark face-down targets).
     """
     jokers = G.get("jokers") or {}
     full = int(jokers.get("count", 0)) >= int(jokers.get("limit", 5))
@@ -4298,6 +4379,8 @@ def validate_action(
         if "first_shop" in luna
         else int(G.get("ante_num") or 1) == 1 and int(G.get("round_num") or 1) == 1
     )
+    if not advice:
+        return _legal_only_rest(G, method, params, shop_rerolls, full)
     if (
         method == "buy"
         and "card" in params
@@ -4579,6 +4662,7 @@ TEMPLATE_GLOBALS = {
     "consumable_tag": knowledge.consumable_tag,
     "voucher_tag": knowledge.voucher_tag,
     "boss_counter": knowledge.boss_counter,
+    "boss_fact": knowledge.boss_fact,
     "ANTE_BASE": ANTE_BASE,
 }
 TEMPLATE_FILTERS = {

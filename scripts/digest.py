@@ -1,6 +1,6 @@
 """After-game digest: facts per shop visit and per game, from a run's logged files.
 
-Usage: python3 -I scripts/digest.py <run_dir> [<run_dir> ...] [--log <games_log.jsonl>]
+Usage: python3 -I scripts/digest.py <run_dir or folder of run dirs> [...] [--log <games_log.jsonl>]
 
 Writes <run_dir>/digest.json and, with --log, appends one summary line per game.
 Runs are identified by their task seed (a private label such as SEED-A); the real
@@ -305,7 +305,23 @@ def ended_game_over(run: Path) -> bool:
 
 
 LESSON_ID = re.compile(r"\[([A-Za-z0-9-]+)\]")
-DEFAULT_LESSONS = Path(__file__).resolve().parents[1] / "src" / "balatrollm" / "strategies" / "mastery" / "lessons.json"
+STRATEGIES = Path(__file__).resolve().parents[1] / "src" / "balatrollm" / "strategies"
+DEFAULT_LESSONS = STRATEGIES / "mastery" / "lessons.json"
+
+
+def lessons_path(task: dict[str, Any]) -> Path:
+    """Pass 4 A1: the run's own strategy's lessons.json (e.g. mastery-noadvice), else mastery's."""
+    own = STRATEGIES / str(task.get("strategy") or "mastery") / "lessons.json"
+    return own if own.exists() else DEFAULT_LESSONS
+
+
+def run_dirs(arg: str) -> list[Path]:
+    """A run dir, or (pass 4 A1) a folder of run dirs such as
+    runs/<version>/mastery-noadvice/<vendor>/<model>: every child with a task.json."""
+    p = Path(arg)
+    if (p / "task.json").exists():
+        return [p]
+    return sorted(d for d in p.glob("**/2026*_*") if (d / "task.json").exists()) or [p]
 
 
 def lesson_follow(ds: list[dict[str, Any]], lessons_path: Path = DEFAULT_LESSONS) -> dict[str, dict[str, int]]:
@@ -418,7 +434,7 @@ def digest(run: Path) -> dict[str, Any]:
         "rerolls_below_25_ante2_3": sum(v["rerolls_below_25"] for v in visits if v["ante"] in (2, 3)),
         "repeated_dips": dip_flag(visits),
         "harness": hl,
-        "lessons": lesson_follow(ds),
+        "lessons": lesson_follow(ds, lessons_path(task)),
         "mark_rounds": mark_rounds(ds),
         "tight_first_shop": tight_first_shop(visits, ds),
         "luna_boss_rerolls": {"asked": hl["luna_reroll_asked"], "done": hl["luna_reroll_done"],
@@ -439,8 +455,7 @@ def main(argv: list[str]) -> None:
         i = argv.index("--log")
         log = Path(argv[i + 1])
         argv = argv[:i] + argv[i + 2 :]
-    for a in argv:
-        run = Path(a)
+    for run in [r for a in argv for r in run_dirs(a)]:
         dg = digest(run)
         (run / "digest.json").write_text(json.dumps(dg, indent=1))
         line = {k: v for k, v in dg.items() if k != "shop_visits"}
