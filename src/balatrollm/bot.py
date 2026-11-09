@@ -315,14 +315,19 @@ class Bot:
         Returns the new gamestate, or None when no reroll was made.
         """
         assert self._balatro is not None
-        if not self.harness.get("reroll_boss"):
+        auto = bool(self.harness.get("reroll_boss"))
+        # Pass 4 A1: Luna's own request (``luna_reroll_boss``) runs even with
+        # the automatic rerolls (``reroll_boss``) off
+        if not auto and not self._luna_reroll_on():
             return None
         ante = int(gamestate.get("ante_num") or 1)
         self._clear_stale_request(gamestate)
-        if getattr(self, "_boss_reroll_request", None) is not None:
+        if getattr(self, "_boss_reroll_request", None) is not None and self._luna_reroll_on():
             done = await self._luna_reroll(gamestate)
             if done is not None:
                 return done
+        if not auto:
+            return None
         if self._boss_rerolls.get(ante, 0) >= BOSS_REROLL_MAX_PER_ANTE:
             return None
         reason = boss_reroll_reason(gamestate)
@@ -372,6 +377,8 @@ class Bot:
         assert req is not None
         ante = int(gamestate.get("ante_num") or 1)
         check = {**gamestate, "luna": {**(gamestate.get("luna") or {}), "boss_rerolls": self._boss_rerolls.get(ante, 0)}}
+        if not self._advice_vetoes_on():  # pass 4 A1: BLIND_SELECT states are not annotated
+            check["luna"]["advice_vetoes"] = False
         why = luna_reroll_refusal(check)
         old = ((gamestate.get("blinds") or {}).get("boss") or {}).get("name", "")
         if why is not None:
@@ -607,7 +614,9 @@ class Bot:
         veto: str | None = None
         self._track_shop_visit(before)
         if self.harness.get("validate_actions") and before:
-            veto = validate_action(before, fn_name, params, self._shop_rerolls)
+            veto = validate_action(
+                before, fn_name, params, self._shop_rerolls, advice=self._advice_vetoes_on()
+            )
         max_rearranges = int(self.harness.get("max_consecutive_rearranges", 0) or 0)
         if fn_name == "rearrange":
             self._consecutive_rearranges += 1
@@ -621,9 +630,9 @@ class Bot:
         if veto is not None:
             return await self._handle_veto(veto, before)
         if fn_name == "reroll_boss" and before.get("state") in SHOP_STATES:
-            if not self.harness.get("reroll_boss"):
+            if not self._luna_reroll_on():
                 return await self._handle_veto("Boss reroll refused: not available in this strategy.", before)
-            if why := luna_reroll_refusal(before):
+            if why := luna_reroll_refusal(before, legal_only=not self._advice_vetoes_on()):
                 return await self._handle_veto(f"Boss reroll refused: {why}.", before)
             return await self._queue_boss_reroll(before, fn_args)
         if fn_name == "reroll":
@@ -695,7 +704,7 @@ class Bot:
             self._collector.record_call("successful")
             self._collector.write_gamestate(gamestate)
             self._consecutive_vetoes = 0
-            if shop_lock_after(before, fn_name, gamestate):
+            if self.harness.get("shop_lock", True) and shop_lock_after(before, fn_name, gamestate):
                 self._shop_locked = True
                 logger.info("Harness locked the shop: Ante 4+ buy left money below $10")
             result = swap_note + summarize_outcome(fn_name, params, before, gamestate)
@@ -790,11 +799,26 @@ class Bot:
             self._shop_locked = False
         self._in_shop = in_shop
 
+    def _luna_reroll_on(self) -> bool:
+        """Pass 4 A1: Luna's own reroll_boss requests (``luna_reroll_boss``;
+        absent = follows ``reroll_boss`` as before)."""
+        return bool(self.harness.get("luna_reroll_boss", self.harness.get("reroll_boss")))
+
+    def _advice_vetoes_on(self) -> bool:
+        """Pass 4 A1: validate_action's advice vetoes (``advice_vetoes``,
+        absent = on); the legality checks follow ``validate_actions``."""
+        return bool(self.harness.get("advice_vetoes", True))
+
     def _annotate(self, gamestate: dict[str, Any]) -> None:
         """Harness facts the templates and validate_action read from ``G["luna"]``."""
         self._main_commit = main_commit(gamestate, self._main_commit)
         ante = int(gamestate.get("ante_num") or 1)
-        if self._main_commit is None and gamestate.get("state") == "SHOP" and ante >= DEADLINE_ANTE:
+        if (
+            self._main_commit is None
+            and gamestate.get("state") == "SHOP"
+            and ante >= DEADLINE_ANTE
+            and self.harness.get("deadline_commit", True)  # pass 4 A1
+        ):
             # C6: still OPEN at the end of Ante 2 -> commit (sticky like a joker commit)
             self._main_commit = deadline_commit(gamestate, self._history)
             logger.info(f"Harness MAIN_HAND deadline commit: {self._main_commit['hand']} ({self._main_commit['trigger']})")
@@ -808,10 +832,13 @@ class Bot:
             "shop_locked": self._shop_locked,
             "sell_in_pack": bool(self.harness.get("sell_in_pack")),
             # C4: Luna's boss reroll (harness flag reroll_boss runs it)
-            "luna_reroll": bool(self.harness.get("reroll_boss")),
+            "luna_reroll": self._luna_reroll_on(),
             "boss_rerolls": getattr(self, "_boss_rerolls", {}).get(ante, 0),
             "boss_reroll_request": getattr(self, "_boss_reroll_request", None),
         }
+        if not self._advice_vetoes_on():
+            # pass 4 A1: only added when off, so G["luna"] is unchanged for mastery
+            gamestate["luna"]["advice_vetoes"] = False
         if gamestate.get("state") in SHOP_STATES:
             # The STATUS Luna sees (with the run's rounds: safety net, last
             # blind on its final hand); the validators use it too
