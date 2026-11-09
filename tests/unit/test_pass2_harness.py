@@ -213,12 +213,13 @@ def test_validators_use_the_displayed_status() -> None:
     G["money"] = 20
     G["hands"]["Pair"].update(chips=500, mult=50, level=20)
     bot = _bot(AsyncMock())
-    bot._rounds = [{"hands_left": 0}]  # last blind won on its final hand: THIN
+    bot._rounds = [{"hands_left": 0}]
     bot._history = []
     bot._pending_tags = []
     bot._annotate(G)
-    assert G["luna"]["status"] == "THIN"
-    assert analysis.run_status(G, [], [])["status"] == "COMFORTABLE"  # without rounds
+    assert G["luna"]["status"] == analysis.run_status(G, bot._rounds, [])["status"] == "COMFORTABLE"
+    assert analysis.validate_action(G, "reroll", {}) is not None  # $25 line (COMFORTABLE)
+    G["luna"]["status"] = "THIN"  # the displayed status decides, not a recomputation
     assert analysis.validate_action(G, "reroll", {}) is None  # $10 line (THIN), not $25
     key_with = analysis._state_key(G, "x")
     G["luna"].pop("status")

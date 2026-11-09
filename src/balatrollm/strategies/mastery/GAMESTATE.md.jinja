@@ -32,7 +32,7 @@
 - ECON_OK {{ "YES" if S.econ_ok else "NO" }} (economy jokers owned {{ S.econ_owned }}) | BLUE_SEALS {{ S.blue_seals }}{% if not S.blue_seals %} (none yet: Standard packs and Blue Seal cards are wanted){% endif %}{% if S.hologram %} | HOLOGRAM owned (every card added helps){% endif %}
 {% for t in S.pending_tags %}- PENDING TAG: {{ t }}
 {% endfor %}- INTEREST_SPARE ${{ S.interest_spare }} (spend up to this and next round's interest stays ${{ S.interest }})
-- STATUS: {{ S.status }} for the next blind ({{ S.next_name }}){% if S.hands_needed %}: {{ S.sit_target | fmt_num }} needs about {{ S.hands_needed }} of {{ S.next_hands }} hands at about {{ S.sit_per | fmt_num }} per hand (your best plays: {{ S.best_types | join(", ") }}){% endif %}{% if S.safety_net %}; your last 2 blinds were each won with 2+ hands left{% endif %}{% if S.status in ["THIN", "SHORT"] %} -> score buys may use SCORE_SPENDABLE{% endif %}
+- STATUS: {{ S.status }} for the next blind ({{ S.next_name }}){% if S.win_pct is not none %}, win chance about {{ S.win_pct }}%{% endif %}{% if S.hands_needed %}: {{ S.sit_target | fmt_num }} needs about {{ S.hands_needed }} of {{ S.next_hands }} hands at about {{ S.sit_per | fmt_num }} per hand (your best plays: {{ S.best_types | join(", ") }}){% endif %}{% if S.safety_net %}; your last 2 blinds were each won with 2+ hands left{% endif %}{% if S.status in ["THIN", "SHORT"] %} -> score buys may use SCORE_SPENDABLE{% endif %}
 {%- if S.last_spare is not none and G.state != "SELECTING_HAND" %}
 - LAST BLIND: won with {{ S.last_spare }} hand{{ "s" if S.last_spare != 1 }} spare (a signal; STATUS is the test)
 {%- endif %}
