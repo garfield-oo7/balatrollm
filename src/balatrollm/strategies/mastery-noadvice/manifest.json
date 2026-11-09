@@ -1,0 +1,30 @@
+{
+  "$schema": "https://gist.githubusercontent.com/S1M0N38/5dc776cea0afa506ee7a4b20585558c6/raw/d2b92433fcc9d069c26958ff22b1f06777ecb91e/strategy.schema.json",
+  "name": "Mastery (no advice)",
+  "description": "Pass 4 arm A1 (harness vs Luna): the mastery harness's computed FACTS (listed plays with scores / WINS, draws with odds, ROUND, STATUS, BOSS CHECK, shop SCORE and swaps, joker contributions) with its ADVICE (suggestions, rankings, rules, tags, lessons) and AUTO-ACTIONS (swap-sell, reorder, boss rerolls, tag skips, deadline commit, shop lock, advice vetoes) turned off.",
+  "author": "BalatroLLM",
+  "version": "1.0.0",
+  "tags": [
+    "analyser",
+    "small-model",
+    "ablation"
+  ],
+  "harness": {
+    "system_prompt": true,
+    "validate_actions": true,
+    "advice_vetoes": false,
+    "auto_reorder_jokers": false,
+    "max_consecutive_rearranges": 2,
+    "suggest_action": false,
+    "suggest_discard": false,
+    "auto_swap_jokers": false,
+    "skip_blind_tags": {},
+    "reroll_boss": false,
+    "luna_reroll_boss": true,
+    "joker_phase_order": false,
+    "sell_in_pack": false,
+    "deadline_commit": false,
+    "shop_lock": false,
+    "lessons": false
+  }
+}
