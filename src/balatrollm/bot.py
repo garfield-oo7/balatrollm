@@ -41,6 +41,7 @@ from .collector import (
     is_real_win,
 )
 from .config import Config, Task, get_model_config
+from . import ledger
 from .llm import LLMClient, LLMClientError, LLMTimeoutError
 from .strategy import StrategyManager, StrategyManifest
 
@@ -102,6 +103,10 @@ class Bot:
         self._balatro: BalatroClient | None = None
         self._llm: LLMClient | None = None
         self._collector: Collector | None = None
+        # B0c results ledger: the row being built for the current Luna call
+        self._ledger_row: dict[str, Any] | None = None
+        self._ledger_call: tuple[str, dict[str, Any]] | None = None
+        self._ledger_out: dict[str, Any] = {}
 
         self._last_error_msg: str | None = None
         self._last_failed_msg: str | None = None
@@ -190,6 +195,19 @@ class Bot:
         )
         root_logger.addHandler(file_handler)
         self._file_handler = file_handler
+
+    def _write_ledger(self, before: dict[str, Any], after: dict[str, Any] | None) -> None:
+        """B0c: one decisions.jsonl row per Luna call (read-only for play)."""
+        row = getattr(self, "_ledger_row", None)
+        if row is None or self._collector is None:
+            return
+        self._ledger_row = None
+        try:
+            fn_name, fn_args = self._ledger_call or (None, None)
+            ledger.finish_row(row, before, fn_args, fn_name, dict(self._ledger_out), after)
+            self._collector.write_decision(row)
+        except Exception as e:
+            logger.warning(f"Ledger row failed: {e}")
 
     def _teardown_file_logging(self) -> None:
         handler = getattr(self, "_file_handler", None)
@@ -314,8 +332,12 @@ class Bot:
                         self._last_hand_state = gamestate
                     self._track_shop_visit(gamestate)
                     self._annotate(gamestate)
+                    decided_on = gamestate
+                    self._ledger_call = None
+                    self._ledger_out = {"result": "unknown"}
                     response = await self._get_llm_response(gamestate)
                     gamestate = await self._execute_tool_call(response, gamestate)
+                    self._write_ledger(decided_on, gamestate)
                 case "ROUND_EVAL":
                     if self._last_hand_state is not None:
                         self._rounds.append(
@@ -435,6 +457,7 @@ class Bot:
         return after
 
     async def _queue_boss_reroll(self, before: dict[str, Any], fn_args: dict[str, Any]) -> dict[str, Any]:
+        self._ledger_out = {"result": "queued_boss_reroll"}
         """C4: Luna's reroll_boss in a shop is a harness intent, never sent to
         BalatroBot (the game rerolls only at blind select)."""
         assert self._balatro is not None
@@ -527,6 +550,13 @@ class Bot:
                 }
             ]
 
+        # B0c: what the harness computed for this decision (rendered or not)
+        try:
+            self._ledger_row = ledger.pre_row(gamestate, self._rounds, self._history, self.harness)
+        except Exception as e:
+            logger.warning(f"Ledger pre-row failed: {e}")
+            self._ledger_row = None
+
         tools = self.strategy.get_tools(gamestate["state"])
 
         request_data = {
@@ -537,6 +567,8 @@ class Bot:
         }
 
         custom_id = self._collector.write_request(request_data)
+        if self._ledger_row is not None:
+            self._ledger_row["custom_id"] = custom_id
         request_id = str(time.time_ns() // 1_000_000)
 
         try:
@@ -632,6 +664,7 @@ class Bot:
 
         before = before or {}
         params = {k: v for k, v in fn_args.items() if k != "reasoning"}
+        self._ledger_call = (fn_name, fn_args)
 
         ################################################################################
         # Harness guards (opt-in via strategy manifest)
@@ -732,6 +765,7 @@ class Bot:
                 self._shop_locked = True
                 logger.info("Harness locked the shop: Ante 4+ buy left money below $10")
             result = swap_note + summarize_outcome(fn_name, params, before, gamestate)
+            self._ledger_out = {"result": "ok", "summary": result, "harness_sold": swap_note or None}
             score: int | None = None
             if fn_name == "play":
                 chips_before = int((before.get("round") or {}).get("chips") or 0)
@@ -776,6 +810,7 @@ class Bot:
         assert self._collector is not None
 
         logger.warning(f"Error call: {msg}")
+        self._ledger_out = {"result": "error", "msg": msg}
         self._last_error_msg = msg
         self._collector.record_failure()
         self._collector.record_call("error")
@@ -863,6 +898,7 @@ class Bot:
         assert self._collector is not None
 
         logger.warning(f"Vetoed call: {msg}")
+        self._ledger_out = {"result": "vetoed", "msg": msg}
         self._last_failed_msg = f"Refused by harness: {msg}"
         self._collector.record_call("failed")
         self._consecutive_vetoes += 1
@@ -915,6 +951,7 @@ class Bot:
         assert self._collector is not None
 
         logger.warning(f"Failed call: {msg}")
+        self._ledger_out = {"result": "failed", "msg": msg}
         self._last_failed_msg = msg
         self._collector.record_failure()
         self._collector.record_call("failed")

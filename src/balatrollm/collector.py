@@ -332,6 +332,11 @@ class Collector:
         with (self.run_dir / "gamestates.jsonl").open("a") as f:
             f.write(json.dumps(gamestate) + "\n")
 
+    def write_decision(self, row: dict[str, Any]) -> None:
+        """Append one results-ledger row to decisions.jsonl (pass 4, B0c)."""
+        with (self.run_dir / "decisions.jsonl").open("a") as f:
+            f.write(json.dumps(row, default=str) + "\n")
+
     def write_stats(self, finish_reason: FinishReason) -> None:
         """Calculate and write final statistics to stats.json."""
         stats = self._calculate_stats(finish_reason)
