@@ -414,7 +414,8 @@ class Bot:
         )
         self._book = {
             "store": store, "hash": h, "version": version, "focus": focus,
-            "seed": own_seed, "words": words, "notebook": [], "note_rounds": 0,
+            "seed": own_seed, "words": words, "redact": book.Redactor(own_seed, words),
+            "notebook": [], "note_rounds": 0,
             "blocks": {}, "logged": set(), "shown": {}, "last_kind": None, "end_state": None,
         }
         self._collector.add_task_fields({"book": {
@@ -435,10 +436,10 @@ class Bot:
         if key not in b["blocks"]:
             top, rules = book.select(b["version"], phase, ante, boss)
             summaries = (b["version"].get("summaries") or [])[-book.SUMMARIES_SHOWN:]
-            text = self.strategy.env.get_template("BOOK.md.jinja").render(
+            text = b["redact"](self.strategy.env.get_template("BOOK.md.jinja").render(
                 top=top, rules=rules, summaries=summaries, phase=phase, ante=ante, boss=boss,
                 rule_line=book.rule_line,
-            )
+            ))
             b["blocks"][key] = (text, [r["id"] for r in top + rules])
         text, ids = b["blocks"][key]
         shown = b["shown"].setdefault(len(self._rounds), {})
@@ -485,7 +486,7 @@ class Bot:
     def _take_note(self, note: Any, before: dict[str, Any]) -> None:
         b = self._book
         assert b is not None
-        text = " ".join(str(note or "").split())[: book.MAX_NOTE_CHARS]
+        text = b["redact"](" ".join(str(note or "").split())[: book.MAX_NOTE_CHARS])
         if not text:
             return
         b["note_rounds"] = len(self._rounds)
@@ -558,10 +559,10 @@ class Bot:
                 max_chars=book.MAX_RULE_CHARS, max_summary=book.MAX_SUMMARY_CHARS, rule_line=book.rule_line,
             )
             user, code_summary = self._book_game_report()
-            record["code_summary"] = code_summary
-            messages = [
-                {"role": "system", "content": [{"type": "text", "text": system}]},
-                {"role": "user", "content": [{"type": "text", "text": user}]},
+            record["code_summary"] = b["redact"](code_summary)
+            messages = [  # G4-1: the outgoing game-end prompt is redacted as a whole
+                {"role": "system", "content": [{"type": "text", "text": b["redact"](system)}]},
+                {"role": "user", "content": [{"type": "text", "text": b["redact"](user)}]},
             ]
             tools = self.strategy.get_tools("BOOK_UPDATE")
             record["request"] = {"model": self.task.model, "messages": messages, "tools": tools}
@@ -582,29 +583,49 @@ class Bot:
             logger.warning(f"Book update call failed: {type(e).__name__}: {e}")
             record["error"] = f"{type(e).__name__}: {e}"
         record["time_ms"] = int((time.time() - started) * 1000)
-        record["proposed"] = args.get("edits")
-        kept, rejected = book.check_edits(args.get("edits"), b["version"], b["focus"], b["seed"], b["words"])
-        record["kept"], record["rejected"] = kept, rejected
-        summary = " ".join(str(args.get("summary") or "").split())[: book.MAX_SUMMARY_CHARS]
-        if summary and book.text_problems(summary, b["seed"], b["words"]):
-            record["summary_rejected"] = book.text_problems(summary, b["seed"], b["words"])
-            summary = ""
-        base = record.get("code_summary") or ""
-        record["summary"] = f"{base}. Your note: {summary}" if summary else base
-        record["rule_stats"] = book.rule_stats(b["shown"], len(self._rounds), self._finish_reason == "won")
         record["usage"] = usage
+        record["kept"], record["rejected"] = [], []
+        try:
+            record["proposed"] = args.get("edits")
+            kept, rejected = book.check_edits(args.get("edits"), b["version"], b["focus"], b["seed"], b["words"])
+            record["kept"], record["rejected"] = kept, rejected
+            summary = " ".join(str(args.get("summary") or "").split())[: book.MAX_SUMMARY_CHARS]
+            if summary and book.text_problems(summary, b["seed"], b["words"]):
+                record["summary_rejected"] = book.text_problems(summary, b["seed"], b["words"])
+                summary = ""
+            base = record.get("code_summary") or ""
+            record["summary"] = f"{base}. Your note: {summary}" if summary else base
+            record["rule_stats"] = book.rule_stats(b["shown"], len(self._rounds), self._finish_reason == "won")
+        except Exception as e:  # noqa: BLE001 - G4-3: the file and the cost are still written
+            logger.warning(f"Book update checks failed: {type(e).__name__}: {e}")
+            record["error"] = f"checks failed: {type(e).__name__}: {e}"
+            record["kept"] = []
+        finally:
+            self._book_write_update(record, usage)
+
+    def _book_write_update(self, record: dict[str, Any], usage: dict[str, Any]) -> None:
+        """book_update.json (every string redacted, G4-1) and the call's cost in
+        stats.json (G4-3), whatever happened before."""
+        b = self._book
+        assert b is not None and self._collector is not None
+        try:
+            self._collector.extra_stats["book_update"] = {
+                "cost": float(usage.get("cost") or 0),
+                "tokens_in": int(usage.get("prompt_tokens") or 0),
+                "tokens_out": int(usage.get("completion_tokens") or 0),
+                "time_ms": record.get("time_ms"),
+                "edits_kept": len(record.get("kept") or []),
+                "edits_rejected": len(record.get("rejected") or []),
+            }
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Book update cost not recorded: {type(e).__name__}: {e}")
+            self._collector.extra_stats["book_update"] = {"cost": None, "error": str(type(e).__name__)}
         path = self._collector.run_dir / "book_update.json"
-        path.write_text(json.dumps(record, indent=1, ensure_ascii=False, default=str))
+        path.write_text(json.dumps(b["redact"].obj(json.loads(json.dumps(record, default=str))), indent=1, ensure_ascii=False))
         self.book_update_path = path
-        self._collector.extra_stats["book_update"] = {
-            "cost": float(usage.get("cost") or 0),
-            "tokens_in": int(usage.get("prompt_tokens") or 0),
-            "tokens_out": int(usage.get("completion_tokens") or 0),
-            "time_ms": record["time_ms"],
-            "edits_kept": len(kept),
-            "edits_rejected": len(rejected),
-        }
-        logger.info(f"Book update: {len(kept)} edits kept, {len(rejected)} rejected")
+        logger.info(
+            f"Book update: {len(record.get('kept') or [])} edits kept, {len(record.get('rejected') or [])} rejected"
+        )
 
     async def _reroll_boss(self, gamestate: dict[str, Any]) -> dict[str, Any] | None:
         """Reroll the boss when the strategy opted in and the boss is a bad one.
@@ -764,8 +785,13 @@ class Bot:
         book_ctx: dict[str, Any] = {}
         if self._book is not None:
             book_ctx = {"notebook": self._book["notebook"], "note_due": self._note_due(gamestate)}
+        memory_history = self._history[-10:]
+        if self._book is not None:
+            # G4-1: her reasoning goes back into the prompt with seeds redacted
+            redact = self._book["redact"]
+            memory_history = [{**e, "reasoning": redact(str(e.get("reasoning") or ""))} for e in memory_history]
         memory_content = self.strategy.render_memory(
-            history=self._history[-10:],
+            history=memory_history,
             last_error=self._last_error_msg,
             last_failure=self._last_failed_msg,
             G=gamestate,

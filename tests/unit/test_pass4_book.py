@@ -97,3 +97,100 @@ def test_rule_stats_count_blinds_won_and_lost():
     s = book.rule_stats(shown, blinds_won=2, won_game=False)
     assert s["R1"] == {"calls_shown": 5, "blinds_shown": 2, "blinds_won": 2, "blinds_lost": 0}
     assert s["R2"] == {"calls_shown": 5, "blinds_shown": 2, "blinds_won": 1, "blinds_lost": 1}
+
+
+# --- Sol g4 review: seeds never written or sent by the book (G4-1, G4-2); cost always kept (G4-3)
+
+import asyncio  # noqa: E402
+
+import pytest  # noqa: E402
+from openai.types.chat import ChatCompletion  # noqa: E402
+
+from balatrollm import bot as botmod  # noqa: E402
+from balatrollm.collector import Collector  # noqa: E402
+from balatrollm.config import Task  # noqa: E402
+from balatrollm.strategy import StrategyManager, StrategyManifest  # noqa: E402
+
+MAP_SEED = "Q4R8T2WX"  # made up; stands for a seed in the private map
+
+
+@pytest.fixture
+def private_map(tmp_path, monkeypatch):
+    p = tmp_path / "labels.json"
+    p.write_text(json.dumps({"labels": {"ZZ": {"seed": MAP_SEED}}}))
+    monkeypatch.setenv("BALATROLLM_SEED_LABELS", str(p))
+    monkeypatch.setenv("BALATROLLM_BOOK_STORE", str(tmp_path / "store"))
+
+
+def test_redactor_scrubs_own_private_and_seed_like_tokens(private_map):
+    r = book.Redactor(FAKE_SEED, {"DISCARDS"})
+    out = r(f"a {FAKE_SEED.lower()} b {MAP_SEED} c ABCDEFGH d DISCARDS")
+    assert FAKE_SEED.lower() not in out.lower() and MAP_SEED not in out and "ABCDEFGH" not in out
+    assert "DISCARDS" in out and out.count(book.REDACTED) == 3
+    nested = r.obj({"edits": [{"boss": [MAP_SEED]}], MAP_SEED: 1})
+    assert MAP_SEED not in json.dumps(nested)
+
+
+def test_boss_tags_must_be_real_bosses():
+    kept, why = _check(GOOD, boss=["the wall"])
+    assert why == [] and kept["boss"] == ["The Wall"]
+    assert _check(GOOD, boss=[FAKE_SEED])[0] is None
+    assert _check(GOOD, boss=["The Nonsense"])[0] is None
+
+
+def test_malformed_ante_rejects_only_that_edit():
+    edits = [{"op": "add", "text": GOOD, "phase": ["shop"], "ante": {"lo": 1}}, {"op": "add", "text": GOOD, "phase": ["shop"]}]
+    kept, rejected = book.check_edits(edits, dict(book.EMPTY), "shop_and_hand", FAKE_SEED, set())
+    assert len(kept) == 1 and len(rejected) == 1
+
+
+def _book_bot(tmp_path, reply_args):
+    task = Task(model="openai/gpt-6-luna", seed="SEED-ZZ", deck="RED", stake="WHITE", strategy="mastery-book")
+    b = botmod.Bot.__new__(botmod.Bot)
+    b.task, b.strategy = task, StrategyManager("mastery-book")
+    b.harness = StrategyManifest.from_file("mastery-book").harness
+    b.model_config, b._history, b._rounds, b._last_hand_state = {}, [], [], None
+    b._collector = Collector(task, tmp_path)
+    b._finish_reason = "lost"
+
+    class LLM:
+        async def call(self, model, messages, tools, model_config=None):
+            self.sent = json.dumps(messages)
+            return ChatCompletion.model_validate({
+                "id": "x", "object": "chat.completion", "created": 0, "model": model,
+                "choices": [{"index": 0, "finish_reason": "tool_calls", "message": {"role": "assistant", "content": None,
+                    "tool_calls": [{"id": "c", "type": "function", "function": {"name": "update_book", "arguments": json.dumps(reply_args)}}]}}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110, "cost": 0.002}})
+
+    b._llm = LLM()
+    b._book_setup(tmp_path, FAKE_SEED)
+    return b
+
+
+def test_game_end_writes_no_seed_anywhere(tmp_path, private_map):
+    reply = {"reasoning": f"seed {MAP_SEED}", "summary": f"lost {FAKE_SEED}",
+             "edits": [{"op": "add", "text": GOOD + " " + FAKE_SEED, "phase": ["shop"]},
+                       {"op": "add", "text": GOOD, "phase": ["shop"], "boss": [MAP_SEED]}]}
+    b = _book_bot(tmp_path, reply)
+    b._take_note(f"plan {MAP_SEED}", {"ante_num": 1, "round_num": 1, "state": "SHOP"})
+    b._history.append({"method": "next_round", "params": {}, "reasoning": f"why {FAKE_SEED}", "ante": 1, "result": "ok"})
+    asyncio.run(b._book_game_end())
+    written = (b._collector.run_dir / "book_update.json").read_text()
+    for secret in (FAKE_SEED, MAP_SEED):
+        assert secret.lower() not in written.lower() and secret.lower() not in b._llm.sent.lower()
+    upd = json.loads(written)
+    assert upd["kept"] == [] and len(upd["rejected"]) == 2 and all(r["why"] for r in upd["rejected"])
+    assert b._collector.extra_stats["book_update"]["cost"] == 0.002
+
+
+def test_cost_and_file_kept_when_checks_fail(tmp_path, private_map, monkeypatch):
+    b = _book_bot(tmp_path, {"reasoning": "r", "summary": "s", "edits": []})
+
+    def boom(*a, **k):
+        raise KeyError("x")
+
+    monkeypatch.setattr(book, "check_edits", boom)
+    asyncio.run(b._book_game_end())
+    upd = json.loads((b._collector.run_dir / "book_update.json").read_text())
+    assert upd["kept"] == [] and "checks failed" in upd["error"]
+    assert b._collector.extra_stats["book_update"]["cost"] == 0.002

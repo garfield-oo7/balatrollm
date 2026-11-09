@@ -36,7 +36,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-from . import seeds
+from . import knowledge, seeds
 
 MAX_RULES = 300
 MAX_EDITS = 3
@@ -255,6 +255,40 @@ def text_problems(text: str, own_seed: str | None = None, words: set[str] | froz
     return out
 
 
+REDACTED = "[seed]"
+
+
+class Redactor:
+    """Replaces seeds in everything the book writes or sends (G4-1): the game's
+    own seed, every seed in the private map (any case) and any 8-character
+    seed-alphabet token that is not a known word."""
+
+    def __init__(self, own_seed: str | None = None, words: set[str] | frozenset[str] = frozenset()) -> None:
+        secrets_ = {s for s in _private_seeds() | {str(own_seed or "").upper()} if s}
+        self._exact = re.compile("|".join(re.escape(s) for s in sorted(secrets_)), re.IGNORECASE) if secrets_ else None
+        self._words = words
+
+    def __call__(self, text: str) -> str:
+        if self._exact is not None:
+            text = self._exact.sub(REDACTED, text)
+        return SEED_TOKEN.sub(lambda m: m.group(0) if m.group(0) in self._words else REDACTED, text)
+
+    def obj(self, value: Any) -> Any:
+        """A deep copy with every string (and dict key) redacted."""
+        if isinstance(value, str):
+            return self(value)
+        if isinstance(value, dict):
+            return {self(str(k)) if isinstance(k, str) else k: self.obj(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self.obj(v) for v in value]
+        return value
+
+
+def canonical_boss(name: Any) -> str | None:
+    """knowledge.py's name for a boss (G4-2: only real boss names are kept)."""
+    return {knowledge._norm_name(k): k for k in knowledge.BOSSES}.get(knowledge._norm_name(name))
+
+
 def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip().lower())
 
@@ -280,7 +314,7 @@ def _tags_from(edit: dict[str, Any], focus: str) -> tuple[dict[str, Any], list[s
             if not 1 <= lo <= hi <= 8:
                 raise ValueError
             out["ante"] = [lo, hi]
-        except (TypeError, ValueError, IndexError):
+        except Exception:  # G4-3: any malformed value rejects only this edit
             why.append("ante must be [lo, hi] within 1-8")
     boss = edit.get("boss") or []
     if isinstance(boss, str):
@@ -288,7 +322,11 @@ def _tags_from(edit: dict[str, Any], focus: str) -> tuple[dict[str, Any], list[s
     if not isinstance(boss, list):
         return out, why + ["boss must be a list of boss names"]
     if boss:
-        out["boss"] = [str(b) for b in boss][:5]
+        names = [canonical_boss(b) for b in boss]
+        if None in names or len(names) > 5:
+            why.append("boss must list at most 5 real boss names (e.g. The Wall)")
+        else:
+            out["boss"] = sorted(set(n for n in names if n))
     out["top"] = bool(edit.get("top"))
     return out, why
 
@@ -317,7 +355,7 @@ def check_edit(
     if op in ("change", "drop"):
         rid = str(edit.get("id") or "")
         if rid not in by_id:
-            return None, [f"no rule {rid or '(no id)'} in the book"]
+            return None, ["no rule with that id in the book"]
         out["id"] = rid
         out["base_text"] = by_id[rid]["text"]
     if op in ("add", "change"):
@@ -354,7 +392,10 @@ def check_edits(
         if n >= MAX_EDITS:
             rejected.append({"edit": e, "why": [f"more than {MAX_EDITS} edits"]})
             continue
-        ok, why = check_edit(e, version, focus, own_seed, words)
+        try:
+            ok, why = check_edit(e, version, focus, own_seed, words)
+        except Exception as exc:  # G4-3: a malformed edit never stops the others
+            ok, why = None, [f"malformed edit ({type(exc).__name__})"]
         if ok is None:
             rejected.append({"edit": e, "why": why})
         else:
