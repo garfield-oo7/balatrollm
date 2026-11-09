@@ -1,0 +1,30 @@
+{#- Luna's book from earlier games (pass 4 L). Shown before the rulebook, in the
+    cached part of the prompt: it changes only with the phase, the ante and the
+    ante's boss, and between games when a game's edits are merged. -#}
+# YOUR BOOK (rules you wrote after earlier games)
+{%- if not top and not rules and not summaries %}
+Your book is empty: this is your first game with it. After the game you will write your first rules.
+{%- else %}
+These are your own rules, written after earlier games. Use them when they fit; the STATUS facts and the rules below still come first when they disagree.
+{%- if top %}
+
+## Top rules (always shown)
+{% for r in top -%}
+{{ rule_line(r) }}
+{% endfor %}
+{%- endif %}
+{%- if rules %}
+
+## Rules for this situation ({{ phase }}, Ante {{ ante }}{% if boss %}, boss {{ boss }}{% endif %})
+{% for r in rules -%}
+{{ rule_line(r) }}
+{% endfor %}
+{%- endif %}
+{%- if summaries %}
+
+## Recent games (oldest first)
+{% for s in summaries -%}
+- {{ s.text }}
+{% endfor %}
+{%- endif %}
+{%- endif %}

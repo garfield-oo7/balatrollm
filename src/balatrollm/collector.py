@@ -225,6 +225,10 @@ class Collector:
         self._total_tokens: int = 0
         self._total_cost: float = 0.0
 
+        # Extra stats.json fields (pass 4 L: the game-end book call's cost);
+        # empty for strategies without the book, so their stats.json is unchanged
+        self.extra_stats: dict[str, Any] = {}
+
         # Write task with structured model for benchmark analysis
         if "/" in task.model:
             vendor, model_name = task.model.split("/", 1)
@@ -246,6 +250,13 @@ class Collector:
 
         # Write latest.json pointer for overlay
         self._write_latest_json()
+
+    def add_task_fields(self, fields: dict[str, Any]) -> None:
+        """Add fields to task.json (pass 4 L: the book version a game read)."""
+        path = self.run_dir / "task.json"
+        data = json.loads(path.read_text())
+        data.update(fields)
+        path.write_text(json.dumps(data, indent=2))
 
     def record_call(self, outcome: Literal["successful", "error", "failed"]) -> None:
         """Record a call outcome."""
@@ -341,7 +352,7 @@ class Collector:
         """Calculate and write final statistics to stats.json."""
         stats = self._calculate_stats(finish_reason)
         with (self.run_dir / "stats.json").open("w") as f:
-            json.dump(asdict(stats), f, indent=2)
+            json.dump({**asdict(stats), **self.extra_stats}, f, indent=2)
         # Update batch.json with best run info
         self._update_batch_json(stats.final_ante, stats.final_round, finish_reason)
         # Write previous.json for the overlay

@@ -1,0 +1,52 @@
+{#- Memory + final "decide now" checklist (last thing the model reads). -#}
+# MEMORY
+{%- if rounds %}
+## Blinds so far (most recent last)
+{% for r in rounds[-4:] -%}
+- Ante {{ r.ante }} {{ r.blind }}: scored {{ r.scored | fmt_num }} / {{ r.target | fmt_num }}, {{ r.hands_left }} hands left{% if r.main_hand %}, most played {{ r.main_hand }}{% endif %}
+{% endfor %}
+{%- endif %}
+{%- if history %}
+## Your last actions (oldest first)
+{% for e in history[-8:] -%}
+- {{ e.method }} {{ e.params | tojson }} -> {{ e.result or "ok" }}{% if e.reasoning %} | why: {{ e.reasoning | truncate(220, true, "...") }}{% endif %}
+{% endfor %}
+{%- else %}
+- First decision of the run.
+{%- endif %}
+{%- if notebook is defined %}
+
+## Your notebook (this game, oldest first)
+{%- for n in notebook %}
+- Ante {{ n.ante }}, round {{ n.round }} ({{ n.phase }}): {{ n.text }}
+{%- else %}
+- (empty)
+{%- endfor %}
+{%- if note_due %}
+Notebook: {{ note_due }} Put it in the `note` field of this action.
+{%- endif %}
+{%- endif %}
+{%- if last_error_call_msg %}
+
+**Your last answer was invalid**: {{ last_error_call_msg }}
+Answer with exactly one tool call with valid JSON arguments.
+{%- endif %}
+{%- if last_failed_call_msg %}
+
+**Your last action FAILED**: {{ last_failed_call_msg }}
+Do not repeat it. Choose a different action.
+{%- endif %}
+
+# DECIDE NOW
+{%- if G and G.state == "SELECTING_HAND" %}
+1. A listed play marked WINS? -> play its indices (own Square Joker? play the "Suggested action": it pads the play to 4 cards when that still wins).
+2. DISCARDS > 0 and no listed play WINS? -> discard the "Suggested discard" indices to dig toward a winning play (it keeps your best play's cards); if it says "none", or Discard costs are listed and the dig is not worth them, go to 3.
+3. Otherwise -> play the "Suggested action" indices (or the highest listed play).
+{%- elif G and G.state == "SHOP" %}
+1. Affordable on-plan [XMULT] joker, not [OFF-PLAN] (price <= SCORE_SPENDABLE), or tier S/A [MAIN]/[MULT] joker (or tier A [ECON] costing $7 or less while ECON_OK = YES; tier B+ [ECON] in Antes 1-2) with price <= SPENDABLE (SCORE_SPENDABLE for SCORE +50%) and SLOTS_FREE > 0? -> buy it. Otherwise follow PRIORITY (first unchecked GOAL).
+2. Planet marked [MAIN] (price <= SCORE_SPENDABLE) or [FEED], or a [BUY] voucher with price <= SPENDABLE? -> buy it (a Planet needs a free consumable slot: if none is free, use or sell one first), then use the planet.
+3. Pack or reroll allowed by the SHOP RULES (Spectral packs are worth opening; Standard pack while BLUE_SEALS = 0 or you own Hologram)? -> do it. Otherwise -> next_round.
+{%- elif G and G.state == "SMODS_BOOSTER_OPENED" %}
+1. Pick the best card by the PACK RULES (pass Suggested targets as `targets`), or skip if nothing qualifies.
+{%- endif %}
+Reply with exactly one tool call. Put your short reasoning first.

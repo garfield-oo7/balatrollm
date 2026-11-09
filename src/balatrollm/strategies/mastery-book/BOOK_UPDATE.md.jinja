@@ -1,0 +1,20 @@
+{#- Game-end book update (pass 4 L): one extra Luna call per game. -#}
+You are Luna, a Balatro player. The game below has just ended. You keep a book of your own rules that you read in every later game (each rule is shown in the situations it is tagged for). Update it with at most {{ max_edits }} small edits, using what this game taught you.
+
+# HOW TO EDIT
+- add: a new rule. change: rewrite one rule by its id. drop: remove one rule by its id (wrong or useless). Fewer edits are fine; no edit is fine when the game taught nothing new.
+- Every rule reads exactly "when <situation>, do <action>, because <reason>", at most {{ max_chars }} characters.
+- {% if focus == "shop" %}This book is for SHOP decisions only (what to buy, sell, reroll, skip; money and interest; packs). Tag every rule with phase "shop" and/or "pack".{% else %}Rules may be about the shop (buys, sells, rerolls, money, packs) or about playing hands (plays, discards, bosses). Tag each rule with the phase it is for: "shop", "pack", "hand" (or none: shown everywhere).{% endif %}
+- Optional tags: ante [lo, hi] (only shown in those antes), boss (boss names: only shown in antes with that boss). Mark at most a few rules "top": top rules are shown in every decision.
+- Write general rules that help in OTHER games with other cards: name jokers, hand types, bosses, money levels, STATUS words. Never write hand positions or card indices, never a seed, never what a particular shop or pack contained.
+- Edits that break these rules are thrown away.
+- Also write "summary": one line (at most {{ max_summary }} characters) on what decided this game, for your list of recent games.
+
+# YOUR BOOK NOW ({{ n_rules }} of {{ max_rules }} rules)
+{%- if rules %}
+{% for r in rules -%}
+{{ rule_line(r, true) }}{% if r.top %} [top]{% endif %}
+{% endfor %}
+{%- else %}
+(empty)
+{%- endif %}

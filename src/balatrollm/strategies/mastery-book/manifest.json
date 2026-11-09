@@ -1,0 +1,29 @@
+{
+  "$schema": "https://gist.githubusercontent.com/S1M0N38/5dc776cea0afa506ee7a4b20585558c6/raw/d2b92433fcc9d069c26958ff22b1f06777ecb91e/strategy.schema.json",
+  "name": "Mastery + book",
+  "description": "Mastery (B1) plus Luna's learning log book (pass 4 L): in-game notebook (note field, reasoning in MEMORY) and a cross-game book of her own rules stored outside the strategy folder, updated by one Luna call at game end.",
+  "author": "BalatroLLM",
+  "version": "1.0.0",
+  "tags": [
+    "flush",
+    "analyser",
+    "small-model"
+  ],
+  "harness": {
+    "system_prompt": true,
+    "validate_actions": true,
+    "auto_reorder_jokers": true,
+    "max_consecutive_rearranges": 2,
+    "suggest_action": true,
+    "auto_swap_jokers": true,
+    "skip_blind_tags": {
+      "Investment Tag": 1
+    },
+    "reroll_boss": true,
+    "joker_phase_order": true,
+    "sell_in_pack": true,
+    "lessons": true,
+    "book": true,
+    "book_focus": "shop_and_hand"
+  }
+}

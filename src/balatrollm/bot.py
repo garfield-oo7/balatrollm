@@ -3,6 +3,7 @@
 import asyncio
 import contextvars
 import dataclasses
+import hashlib
 import json
 import logging
 import time
@@ -12,7 +13,7 @@ from typing import Any
 import httpx
 from openai.types.chat import ChatCompletion
 
-from . import seeds
+from . import book, seeds
 from .analysis import (
     BOSS_REROLL_MAX_PER_ANTE,
     DEADLINE_ANTE,
@@ -21,6 +22,7 @@ from .analysis import (
     main_commit,
     run_status,
     boss_reroll_reason,
+    current_blind,
     estimate_play,
     discard_phase_order,
     joker_order,
@@ -92,6 +94,10 @@ class BotError(Exception):
 class Bot:
     """One-shot LLM-powered Balatro bot. Creates clients, plays a single game, returns stats."""
 
+    # Pass 4 L defaults (class level, so bots built without __init__ in tests have them)
+    _book: dict[str, Any] | None = None
+    book_update_path: Path | None = None
+
     def __init__(self, task: Task, config: Config, port: int | None = None) -> None:
         self.task = task
         self.config = config
@@ -138,6 +144,10 @@ class Bot:
         self._phase_moved: bool = False
         # Tags the harness skipped for that have not paid yet (M1)
         self._pending_tags: list[dict[str, Any]] = []
+
+        # Pass 4 L: Luna's book (manifest ``book``); set up in play()
+        self._book: dict[str, Any] | None = None
+        self.book_update_path: Path | None = None
 
         # Finish reason tracking
         self._finish_reason: FinishReason | None = None
@@ -275,6 +285,8 @@ class Bot:
 
         logger.info("Starting game")
         logger.info(f"Run data will be saved to: {self._collector.run_dir}")
+        if self.harness.get("book"):
+            self._book_setup(runs_dir, start_args.get("seed"))
 
         try:
             await self._balatro.call("menu")
@@ -287,6 +299,8 @@ class Bot:
                 logger.error(f"Game did not start on the seed generated for {self.task.seed}")
                 raise BotError(f"Game did not start on the seed generated for {self.task.seed}")
             await self._run_game_loop(gamestate)
+            if self._book is not None and self._finish_reason in ("won", "lost"):
+                await self._book_game_end()
         except BotError:
             logger.error("Game ended due to bot error")
             raise
@@ -318,6 +332,8 @@ class Bot:
 
         while True:
             if is_real_win(gamestate):
+                if self._book is not None:
+                    self._book["end_state"] = gamestate
                 self._finish_reason = "won"
                 logger.info("Game won! Waiting for GAME_OVER state...")
                 break
@@ -351,6 +367,8 @@ class Bot:
                         self._rounds.append(
                             round_record(self._last_hand_state, gamestate)
                         )
+                        if self._book is not None:
+                            self._book["last_kind"] = (current_blind(self._last_hand_state) or {}).get("kind")
                         self._last_hand_state = None
                     gamestate = await self._balatro.call("cash_out")
                 case "BLIND_SELECT":
@@ -365,12 +383,224 @@ class Bot:
                     else:
                         gamestate = await self._balatro.call("select")
                 case "GAME_OVER":
+                    if self._book is not None:
+                        self._book["end_state"] = gamestate
                     self._finish_reason = "lost"
                     logger.info("Game over!")
                     break
                 case _:
                     await asyncio.sleep(1)
                     gamestate = await self._balatro.call("gamestate")
+
+    ############################################################################
+    # Pass 4 L: Luna's book (only with manifest ``book``)
+    ############################################################################
+
+    def _book_setup(self, runs_dir: Path, own_seed: str | None) -> None:
+        """Freeze the book version for this game and record its hash."""
+        assert self._collector is not None
+        store = book.store_dir(Path(runs_dir), self.task.strategy, self.harness)
+        h, version = book.read_head(store)
+        focus = str(self.harness.get("book_focus") or book.DEFAULT_FOCUS)
+        if focus not in book.FOCUS:
+            raise BotError(f"book_focus must be one of {book.FOCUS}")
+        words = book.known_words(
+            *((self.strategy.path / f).read_text()
+              for f in ("STRATEGY.md.jinja", "GAMESTATE.md.jinja", "MEMORY.md.jinja", "BOOK.md.jinja")),
+            (Path(__file__).parent / "knowledge.py").read_text(),
+        )
+        self._book = {
+            "store": store, "hash": h, "version": version, "focus": focus,
+            "seed": own_seed, "words": words, "notebook": [], "note_rounds": 0,
+            "blocks": {}, "logged": set(), "shown": {}, "last_kind": None, "end_state": None,
+        }
+        self._collector.add_task_fields({"book": {
+            "hash": h, "rules": len(version.get("rules") or []), "games": int(version.get("games") or 0),
+            "focus": focus, "store": str(store),
+        }})
+        logger.info(f"Book version {h} ({len(version.get('rules') or [])} rules, focus {focus})")
+
+    def _book_block(self, gamestate: dict[str, Any]) -> str:
+        """The book text for this decision (same within an ante + phase) and
+        the per-rule counters (rules shown per blind)."""
+        b = self._book
+        assert b is not None
+        phase = book.phase_of(str(gamestate.get("state")))
+        ante = int(gamestate.get("ante_num") or 1)
+        boss = ((gamestate.get("blinds") or {}).get("boss") or {}).get("name")
+        key = (phase, ante, boss)
+        if key not in b["blocks"]:
+            top, rules = book.select(b["version"], phase, ante, boss)
+            summaries = (b["version"].get("summaries") or [])[-book.SUMMARIES_SHOWN:]
+            text = self.strategy.env.get_template("BOOK.md.jinja").render(
+                top=top, rules=rules, summaries=summaries, phase=phase, ante=ante, boss=boss,
+                rule_line=book.rule_line,
+            )
+            b["blocks"][key] = (text, [r["id"] for r in top + rules])
+        text, ids = b["blocks"][key]
+        shown = b["shown"].setdefault(len(self._rounds), {})
+        for rid in ids:
+            shown[rid] = shown.get(rid, 0) + 1
+        return text
+
+    def _book_logged_request(self, request_data: dict[str, Any], book_part: dict[str, Any]) -> dict[str, Any]:
+        """requests.jsonl keeps the book by hash; each block's text is written
+        once per run to book_blocks.jsonl."""
+        b = self._book
+        assert b is not None and self._collector is not None
+        text = book_part["text"]
+        h = hashlib.sha256(text.encode()).hexdigest()[:16]
+        if h not in b["logged"]:
+            b["logged"].add(h)
+            with (self._collector.run_dir / "book_blocks.jsonl").open("a") as f:
+                f.write(json.dumps({"block": h, "book": b["hash"], "text": text}, ensure_ascii=False) + "\n")
+        placeholder = {"type": "text", "text": f"[book block {h}: see book_blocks.jsonl]", "book_block": h,
+                       "cache_control": book_part["cache_control"]}
+        messages = [
+            {**m, "content": [placeholder if part is book_part else part for part in m["content"]]}
+            if isinstance(m.get("content"), list) else m
+            for m in request_data["messages"]
+        ]
+        return {**request_data, "messages": messages}
+
+    def _note_due(self, gamestate: dict[str, Any]) -> str | None:
+        """A cue for the notebook: first decision (plan for Ante 1) and the
+        first shop decision after each blind (one line; a plan after a boss)."""
+        b = self._book
+        assert b is not None
+        if not self._rounds and not b["notebook"] and int(gamestate.get("ante_num") or 1) == 1:
+            return "Write your plan for Ante 1 in one or two sentences."
+        if gamestate.get("state") == "SHOP" and len(self._rounds) > b["note_rounds"]:
+            r = self._rounds[-1]
+            cue = f"You beat {r['blind']} (Ante {r['ante']}): one line on how it went."
+            if b.get("last_kind") == "boss":
+                cue += " A new ante starts next: add your plan for it."
+            return cue
+        return None
+
+    def _take_note(self, note: Any, before: dict[str, Any]) -> None:
+        b = self._book
+        assert b is not None
+        text = " ".join(str(note or "").split())[: book.MAX_NOTE_CHARS]
+        if not text:
+            return
+        b["note_rounds"] = len(self._rounds)
+        if b["notebook"] and b["notebook"][-1]["text"] == text:
+            return
+        b["notebook"].append({
+            "ante": before.get("ante_num"), "round": before.get("round_num"),
+            "phase": book.phase_of(str(before.get("state"))) or str(before.get("state") or "").lower(),
+            "text": text,
+        })
+        b["notebook"] = b["notebook"][-book.MAX_NOTES:]
+
+    def _book_game_report(self) -> tuple[str, str]:
+        """(user message for the game-end call, code summary line). Built from
+        harness records only (never the raw gamestate: it carries the seed)."""
+        b = self._book
+        assert b is not None
+        last = self._last_hand_state or {}
+        end = b.get("end_state") or {}
+        won = self._finish_reason == "won"
+        jokers = [str(j.get("label") or j.get("key") or "?") for j in ((end or last).get("jokers") or {}).get("cards") or []]
+        mh = None
+        try:
+            from .analysis import main_hand
+            mh = main_hand(last) if last else None
+        except Exception:
+            mh = None
+        if won:
+            result = "won the run (beat the Ante 8 boss)"
+        else:
+            cur = current_blind(last) or {}
+            chips = int(((end or last).get("round") or {}).get("chips") or 0)
+            result = (f"lost at Ante {last.get('ante_num')}, {cur.get('name') or 'blind'}: scored {chips:,} "
+                      f"of {int(cur.get('score') or 0):,}")
+        code_summary = f"{result}; main hand {mh or 'open'}; jokers: {', '.join(jokers) or 'none'}"
+        lines = [f"# THIS GAME\n- Result: {result}", f"- Main hand: {mh or 'open'}",
+                 f"- Jokers at the end: {', '.join(jokers) or 'none'}", "", "## Blinds (oldest first)"]
+        for r in self._rounds:
+            lines.append(f"- Ante {r['ante']} {r['blind']}: scored {r['scored']:,} / {r['target']:,}, "
+                         f"{r['hands_left']} hands left{', most played ' + r['main_hand'] if r.get('main_hand') else ''}")
+        if not self._rounds:
+            lines.append("- (no blind beaten)")
+        lines += ["", "## Your notebook"]
+        lines += [f"- Ante {n['ante']}, round {n['round']} ({n['phase']}): {n['text']}" for n in b["notebook"]] or ["- (empty)"]
+        lines += ["", "## Your last actions (oldest first)"]
+        for e in self._history[-15:]:
+            why = str(e.get("reasoning") or "")[:220]
+            lines.append(f"- Ante {e.get('ante')} {e.get('method')} -> {e.get('result') or 'ok'}" + (f" | why: {why}" if why else ""))
+        lines += ["", "Now call update_book."]
+        return "\n".join(lines), code_summary
+
+    async def _book_game_end(self) -> None:
+        """One extra Luna call: proposes at most 3 book edits; the checked
+        edits go to book_update.json (merged by the executor in task order).
+        A failure here is logged and never changes the game's result."""
+        b = self._book
+        assert b is not None and self._llm is not None and self._collector is not None
+        record: dict[str, Any] = {
+            "label": self.task.seed, "store": str(b["store"]), "book_hash": b["hash"], "focus": b["focus"],
+            "merged": False,
+        }
+        usage: dict[str, Any] = {}
+        args: dict[str, Any] = {}
+        started = time.time()
+        try:
+            version = b["version"]
+            system = self.strategy.env.get_template("BOOK_UPDATE.md.jinja").render(
+                rules=version.get("rules") or [], n_rules=len(version.get("rules") or []),
+                max_rules=book.MAX_RULES, focus=b["focus"], max_edits=book.MAX_EDITS,
+                max_chars=book.MAX_RULE_CHARS, max_summary=book.MAX_SUMMARY_CHARS, rule_line=book.rule_line,
+            )
+            user, code_summary = self._book_game_report()
+            record["code_summary"] = code_summary
+            messages = [
+                {"role": "system", "content": [{"type": "text", "text": system}]},
+                {"role": "user", "content": [{"type": "text", "text": user}]},
+            ]
+            tools = self.strategy.get_tools("BOOK_UPDATE")
+            record["request"] = {"model": self.task.model, "messages": messages, "tools": tools}
+            response = await self._llm.call(
+                model=self.task.model, messages=messages, tools=tools, model_config=self.model_config
+            )
+            body = response.model_dump()
+            record["response"] = body
+            usage = body.get("usage") or {}
+            calls = response.choices[0].message.tool_calls or []
+            if calls:
+                fn = getattr(calls[0], "function", calls[0])
+                parsed = json.loads(getattr(fn, "arguments", "") or "{}")
+                args = parsed if isinstance(parsed, dict) else {}
+            else:
+                record["error"] = "no tool call in the reply"
+        except Exception as e:  # noqa: BLE001 - the game is over; never fail it here
+            logger.warning(f"Book update call failed: {type(e).__name__}: {e}")
+            record["error"] = f"{type(e).__name__}: {e}"
+        record["time_ms"] = int((time.time() - started) * 1000)
+        record["proposed"] = args.get("edits")
+        kept, rejected = book.check_edits(args.get("edits"), b["version"], b["focus"], b["seed"], b["words"])
+        record["kept"], record["rejected"] = kept, rejected
+        summary = " ".join(str(args.get("summary") or "").split())[: book.MAX_SUMMARY_CHARS]
+        if summary and book.text_problems(summary, b["seed"], b["words"]):
+            record["summary_rejected"] = book.text_problems(summary, b["seed"], b["words"])
+            summary = ""
+        base = record.get("code_summary") or ""
+        record["summary"] = f"{base}. Your note: {summary}" if summary else base
+        record["rule_stats"] = book.rule_stats(b["shown"], len(self._rounds), self._finish_reason == "won")
+        record["usage"] = usage
+        path = self._collector.run_dir / "book_update.json"
+        path.write_text(json.dumps(record, indent=1, ensure_ascii=False, default=str))
+        self.book_update_path = path
+        self._collector.extra_stats["book_update"] = {
+            "cost": float(usage.get("cost") or 0),
+            "tokens_in": int(usage.get("prompt_tokens") or 0),
+            "tokens_out": int(usage.get("completion_tokens") or 0),
+            "time_ms": record["time_ms"],
+            "edits_kept": len(kept),
+            "edits_rejected": len(rejected),
+        }
+        logger.info(f"Book update: {len(kept)} edits kept, {len(rejected)} rejected")
 
     async def _reroll_boss(self, gamestate: dict[str, Any]) -> dict[str, Any] | None:
         """Reroll the boss when the strategy opted in and the boss is a bad one.
@@ -527,6 +757,9 @@ class Bot:
         }
         strategy_content = self.strategy.render_strategy(gamestate, **context)
         gamestate_content = self.strategy.render_gamestate(gamestate, **context)
+        book_ctx: dict[str, Any] = {}
+        if self._book is not None:
+            book_ctx = {"notebook": self._book["notebook"], "note_due": self._note_due(gamestate)}
         memory_content = self.strategy.render_memory(
             history=self._history[-10:],
             last_error=self._last_error_msg,
@@ -534,6 +767,7 @@ class Bot:
             G=gamestate,
             rounds=self._rounds,
             flags=self.harness,
+            **book_ctx,
         )
 
         strategy_block = {
@@ -541,10 +775,16 @@ class Bot:
             "text": strategy_content,
             "cache_control": {"type": "ephemeral"},
         }
+        system_parts: list[dict[str, Any]] = [strategy_block]
+        book_part: dict[str, Any] | None = None
+        if self._book is not None:
+            # Pass 4 L: the book before the rulebook (cached prefix shared by phases)
+            book_part = {"type": "text", "text": self._book_block(gamestate), "cache_control": {"type": "ephemeral"}}
+            system_parts = [book_part, strategy_block]
         if self.harness.get("system_prompt"):
             # Static rulebook in the system role, dynamic state in the user turn
             messages: list[dict[str, Any]] = [
-                {"role": "system", "content": [strategy_block]},
+                {"role": "system", "content": system_parts},
                 {
                     "role": "user",
                     "content": [
@@ -558,7 +798,7 @@ class Bot:
                 {
                     "role": "user",
                     "content": [
-                        strategy_block,
+                        *system_parts,
                         {"type": "text", "text": gamestate_content},
                         {"type": "text", "text": memory_content},
                     ],
@@ -581,7 +821,8 @@ class Bot:
             **self.model_config,
         }
 
-        custom_id = self._collector.write_request(request_data)
+        logged = request_data if book_part is None else self._book_logged_request(request_data, book_part)
+        custom_id = self._collector.write_request(logged)
         if self._ledger_row is not None:
             self._ledger_row["custom_id"] = custom_id
         request_id = str(time.time_ns() // 1_000_000)
@@ -679,6 +920,10 @@ class Bot:
 
         before = before or {}
         params = {k: v for k, v in fn_args.items() if k != "reasoning"}
+        if self._book is not None:
+            # Pass 4 L: the notebook field never reaches BalatroBot
+            params.pop("note", None)
+            self._take_note(fn_args.get("note"), before or {})
         self._ledger_call = (fn_name, fn_args)
 
         ################################################################################
