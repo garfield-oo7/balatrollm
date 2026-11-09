@@ -799,6 +799,9 @@ class Bot:
             flags=self.harness,
             **book_ctx,
         )
+        if self._book is not None:
+            # G4-1 (re-check): the whole rendered MEMORY, incl. last error / failure text that can carry a raw reply
+            memory_content = self._book["redact"](memory_content)
 
         strategy_block = {
             "type": "text",
