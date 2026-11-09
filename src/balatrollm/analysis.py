@@ -2741,37 +2741,65 @@ SITUATIONS = ("COMFORTABLE", "THIN", "SHORT")
 # E2a (pass 4, owner Q4 a): STATUS bands on the calibrated win chance of the
 # next blind, frozen 2026-11-09: COMFORTABLE >= 95%, THIN 80-95%, SHORT < 80%.
 WIN_BANDS = (0.95, 0.80)
-# E2a calibration: logistic fit of "won the blind" on the sampler's raw win
-# chance (share of sampled round totals >= target), boss or not, ante and
-# hands needed - hands (K5 percentile), fitted on passes 1-3 blinds
-# (BLIND_SELECT snapshots; 795 blinds, 58 lost) by scripts/fit_win_chance.py.
-# Logit = intercept + raw * logit(raw) + boss * [boss] + ante * ante + spare * (need - hands)
-WIN_FIT = {"intercept": 4.2561, "raw": 0.4660, "boss": -1.3455, "ante": -0.6582, "spare": -0.1159}
+# E2a calibration: logistic fit of "won the blind" on the sampler's round
+# totals for the blind's hands: logit(raw) (raw = share of totals >= target),
+# margin = ln(median total / target) (clipped to +-MARGIN_CLIP), boss or not and
+# the ante (capped at WIN_ANTE_CAP: few blinds beyond it), fitted on passes 1-3
+# blinds (BLIND_SELECT snapshots) by scripts/fit_win_chance.py. The raw and
+# margin weights are >= 0, so more sampled score never lowers the chance.
+# Logit = intercept + raw * logit(raw) + margin * margin + boss * [boss] + ante * min(ante, cap)
+# Fitted 2026-11-09 on 795 blinds (58 lost).
+WIN_FIT = {"intercept": 3.7251, "raw": 0.1447, "margin": 2.2711, "boss": -1.1127, "ante": -0.6524}
+WIN_ANTE_CAP = 6
+MARGIN_CLIP = 3.0
+# Every sampled round wins -> at least THIN at any ante (pooled Ante 5+ bosses
+# with raw >= 99% in passes 1-3 + A0: 37 of 43 won = 86%)
+ALL_WIN_FLOOR = 0.80
 
 
 def _logit(p: float) -> float:
     return math.log(p / (1 - p))
 
 
+def win_inputs(rounds: dict[int, list[int]] | None, hands: int, target: int) -> dict[str, Any] | None:
+    """E2a: from the sampled round totals of ``hands`` hands: ``raw`` = share
+    that reach ``target``, ``margin`` = ln(median / target) (clipped) and
+    ``per`` = the median round's score per hand; None without a distribution."""
+    if not rounds or hands <= 0 or target <= 0:
+        return None
+    h = min(hands, max(rounds))
+    totals = rounds.get(h)
+    if not totals:
+        return None
+    med = sorted(totals)[len(totals) // 2]
+    margin = math.log(med / target) if med > 0 else -MARGIN_CLIP
+    return {
+        "raw": sum(1 for v in totals if v >= target) / len(totals),
+        "margin": max(min(margin, MARGIN_CLIP), -MARGIN_CLIP),
+        "per": max(int(med / h), 1),
+        "n": len(totals),
+    }
+
+
 def raw_win_chance(rounds: dict[int, list[int]] | None, hands: int, target: int) -> float | None:
     """Share of the sampled round totals of ``hands`` hands that reach
     ``target`` (E2a), or None without a distribution."""
-    if not rounds or hands <= 0 or target <= 0:
-        return None
-    totals = rounds.get(min(hands, max(rounds)))
-    if not totals:
-        return None
-    return sum(1 for v in totals if v >= target) / len(totals)
+    w = win_inputs(rounds, hands, target)
+    return None if w is None else w["raw"]
 
 
-def calibrated_win_chance(raw: float, *, boss: bool, ante: int, spare: int, n: int = 150) -> float:
-    """E2a: the fitted chance of winning the blind (WIN_FIT) from the raw one;
-    ``spare`` = hands needed - hands (negative = hands to spare)."""
+def calibrated_win_chance(raw: float, *, margin: float, boss: bool, ante: int, n: int = 150) -> float:
+    """E2a: the fitted chance of winning the blind (WIN_FIT); non-decreasing
+    in ``raw`` and ``margin``; ALL_WIN_FLOOR when every sampled round wins."""
     eps = 0.5 / max(n, 1)
     x = _logit(min(max(raw, eps), 1 - eps))
     f = WIN_FIT
-    z = f["intercept"] + f["raw"] * x + f["boss"] * boss + f["ante"] * ante + f["spare"] * spare
-    return 1 / (1 + math.exp(-max(min(z, 40), -40)))
+    z = (
+        f["intercept"] + f["raw"] * x + f["margin"] * margin + f["boss"] * boss
+        + f["ante"] * min(ante, WIN_ANTE_CAP)
+    )
+    p = 1 / (1 + math.exp(-max(min(z, 40), -40)))
+    return max(p, ALL_WIN_FLOOR) if raw >= 1 else p
 
 
 def win_band(chance: float) -> str:
@@ -2788,8 +2816,10 @@ def situation(
 
     E2a (pass 4): the band is the calibrated win chance of that blind
     (WIN_BANDS) from the sampler's round totals (boss rules inside). The
-    hands needed (shown) stay ceil(target / per hand) at the K5 low
-    percentile. Without a sampled distribution the pass-3 rule applies:
+    hands needed (shown) = ceil(target / per hand) at the median sampled
+    round (the margin in the fit), never more than the hands when the band
+    is not SHORT, so the line agrees with the band. Without a sampled distribution: per hand = the K5 low
+    percentile and the pass-3 rule applies:
     <= hands - 1 COMFORTABLE, == hands THIN, > hands SHORT (K4); last blind
     won on its final hand -> at least THIN; safety net (fix 2, pass 3 C2):
     THIN (never SHORT) becomes COMFORTABLE when the last 2 blinds were each
@@ -2811,16 +2841,20 @@ def situation(
     last_spare = int(last.get("hands_left", 0)) if last else None
     status, need = "UNKNOWN", None
     raw = chance = None
-    if per and target and hands:
+    margin = None
+    w = win_inputs(power.get("boss_rounds" if kind == "boss" else "rounds"), hands, target) if per else None
+    if w is not None:
+        raw, margin, per = w["raw"], w["margin"], w["per"]
+        chance = calibrated_win_chance(
+            raw, margin=margin, boss=kind == "boss", ante=int(G.get("ante_num") or 1), n=w["n"]
+        )
+        status = win_band(chance)
         need = -(-target // per)
-        raw = raw_win_chance(power.get("boss_rounds" if kind == "boss" else "rounds"), hands, target)
-        if raw is not None:
-            chance = calibrated_win_chance(
-                raw, boss=kind == "boss", ante=int(G.get("ante_num") or 1), spare=need - hands
-            )
-            status = win_band(chance)
-        else:
-            status = SITUATIONS[0 if need <= hands - 1 else 1 if need == hands else 2]
+        if status != "SHORT":  # the line agrees with the band: a likely win fits in the hands
+            need = min(need, hands)
+    elif per and target and hands:
+        need = -(-target // per)
+        status = SITUATIONS[0 if need <= hands - 1 else 1 if need == hands else 2]
     elif last is not None:
         status = "COMFORTABLE" if last_spare else "THIN"
     net = False
@@ -2846,6 +2880,7 @@ def situation(
         "net": net,
         "last_spare": last_spare,
         "win_raw": raw,
+        "win_margin": margin,
         "win_chance": chance,
     }
 
@@ -3017,6 +3052,7 @@ def run_status(
         "win_chance": sit["win_chance"],
         "win_pct": None if sit["win_chance"] is None else int(sit["win_chance"] * 100),
         "win_raw": sit["win_raw"],
+        "win_margin": sit["win_margin"],
         "last_spare": sit["last_spare"],
         "boss_check": bcheck,
         "best_types": power.get("best_types", []),

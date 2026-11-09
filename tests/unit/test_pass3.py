@@ -50,10 +50,12 @@ class TestK5:
         G["blinds"]["big"]["score"] = 3 * power["per_hand"]
         analysis._CACHE.clear()
         S = analysis.run_status(G, [], [])
-        assert S["sit_per"] == power["per_hand_low"]
-        assert S["hands_needed"] >= 4
-        # E2a: the band comes from the calibrated win chance
+        # E2a: the band comes from the calibrated win chance; the shown per
+        # hand is the median sampled round's, and a band that is not SHORT
+        # never shows more hands than the blind has
         assert S["status"] == analysis.win_band(S["win_chance"])
+        assert S["sit_per"] >= power["per_hand_low"]
+        assert S["status"] == "SHORT" or S["hands_needed"] <= S["next_hands"]
         G["blinds"]["big"]["score"] = 10_000_000
         analysis._CACHE.clear()
         assert analysis.run_status(G, [], [])["status"] == "SHORT"

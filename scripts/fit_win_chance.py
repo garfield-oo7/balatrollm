@@ -2,8 +2,10 @@
 
 Replays logged blinds through today's sampler and fits analysis.WIN_FIT, a
 logistic model of "won the blind" on the sampler's raw win chance (share of
-sampled round totals >= target, boss rules inside), boss or not, ante and
-hands needed - hands (K5 percentile).
+sampled round totals >= target, boss rules inside), the margin ln(median round
+total / target), boss or not and the ante (capped at analysis.WIN_ANTE_CAP).
+The raw and margin weights are kept >= 0 (a negative one is fixed at 0 and the
+rest refitted), so the chance never falls as the sampled score rises.
 
 Inputs per blind: the BLIND_SELECT gamestate logged just before it (logged
 after next_round, so it carries the full deck, jokers, levels and money before
@@ -33,7 +35,8 @@ from multiprocessing import Pool
 
 from balatrollm import analysis as A
 
-FEATURES = ("intercept", "raw", "boss", "ante", "spare")
+FEATURES = ("intercept", "raw", "margin", "boss", "ante")
+NONNEG = ("raw", "margin")
 
 
 def _label(d: str) -> str:
@@ -109,7 +112,7 @@ def blinds_of(d: str) -> list[dict]:
         rows.append({
             "pass": _pass(d), "label": _label(d), "round": rn, "ante": int(g.get("ante_num") or 1),
             "kind": kind, "blind": nb.get("name") or kind, "target": S["sit_target"], "hands": S["next_hands"],
-            "need": S["hands_needed"], "raw": S["win_raw"], "won": res["won"], "source": source,
+            "need": S["hands_needed"], "raw": S["win_raw"], "margin": S["win_margin"], "won": res["won"], "source": source,
         })
         done.append({"hands_left": res["hands_left"]})
     return rows
@@ -118,12 +121,18 @@ def blinds_of(d: str) -> list[dict]:
 def x_of(r: dict) -> list[float]:
     eps = 0.5 / A.SAMPLES
     raw = min(max(r["raw"], eps), 1 - eps)
-    return [1.0, math.log(raw / (1 - raw)), float(r["kind"] == "boss"), float(r["ante"]), float(r["need"] - r["hands"])]
+    return [1.0, math.log(raw / (1 - raw)), float(r["margin"]), float(r["kind"] == "boss"), float(min(r["ante"], A.WIN_ANTE_CAP))]
 
 
 def predict(w: list[float], r: dict) -> float:
     z = sum(a * b for a, b in zip(w, x_of(r)))
     return 1 / (1 + math.exp(-max(min(z, 40), -40)))
+
+
+def shown(w: list[float], r: dict) -> float:
+    """The chance STATUS shows: the fit, with the all-rounds-win floor."""
+    p = predict(w, r)
+    return max(p, A.ALL_WIN_FLOOR) if r["raw"] >= 1 else p
 
 
 def solve(m: list[list[float]], v: list[float]) -> list[float]:
@@ -139,10 +148,12 @@ def solve(m: list[list[float]], v: list[float]) -> list[float]:
     return [a[i][n] / a[i][i] for i in range(n)]
 
 
-def fit(rows: list[dict], ridge: float = 1e-3) -> list[float]:
-    """Logistic regression by Newton / IRLS (a small ridge keeps it finite)."""
+def fit(rows: list[dict], ridge: float = 1e-3, fixed: frozenset = frozenset()) -> list[float]:
+    """Logistic regression by Newton / IRLS (a small ridge keeps it finite);
+    a raw / margin weight that comes out negative is fixed at 0 and the rest refitted."""
     k = len(FEATURES)
-    w = [0.0, 1.0, 0.0, 0.0, 0.0]
+    w = [0.0] * k
+    free = [i for i, n in enumerate(FEATURES) if n not in fixed]
     for _ in range(50):
         g = [0.0] * k
         h = [[0.0] * k for _ in range(k)]
@@ -157,19 +168,25 @@ def fit(rows: list[dict], ridge: float = 1e-3) -> list[float]:
         for i in range(1, k):
             g[i] -= ridge * w[i]
             h[i][i] += ridge
-        step = solve(h, g)
+        sub = solve([[h[i][j] for j in free] for i in free], [g[i] for i in free])
+        step = [0.0] * k
+        for i, v in zip(free, sub):
+            step[i] = v
         w = [a + b for a, b in zip(w, step)]
         if max(abs(s) for s in step) < 1e-8:
             break
+    neg = [n for n, v in zip(FEATURES, w) if n in NONNEG and n not in fixed and v < 0]
+    if neg:
+        return fit(rows, ridge, fixed | {neg[0]})
     return w
 
 
 def report(name: str, rows: list[dict], w: list[float]) -> None:
     print(f"\n## {name}: {len(rows)} blinds, {sum(not r['won'] for r in rows)} lost")
-    bands = {"COMFORTABLE": [], "THIN": [], "SHORT": []}
+    bands: dict[str, list] = {"COMFORTABLE": [], "THIN": [], "SHORT": []}
     ll = 0.0
     for r in rows:
-        p = predict(w, r)
+        p = shown(w, r)
         bands[A.win_band(p)].append((p, r["won"]))
         ll += math.log(max(p if r["won"] else 1 - p, 1e-12))
     print(f"log loss {-ll / max(len(rows), 1):.4f}")
@@ -179,11 +196,14 @@ def report(name: str, rows: list[dict], w: list[float]) -> None:
             print(f"{b} | {len(v)} | {sum(p for p, _ in v) / len(v):.1%} | {sum(y for _, y in v) / len(v):.1%} | {sum(not y for _, y in v)}")
         else:
             print(f"{b} | 0 | - | - | 0")
-    print("boss blinds:", end=" ")
-    for b in bands:
-        v = [(predict(w, r), r["won"]) for r in rows if r["kind"] == "boss" and A.win_band(predict(w, r)) == b]
-        print(f"{b} {len(v)} (lost {sum(not y for _, y in v)})", end="; ")
-    print()
+    print("per ante (kind ante: blinds predicted vs actual, COMFORTABLE/THIN/SHORT):")
+    for boss in (False, True):
+        for a in range(1, 9):
+            v = [(shown(w, r), r["won"]) for r in rows if (r["kind"] == "boss") == boss and r["ante"] == a]
+            if v:
+                c = [sum(1 for p, _ in v if A.win_band(p) == b) for b in bands]
+                print(f"  {'boss' if boss else 'small/big'} A{a}: {len(v)} {sum(p for p, _ in v) / len(v):.1%} vs "
+                      f"{sum(y for _, y in v) / len(v):.1%} ({c[0]}/{c[1]}/{c[2]})")
 
 
 def main(argv: list[str]) -> None:
@@ -210,12 +230,12 @@ def main(argv: list[str]) -> None:
             src[r["source"]] = src.get(r["source"], 0) + 1
         games = len({(r["pass"], r["label"]) for r in rows})
         print(f"{k}: {games} games, {len(rows)} blinds, sources {src}")
-    use = [r for r in data["fit"] if r["raw"] is not None and r["need"] is not None]
+    use = [r for r in data["fit"] if r["raw"] is not None and r["margin"] is not None]
     w = fit(use)
     print("\nWIN_FIT = {" + ", ".join(f'"{n}": {v:.4f}' for n, v in zip(FEATURES, w)) + "}")
     stored = [A.WIN_FIT[n] for n in FEATURES]
     for k, rows in data.items():
-        ok = [r for r in rows if r["raw"] is not None and r["need"] is not None]
+        ok = [r for r in rows if r["raw"] is not None and r["margin"] is not None]
         report(f"{k} (fitted constants)", ok, w)
         report(f"{k} (stored constants)", ok, stored)
     if tsv:
