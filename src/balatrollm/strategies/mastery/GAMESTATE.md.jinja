@@ -74,6 +74,10 @@
 {%- if P.kind == "boss" and boss.counter %}
 - Boss rule now: {{ boss.counter }}
 {%- endif %}
+{%- if P.kind == "boss" and "j_luchador" in S.owned_keys %}
+{%- set lu = namespace(i=none) %}{% for j in G.jokers.cards %}{% if lu.i is none and j.key == "j_luchador" and not (j.state and j.state.debuff) %}{% set lu.i = loop.index0 %}{% endif %}{% endfor %}
+- Luchador owned (joker {{ lu.i }}): selling it now disables {{ boss.name or "the boss" }} for this blind. If the boss hurts you, sell it (sell joker {{ lu.i }}) before you play.
+{%- endif %}
 {%- for sp in A.suit_pays %}
 - {{ sp.label }}: {{ {"H": "Hearts", "D": "Diamonds", "C": "Clubs", "S": "Spades"}[sp.suit] }}{% if sp.label == "Ancient Joker" %} this round{% endif %}, {{ sp.gain }} per {{ {"H": "Heart", "D": "Diamond", "C": "Club", "S": "Spade"}[sp.suit] }} scored: keep those cards; a Flush in that suit scores most
 {%- endfor %}
