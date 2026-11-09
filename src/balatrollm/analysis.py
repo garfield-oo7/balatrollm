@@ -4280,6 +4280,28 @@ def reroll_veto(G: dict[str, Any], rerolls: int) -> str | None:
     return None
 
 
+def _consumable_full_veto(G: dict[str, Any], params: dict[str, Any]) -> str | None:
+    """Pass 4 F4 (legality): the game rejects a shop consumable buy with full
+    consumable slots ("Cannot purchase consumable card, consumable slots are
+    full"); a Negative one brings its own slot."""
+    if "card" not in params or G.get("state") != "SHOP":
+        return None
+    try:
+        card = _area_cards(G, "shop")[int(params["card"])]
+    except (IndexError, TypeError, ValueError):
+        return None
+    if card.get("set") not in ("TAROT", "PLANET", "SPECTRAL") or _norm(card)["ed"] == "NEGATIVE":
+        return None
+    cons = G.get("consumables") or {}
+    count = int(cons.get("count", len(_area_cards(G, "consumables"))) or 0)
+    if count < int(cons.get("limit", 2) or 2):
+        return None
+    return (
+        f"Your consumable slots are full ({count}/{int(cons.get('limit', 2) or 2)}). "
+        "To buy this card, use or sell one of your consumables first."
+    )
+
+
 def _legal_only_rest(
     G: dict[str, Any], method: str, params: dict[str, Any], shop_rerolls: int, full: bool
 ) -> str | None:
@@ -4287,6 +4309,8 @@ def _legal_only_rest(
     validate_action after the card-count checks, with the same messages."""
     if method == "reroll" and shop_rerolls >= REROLL_RUNAWAY:  # loop guard only
         return "Reroll refused: too many rerolls in one shop. Call next_round."
+    if method == "buy" and (veto := _consumable_full_veto(G, params)):
+        return veto
     if method == "buy" and "card" in params and G.get("state") == "SHOP" and full:
         # Legality (build thread, 2026-11-09): the game rejects a full-slot joker buy, and 3 game rejections in a row
         # end the run; a refusal here instead counts toward leaving the shop. Negative jokers bring their own slot.
@@ -4434,6 +4458,8 @@ def validate_action(
             "(owner F1): call next_round."
         )
     if method == "reroll" and (veto := reroll_veto(G, shop_rerolls)):
+        return veto
+    if method == "buy" and (veto := _consumable_full_veto(G, params)):  # F4: legality
         return veto
     if method == "buy" and "card" in params and G.get("state") == "SHOP" and full:
         try:

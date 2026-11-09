@@ -165,3 +165,14 @@ def test_f1_wrong_item_guard_never_refuses_a_buy_naming_its_item() -> None:
     msg = analysis.shop_wrong_item_veto(G, {"card": 0}, "Scholar costs $4, buy it.")
     assert msg is not None and "Pluto" in msg and "Scholar" in msg and "card 1" in msg
 
+
+def test_f4_consumable_slots_refuse_only_when_full() -> None:
+    G = _full_shop()
+    G["jokers"]["limit"] = 5
+    G["shop"]["cards"] = [{"key": "c_pluto", "set": "PLANET", "label": "Pluto", "cost": {"buy": 3}}]
+    G["consumables"] = {"count": 1, "limit": 2, "cards": [{"key": "c_mars", "set": "PLANET", "label": "Mars"}]}
+    for advice in (True, False):
+        assert analysis.validate_action(G, "buy", {"card": 0}, advice=advice) is None  # a free slot: legal
+    G["consumables"]["count"] = 2
+    for advice in (True, False):
+        assert "consumable slots are full" in analysis.validate_action(G, "buy", {"card": 0}, advice=advice)
