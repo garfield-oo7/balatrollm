@@ -4287,6 +4287,15 @@ def _legal_only_rest(
     validate_action after the card-count checks, with the same messages."""
     if method == "reroll" and shop_rerolls >= REROLL_RUNAWAY:  # loop guard only
         return "Reroll refused: too many rerolls in one shop. Call next_round."
+    if method == "buy" and "card" in params and G.get("state") == "SHOP" and full:
+        # Legality (build thread, 2026-11-09): the game rejects a full-slot joker buy, and 3 game rejections in a row
+        # end the run; a refusal here instead counts toward leaving the shop. Negative jokers bring their own slot.
+        try:
+            card = _area_cards(G, "shop")[int(params["card"])]
+        except (IndexError, TypeError, ValueError):
+            card = {}
+        if card.get("set") == "JOKER" and _norm(card)["ed"] != "NEGATIVE":
+            return "Your joker slots are full. To buy a joker with full slots, sell one first."
     if method == "pack":
         if params.get("skip") and params.get("card") is not None:
             return "Use either `card` or `skip`, not both."
