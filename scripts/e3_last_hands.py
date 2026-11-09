@@ -96,6 +96,9 @@ def main() -> None:
             if a.get("tool") == "discard":
                 return opt.get(tuple(sorted(a.get("cards") or [])))
             if a.get("tool") == "play":
+                for x in (e3.get("old_play"), e3["play"]):
+                    if x and x["cards"] == sorted(a.get("cards") or []):
+                        return x["chance"]
                 return p_play
             return None
 

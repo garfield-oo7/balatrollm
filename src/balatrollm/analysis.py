@@ -2242,6 +2242,16 @@ def _e3_round(G: dict[str, Any], hands_left: int, discards_left: int) -> dict[st
     return {**G, "round": rnd}
 
 
+def _e3_after_play(G: dict[str, Any], htype: str) -> dict[str, Any]:
+    """G after ``htype`` was played once more this round (Card Sharp, The Eye,
+    The Mouth and Supernova read the hands table)."""
+    hands = {k: dict(v or {}) for k, v in (G.get("hands") or {}).items()}
+    row = hands.setdefault(htype, {})
+    row["played_this_round"] = int(row.get("played_this_round", 0) or 0) + 1
+    row["played"] = int(row.get("played", 0) or 0) + 1
+    return {**G, "hands": hands}
+
+
 def _e3_keep_sets(G: dict[str, Any], hand: list[dict[str, Any]], plays: list[dict[str, Any]]) -> list[set[int]]:
     """Cards worth keeping for one dig: each listed play, each suit, each
     Straight window with 3+ ranks, each rank held twice or more, nothing."""
@@ -2364,34 +2374,59 @@ def _e3_sample(
         return 3 if serpent else max(size - n_held, 0)
 
     G_last = _e3_round(G, 1, discards - 1)
+    after: dict[tuple[int, str], dict[str, Any]] = {}
+
+    def last_G(disc_left: int, htype: str) -> dict[str, Any]:
+        # the final hand sees the first hand's type as played this round
+        k = (disc_left, htype)
+        if k not in after:
+            after[k] = _e3_after_play(G_last if disc_left == discards - 1 else _e3_round(G, 1, disc_left), htype)
+        return after[k]
 
     def second(rest: list[dict[str, Any]], perm: list[int], start: int, Gx: dict[str, Any], need: float) -> int:
         n = min(refill(len(rest)), len(perm) - start)
         nxt = rest + [deck[j] for j in perm[start:start + max(n, 0)]]
         return best_of(Gx, nxt, need)[0]
 
-    # Play the best play now
-    if best is None:
-        play_chance = 0.0
-    elif h == 1:
-        play_chance = 1.0 if best.get("floor", best["score"]) >= goal else 0.0
-    else:
-        s0 = best.get("floor", best["score"])
-        rest = [c for i, c in enumerate(hand_raw) if i not in set(best["cards"])]
-        G_after = _e3_round(G, 1, discards)
-        hits = sum(1 for perm in perms if s0 + second(rest, perm, 0, G_after, goal - s0) >= goal)
-        play_chance = hits / len(perms)
+    def play_now(cards: list[int]) -> dict[str, Any]:
+        """Chance of playing exactly ``cards`` now (FLOOR score, as WINS)."""
+        chosen = set(cards)
+        est = estimate_play(G, [hand_raw[i] for i in sorted(chosen)],
+                            [c for i, c in enumerate(hand_raw) if i not in chosen])
+        s0 = 0 if est["blocked"] else int(est["score"])
+        if h == 1 or s0 >= goal:
+            chance = 1.0 if s0 >= goal else 0.0
+        else:
+            rest = [c for i, c in enumerate(hand_raw) if i not in chosen]
+            Gx = last_G(discards, est["hand"])
+            chance = sum(1 for perm in perms if s0 + second(rest, perm, 0, Gx, goal - s0) >= goal) / len(perms)
+        return {"hand": est["hand"], "cards": sorted(chosen), "chance": chance}
+
+    # Play the best listed play now, and the exact old play (with its filler)
+    # when the old action is a different play
+    play = None
+    if best is not None:
+        play = play_now(list(best["cards"]))
+        play["hand"] = best["hand"]
+        if h == 1:  # the listed floor decides, as WINS does
+            play["chance"] = 1.0 if best.get("floor", best["score"]) >= goal else 0.0
+    old_play = None
+    if old.get("tool") == "play" and old.get("cards"):
+        if play is not None and sorted(old["cards"]) == play["cards"]:
+            old_play = play
+        else:
+            old_play = play_now(list(old["cards"]))
 
     G1 = _e3_round(G, h, discards - 1)
 
     def hit(kept: list[dict[str, Any]], n_draw: int, perm: list[int]) -> bool:
         new = kept + [deck[j] for j in perm[:n_draw]]
-        s1, _t, play1 = best_of(G1, new, goal)
+        s1, t1, play1 = best_of(G1, new, goal)
         if s1 >= goal:
             return True
         if h == 2 and s1 > 0:
             rest = [c for i, c in enumerate(new) if i not in set(play1)]
-            return s1 + second(rest, perm, n_draw, G_last, goal - s1) >= goal
+            return s1 + second(rest, perm, n_draw, last_G(discards - 1, t1), goal - s1) >= goal
         return False
 
     # Screen every option on the first E3_SCREEN draws, then finish the old
@@ -2413,7 +2448,8 @@ def _e3_sample(
     return {
         "hands_left": h,
         "remaining": remaining,
-        "play": {"hand": best["hand"], "cards": list(best["cards"]), "chance": play_chance} if best else None,
+        "play": play,
+        "old_play": old_play,
         "options": results,
         "best": top,
         "old_discard": list(old_discard) if old_discard else None,
@@ -2429,47 +2465,50 @@ def _e3_action(G: dict[str, Any], e3: dict[str, Any], old: dict[str, Any]) -> di
         return ", ".join(card_name(hand_raw[i]) for i in idx)
 
     play = e3["play"]
+    old_play = e3.get("old_play")
     top = e3["best"]
     p_play = play["chance"] if play else 0.0
     p_top = top["chance"] if top else 0.0
-    if p_top <= 0 and p_play <= 0:
+    if p_top <= 0 and p_play <= 0 and not (old_play and old_play["chance"] > 0):
         return old
     if old.get("tool") == "discard" and e3["old_discard"]:
         p_old = next(r["chance"] for r in e3["options"] if r["discard"] == e3["old_discard"])
-    elif old.get("tool") == "play":
-        p_old = p_play
+    elif old.get("tool") == "play" and old_play:
+        p_old = old_play["chance"]
     else:
         p_old = -1.0
     reach = f"to reach {fmt_num(e3['remaining'])}" + (
         " over your last 2 hands" if e3["hands_left"] == 2 else " after this discard"
     )
-    now = f"playing {play['hand']} now" if play else "playing now"
     # The old choice stays unless another option beats it by more than
-    # E3_SWITCH (the same margin for a new discard and for playing now)
+    # E3_SWITCH (the same margin for a new discard and for playing now); the
+    # chance shown always belongs to the exact cards suggested
     alts = []
     if top and top["discard"] != e3["old_discard"]:
         alts.append((p_top, "discard"))
-    if play and old.get("tool") != "play":
+    if play and not (old_play is not None and old_play["cards"] == play["cards"]):
         alts.append((p_play, "play"))
     p_alt, kind = max(alts, default=(-1.0, None))
+    chosen_play = play
     if kind is None or p_alt <= p_old + E3_SWITCH:
         if old.get("tool") == "discard" and e3["old_discard"]:
             kind, cards = "discard", e3["old_discard"]
-        elif old.get("tool") == "play" and play:
-            kind = "play"
+        elif old.get("tool") == "play" and old_play:
+            kind, chosen_play = "play", old_play
         else:
             return old
     elif kind == "discard":
         cards = top["discard"]
     if kind == "discard":
         p = next(r["chance"] for r in e3["options"] if r["discard"] == cards)
-        why = f"discard {names(cards)}: {pct(p)} {reach} vs {pct(p_play)} {now}"
+        best_now = max((x for x in (play, old_play) if x), key=lambda x: x["chance"], default=None)
+        now = f"{pct(best_now['chance'])} playing {best_now['hand']} now" if best_now else "0% playing now"
+        why = f"discard {names(cards)}: {pct(p)} {reach} vs {now}"
         return {"tool": "discard", "cards": list(cards), "why": why, "e3": "discard"}
     alt = f"{pct(p_top)} discarding {names(top['discard'])}" if top else "no discard helps"
     reach_p = f"to reach {fmt_num(e3['remaining'])}" + (" over your last 2 hands" if e3["hands_left"] == 2 else "")
-    why = f"play {play['hand']} now: {pct(p_play)} {reach_p} vs {alt}"
-    cards_play = old["cards"] if old.get("tool") == "play" else list(play["cards"])
-    return {"tool": "play", "cards": cards_play, "why": why, "e3": "play"}
+    why = f"play {chosen_play['hand']} now: {pct(chosen_play['chance'])} {reach_p} vs {alt}"
+    return {"tool": "play", "cards": list(chosen_play["cards"]), "why": why, "e3": "play"}
 
 
 def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
