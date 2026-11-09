@@ -1,6 +1,7 @@
 """Core LLM-powered Balatro bot implementation."""
 
 import asyncio
+import contextvars
 import dataclasses
 import json
 import logging
@@ -44,6 +45,22 @@ from .llm import LLMClient, LLMClientError, LLMTimeoutError
 from .strategy import StrategyManager, StrategyManifest
 
 logger = logging.getLogger(__name__)
+
+# B0a (pass 4): the run a log record belongs to. Set per game inside its asyncio
+# task (contextvars are task-local), so with parallel games every line, incl.
+# llm.py / openai SDK lines made on the game's behalf, lands in its own run.log.
+_RUN_LOG: contextvars.ContextVar[str | None] = contextvars.ContextVar("balatrollm_run_log", default=None)
+
+
+class _RunFilter(logging.Filter):
+    """Pass only records logged in the context of one run."""
+
+    def __init__(self, run_id: str) -> None:
+        super().__init__()
+        self.run_id = run_id
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return _RUN_LOG.get() == self.run_id
 
 SHOP_STATES = ("SHOP", "SMODS_BOOSTER_OPENED")
 # Refused calls in a row in one shop visit before the harness leaves the shop
@@ -148,18 +165,23 @@ class Bot:
             self._balatro = None
 
     def _setup_file_logging(self) -> None:
-        """Redirect logging to file in run directory."""
+        """Send this game's log lines to its run directory's run.log.
+
+        One FileHandler per game on the root logger, filtered by the game's
+        context (B0a): parallel games no longer swap the root handlers.
+        """
         if self._collector is None:
             return
 
         root_logger = logging.getLogger()
         root_logger.setLevel(logging.INFO)
-        for handler in root_logger.handlers[:]:
-            root_logger.removeHandler(handler)
 
         log_file = self._collector.run_dir / "run.log"
+        run_id = str(log_file)
+        _RUN_LOG.set(run_id)
         file_handler = logging.FileHandler(log_file)
         file_handler.setLevel(logging.INFO)
+        file_handler.addFilter(_RunFilter(run_id))
         file_handler.setFormatter(
             logging.Formatter(
                 "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -167,6 +189,16 @@ class Bot:
             )
         )
         root_logger.addHandler(file_handler)
+        self._file_handler = file_handler
+
+    def _teardown_file_logging(self) -> None:
+        handler = getattr(self, "_file_handler", None)
+        if handler is None:
+            return
+        logging.getLogger().removeHandler(handler)
+        handler.close()
+        self._file_handler = None
+        _RUN_LOG.set(None)
 
     async def _wait_for_menu(self, timeout: float = 10.0) -> None:
         """Wait for game to be in MENU state."""
@@ -252,6 +284,7 @@ class Bot:
                     logger.debug(
                         f"Could not write stats (normal if run failed early): {e}"
                     )
+            self._teardown_file_logging()
 
         return self._collector._calculate_stats(
             self._finish_reason or "unexpected_error"
