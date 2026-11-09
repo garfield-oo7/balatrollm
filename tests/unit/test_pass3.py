@@ -482,11 +482,18 @@ def render_flags(G: dict[str, Any], lessons_on: bool = True) -> str:
     return StrategyManager("mastery").render_gamestate(G, rounds=[], history=[], flags={"lessons": lessons_on, "suggest_action": True})
 
 
+def lessons_retired_p2c1() -> bool:
+    from balatrollm import lessons
+
+    return [(x["id"], x["status"]) for x in lessons.load(analysis.LESSONS_FILE)] == [("P2-C1", "retired")]
+
+
 class TestMarkLesson:
-    def test_shown_under_the_mark_in_hand(self) -> None:
+    def test_retired_lesson_not_shown_under_the_mark(self) -> None:
+        # pass 4 F7: P2-C1 is retired (status "retired" is never shown); the harness Mark fix stays
         text = render_flags(mark_hand())
-        assert "- Past games: [P2-C1] when the blind is The Mark" in text
-        assert "(SEED-F, SEED-H, SEED-S)" in text
+        assert "Past games" not in text and "[P2-C1]" not in text
+        assert lessons_retired_p2c1()
 
     def test_not_in_the_small_or_big_blind_of_a_mark_ante(self) -> None:
         G = make_state("H_2 S_3 D_7", boss="The Mark")  # Small Blind current, The Mark later this ante
