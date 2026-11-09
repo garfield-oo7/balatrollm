@@ -32,7 +32,7 @@ Do not repeat it. Choose a different action.
 3. Otherwise -> play the "Suggested action" indices (or the highest listed play).
 {%- elif G and G.state == "SHOP" %}
 1. Affordable on-plan [XMULT] joker, not [OFF-PLAN] (price <= SCORE_SPENDABLE), or tier S/A [MAIN]/[MULT] joker (or tier A [ECON] costing $7 or less while ECON_OK = YES; tier B+ [ECON] in Antes 1-2) with price <= SPENDABLE (SCORE_SPENDABLE for SCORE +50%) and SLOTS_FREE > 0? -> buy it. Otherwise follow PRIORITY (first unchecked GOAL).
-2. Planet marked [MAIN] (price <= SCORE_SPENDABLE) or [FEED], or a [BUY] voucher with price <= SPENDABLE? -> buy it if a consumable slot is free; else use or sell one first (then use the planet).
+2. Planet marked [MAIN] (price <= SCORE_SPENDABLE) or [FEED], or a [BUY] voucher with price <= SPENDABLE? -> buy it (a Planet needs a free consumable slot: if none is free, use or sell one first), then use the planet.
 3. Pack or reroll allowed by the SHOP RULES (Spectral packs are worth opening; Standard pack while BLUE_SEALS = 0 or you own Hologram)? -> do it. Otherwise -> next_round.
 {%- elif G and G.state == "SMODS_BOOSTER_OPENED" %}
 1. Pick the best card by the PACK RULES (pass Suggested targets as `targets`), or skip if nothing qualifies.
