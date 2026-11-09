@@ -3757,6 +3757,19 @@ def _score_hands(
         rnd = dict(G.get("round") or {})
         last = rescore({**G, "round": {**rnd, "hands_left": 1}})
         per_round = [pr - s + l for pr, s, l in zip(per_round, scores, last)]
+    # E2a round totals (Sol g3 finding 1): the final hand of a 2+ hand round is
+    # a Card Sharp repeat too, with Acrobat's last-hand X3 on top
+    last_rep = last
+    if rounds and sharp and boss != "The Mouth":
+        if "j_acrobat" in keys:
+            rnd = dict(G_rep.get("round") or {})
+            G_rep_last = {**G_rep, "round": {**rnd, "hands_left": 1}}
+            last_rep = [
+                max(l, _best_play(G_rep_last, hand, pad, only=modal)[0])
+                for l, (_, _, hand, _) in zip(last, chosen)
+            ]
+        else:
+            last_rep = rep
     n = len(chosen)
     if boss in RESTRICTED_TYPE_BOSSES:
         by_type: list[dict[str, int]] = []
@@ -3806,9 +3819,9 @@ def _score_hands(
     elif rounds:
 
         def one_hand(i: int, k: int, h: int) -> float:
-            if k == h - 1:
-                return last[i]
-            return scores[i] if k == 0 else rep[i]
+            if k == 0:  # the first hand (a one-hand round: Acrobat, no repeat)
+                return last[i] if h == 1 else scores[i]
+            return last_rep[i] if k == h - 1 else rep[i]
 
         totals = {h: _round_totals(n, h, lambda i, k, h=h: one_hand(i, k, h)) for h in range(1, hands + 1)}
     else:
