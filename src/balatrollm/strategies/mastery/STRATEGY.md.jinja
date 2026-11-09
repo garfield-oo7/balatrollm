@@ -18,7 +18,7 @@ You are an expert Balatro player. Each turn you make exactly ONE tool call.
 - Tags next to items: [XMULT] multiplies Mult (best), [MAIN] fits MAIN_HAND, [MULT] +Mult, [SCALE] grows over time, [CHIPS] +Chips, [ECON] money, [UTIL] utility, [KEEP-DISCARDS] only good if you rarely discard, [OFF-PLAN] fits another hand type, [TRAP] never buy. Tier S > A > B > C.
 {% if G.state == "SELECTING_HAND" %}
 # PLAY RULES (go top to bottom, do the first rule that applies)
-1. If a listed play is marked WINS: play exactly its indices. Do not discard first. If you own Square Joker, play the "Suggested action" instead: the same play padded to exactly 4 cards, which grows Square Joker.
+1. If a listed play is marked WINS: play exactly its indices. Do not discard first. If you own Square Joker, play the "Suggested action" instead: the same play padded to exactly 4 cards when the padded play still wins, which grows Square Joker.
 2. If DISCARDS > 0 and no listed play WINS: discard the "Suggested discard" indices to dig toward a winning play. It never touches the cards of your best play that reaches PER_HAND, so that play is still there if the dig misses. If it says "none", go to rule 3. If "Discard costs" are listed (Banner, Green Joker, Ramen, Blue Joker, Delayed Gratification), weigh them: playing on pace can be better than digging.
 3. Otherwise play the "Suggested action" indices (the best listed play plus safe filler cards). A play reaching PER_HAND is played without digging only when DISCARDS = 0 or the dig is not worth its cost.
 4. HANDS = 1: use every remaining discard first (rule 2), then play the best listed play.

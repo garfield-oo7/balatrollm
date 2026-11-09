@@ -27,7 +27,7 @@ Do not repeat it. Choose a different action.
 
 # DECIDE NOW
 {%- if G and G.state == "SELECTING_HAND" %}
-1. A listed play marked WINS? -> play its indices (own Square Joker? play the "Suggested action": it pads the play to 4 cards).
+1. A listed play marked WINS? -> play its indices (own Square Joker? play the "Suggested action": it pads the play to 4 cards when that still wins).
 2. DISCARDS > 0 and no listed play WINS? -> discard the "Suggested discard" indices to dig toward a winning play (it keeps your best play's cards); if it says "none", or Discard costs are listed and the dig is not worth them, go to 3.
 3. Otherwise -> play the "Suggested action" indices (or the highest listed play).
 {%- elif G and G.state == "SHOP" %}
