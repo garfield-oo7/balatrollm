@@ -335,8 +335,14 @@ class Bot:
                     decided_on = gamestate
                     self._ledger_call = None
                     self._ledger_out = {"result": "unknown"}
-                    response = await self._get_llm_response(gamestate)
-                    gamestate = await self._execute_tool_call(response, gamestate)
+                    try:
+                        response = await self._get_llm_response(gamestate)
+                        gamestate = await self._execute_tool_call(response, gamestate)
+                    except BaseException as e:
+                        # B0c: the call that ends the run still gets its row (Sol g1 #1)
+                        self._ledger_out.setdefault("abort", f"{type(e).__name__}: {e}")
+                        self._write_ledger(decided_on, None)
+                        raise
                     self._write_ledger(decided_on, gamestate)
                 case "ROUND_EVAL":
                     if self._last_hand_state is not None:
@@ -944,14 +950,18 @@ class Bot:
         self._consecutive_vetoes = 0
         self._shop_refusal_exits += 1
         money = before.get("money")
+        forced = self._ledger_out.setdefault("harness_forced", [])  # B0c (Sol g1 #3)
         try:
             gamestate = before
             if before.get("state") == "SMODS_BOOSTER_OPENED":
                 gamestate = await self._balatro.call("pack", {"skip": True})
+                forced.append("pack(skip)")
             if gamestate.get("state") == "SHOP":
                 gamestate = await self._balatro.call("next_round")
+                forced.append("next_round")
         except BalatroError as e:
             logger.warning(f"Harness could not leave the shop: {e}")
+            forced.append(f"failed: {e}")
             return await self._balatro.call("gamestate")
         logger.info(f"Harness left the shop after {n} refusals in a row (money ${money})")
         self._last_failed_msg = (
