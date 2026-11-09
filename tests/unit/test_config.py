@@ -132,15 +132,15 @@ class TestGetModelConfig:
     def test_none_returns_defaults(self) -> None:
         """None input should return default config."""
         config = get_model_config(None)
-        assert "seed" in config
+        assert "seed" not in config  # removed from the defaults (d642f7d)
         assert "parallel_tool_calls" in config
         assert config["parallel_tool_calls"] is False
 
     def test_empty_returns_defaults(self) -> None:
         """Empty dict should return default config."""
         config = get_model_config({})
-        assert "seed" in config
-        assert config["seed"] == 1
+        assert "seed" not in config  # removed from the defaults (d642f7d)
+        assert config["parallel_tool_calls"] is False
 
     def test_user_overrides_applied(self) -> None:
         """User config should override defaults."""

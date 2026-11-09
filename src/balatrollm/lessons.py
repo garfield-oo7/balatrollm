@@ -30,7 +30,8 @@ LIMIT = 2
 SHOWN = ("trial", "kept")
 STATUSES = ("candidate", "trial", "kept", "retired")
 TEXT = re.compile(r"^when .+, do .+, because .+", re.IGNORECASE | re.DOTALL)
-LABEL = re.compile(r"^SEED-[A-Z]{1,3}$")
+# SEED-A .. SEED-ZZZ (passes 1-3) and SEED-N01-style fresh-seed labels (pass 4, B0e); never an 8-char seed
+LABEL = re.compile(r"^SEED-(?:[A-Z]{1,3}|[A-Z][0-9]{2})$")
 CARD_SETS = ("face_down",)
 
 _CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}

@@ -59,3 +59,12 @@ def test_line_outside_a_game_goes_to_no_run_log(tmp_path):
     botmod.logger.info("outside")
     assert (d / "run.log").read_text().count("inside") == 1
     assert "outside" not in (d / "run.log").read_text()
+
+
+def test_b0e_lesson_labels_accept_fresh_seed_labels():
+    from balatrollm import lessons as L
+
+    for ok in ("SEED-A", "SEED-T", "SEED-AB", "SEED-N01", "SEED-N60"):
+        assert L.LABEL.match(ok), ok
+    for bad in ("SEED-ABCD1234", "SEED-N1", "SEED-N001", "ABCD1234", "SEED-n01"):
+        assert not L.LABEL.match(bad), bad
