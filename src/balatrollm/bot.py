@@ -454,8 +454,9 @@ class Bot:
             b["logged"].add(h)
             with (self._collector.run_dir / "book_blocks.jsonl").open("a") as f:
                 f.write(json.dumps({"block": h, "book": b["hash"], "text": text}, ensure_ascii=False) + "\n")
-        placeholder = {"type": "text", "text": f"[book block {h}: see book_blocks.jsonl]", "book_block": h,
-                       "cache_control": book_part["cache_control"]}
+        placeholder = {"type": "text", "text": f"[book block {h}: see book_blocks.jsonl]", "book_block": h}
+        if "cache_control" in book_part:
+            placeholder["cache_control"] = book_part["cache_control"]
         messages = [
             {**m, "content": [placeholder if part is book_part else part for part in m["content"]]}
             if isinstance(m.get("content"), list) else m
@@ -779,7 +780,11 @@ class Bot:
         book_part: dict[str, Any] | None = None
         if self._book is not None:
             # Pass 4 L: the book before the rulebook (cached prefix shared by phases)
-            book_part = {"type": "text", "text": self._book_block(gamestate), "cache_control": {"type": "ephemeral"}}
+            # (``book_cache_breakpoint`` false: no own breakpoint; the rulebook's
+            # breakpoint after it still caches book + rulebook as one prefix)
+            book_part = {"type": "text", "text": self._book_block(gamestate)}
+            if self.harness.get("book_cache_breakpoint", True):
+                book_part["cache_control"] = {"type": "ephemeral"}
             system_parts = [book_part, strategy_block]
         if self.harness.get("system_prompt"):
             # Static rulebook in the system role, dynamic state in the user turn
