@@ -2850,6 +2850,86 @@ def situation(
     }
 
 
+INVEST_MIN_PCT = 25  # E2b: SCORE +25% per hand or more
+
+
+def shop_investment(G: dict[str, Any], sit: dict[str, Any], score_spendable: int) -> dict[str, Any] | None:
+    """E2b shop investment (pass 4, owner Q5 a / Q7 a): in a shop, when the
+    next blind reads THIN or SHORT or needs hands - 1 or more (2+ hands), the
+    shop joker with the best SCORE % per hand of +25% or more whose price is
+    within SCORE_SPENDABLE (with full slots: its best swap) -> the PRIORITY
+    text and one "buy vs save vs reroll" line: money after, interest lost and
+    the next blind's win chance with and without it. Advice only (no veto)."""
+    if G.get("state") != "SHOP":
+        return None
+    need, hands = sit.get("hands_needed"), int(sit.get("hands") or 0)
+    tight = sit.get("status") in ("THIN", "SHORT") or (need is not None and hands >= 2 and need >= hands - 1)
+    if not tight:
+        return None
+    imp = shop_impact(G)
+    base = imp.get("score") or 0
+    jokers = G.get("jokers") or {}
+    full = int(jokers.get("count", 0)) >= int(jokers.get("limit", 5))
+    shop = _area_cards(G, "shop")
+    best = None
+    for i, card in enumerate(shop):
+        if card.get("set") != "JOKER" or (card.get("state") or {}).get("hidden"):
+            continue
+        cost = int((card.get("cost") or {}).get("buy", 0) or 0)
+        if cost > score_spendable:
+            continue
+        swap = None
+        if full and _norm(card)["ed"] != "NEGATIVE":
+            swap = (imp.get("swaps") or {}).get(i)
+            if not swap or not base:
+                continue
+            pct = round(swap["delta"] * 100 / base)
+        else:
+            pct = (imp.get("shop_pct") or {}).get(i)
+        if pct is None or pct < INVEST_MIN_PCT:
+            continue
+        if best is None or pct > best["pct"]:
+            best = {"index": i, "label": card.get("label"), "cost": cost, "pct": pct, "swap": swap}
+    if best is None:
+        return None
+    money = int(G.get("money") or 0)
+    after = money - best["cost"]
+    card = shop[best["index"]]
+    owned = _area_cards(G, "jokers")
+    if best["swap"]:
+        owned = [j for n, j in enumerate(owned) if n != best["swap"]["index"]]
+        after += int((_area_cards(G, "jokers")[best["swap"]["index"]].get("cost") or {}).get("sell", 0) or 0)
+    area = {**jokers, "cards": [*owned, card], "count": len(owned) + 1}
+    G_buy = {**G, "jokers": area, "money": after}
+    sit_buy = situation(G_buy, power_check(G_buy), None)
+    now, then = sit.get("win_chance"), sit_buy.get("win_chance")
+    reroll = int((G.get("round") or {}).get("reroll_cost", 5) or 0)
+
+    def chance(p: float | None) -> str:
+        return "?" if p is None else f"{int(p * 100)}%"
+
+    sell = f", selling {best['swap']['label']}" if best["swap"] else ""
+    why = sit.get("status") if sit.get("status") in ("THIN", "SHORT") else f"needs {need} of {hands} hands"
+    line = (
+        f"buy {best['label']} (${best['cost']}{sell}): ${after} left, interest next round ${interest(after)}"
+        f" (loses ${interest(money) - interest(after)}), next blind win chance about {chance(then)}"
+        f" | save: ${money} left, interest ${interest(money)}, win chance about {chance(now)}"
+        f" | reroll (${reroll}): ${money - reroll} left, the joker it finds is not known"
+    )
+    return {
+        **best,
+        "money_after": after,
+        "interest_lost": interest(money) - interest(after),
+        "win_now": now,
+        "win_with": then,
+        "line": line,
+        "priority": (
+            f"buy {best['label']} (SCORE +{best['pct']}% per hand{sell}) before rerolling or saving for an"
+            f" [XMULT] joker: the next blind is {why}"
+        ),
+    }
+
+
 def run_status(
     G: dict[str, Any],
     rounds: list[dict[str, Any]] | None = None,
@@ -2905,6 +2985,11 @@ def run_status(
         if open_goals
         else "buy what builds your run (see STATUS); keep money and empty slots while COMFORTABLE"
     )
+    score_spendable = max(money - reserve(G, status, boss_short), money - effective_floor, 0)
+    invest = shop_investment(G, sit, score_spendable)
+    if invest:
+        # E2b: a +25% joker within SCORE_SPENDABLE goes ahead of the [XMULT] goal
+        priority = invest["priority"]
     milestone = f"Ante {ante} goals met: {len(goals) - len(open_goals)}/{len(goals)}."
     return {
         "ante": ante,
@@ -2949,7 +3034,9 @@ def run_status(
         # money a score buy may use: a joker filling an empty slot (Antes 1-3),
         # a joker with SCORE +50% or more, an on-plan [XMULT] joker, a [MAIN]
         # planet, a Buffoon pack with a free slot, or a SCORE > 0 joker while TOO WEAK
-        "score_spendable": max(money - reserve(G, status, boss_short), money - effective_floor, 0),
+        "score_spendable": score_spendable,
+        # E2b: "buy vs save vs reroll" for the best +25% joker (None = no line)
+        "invest": invest,
         "shop_locked": bool((G.get("luna") or {}).get("shop_locked")),
         # C4: Luna may ask for a boss reroll in this shop
         "boss_reroll_ok": G.get("state") == "SHOP"
@@ -4091,6 +4178,9 @@ def _shop_impact(G: dict[str, Any]) -> dict[str, Any]:
         "score": 0,
         "shop": {},
         "pack": {},
+        # E2b: numeric SCORE % per hand of each shop / pack joker (now)
+        "shop_pct": {},
+        "pack_pct": {},
         "owned": {},
         "swaps": {},
         "pack_swaps": {},
@@ -4122,9 +4212,13 @@ def _shop_impact(G: dict[str, Any]) -> dict[str, Any]:
     def signed(v: float) -> str:
         return f"{'+' if v >= 0 else ''}{fmt_num(v)}"
 
+    pct_now: dict[int, int] = {}
+
     def joker_text(card: dict[str, Any]) -> str:
         key = card.get("key", "")
         new = score([*owned, card])
+        if base:
+            pct_now[id(card)] = round((new - base) * 100 / base)
         txt = f"{signed(new - base)} per hand{pct(new - base)}"
         if key in GROWING or str(card.get("label")) in knowledge.GROWS_XMULT:
             Gg = grown(_with_jokers(G0, [*owned, card]), GROWTH_BLINDS, types)
@@ -4165,6 +4259,8 @@ def _shop_impact(G: dict[str, Any]) -> dict[str, Any]:
             d = item_delta(card)
             if d:
                 out[area][i] = d
+                if card.get("set") == "JOKER" and id(card) in pct_now:
+                    out[area + "_pct"][i] = pct_now[id(card)]
     contrib = {}
     for i, j in enumerate(owned):
         rest = [x for k, x in enumerate(owned) if k != i]

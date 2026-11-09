@@ -49,6 +49,9 @@
 {%- endif %}
 - GOALS for Ante {{ S.ante }}: {% for g in S.goals %}[{{ "x" if g.done else " " }}] {{ g.text }}{% if not loop.last %}; {% endif %}{% endfor %}
 - PRIORITY: {{ S.priority }}.
+{%- if S.invest %}
+- BUY vs SAVE vs REROLL: {{ S.invest.line }}
+{%- endif %}
 {%- if S.observatory %}
 - Observatory owned: HOLD MAIN_HAND planets instead of using them.
 {%- endif %}
