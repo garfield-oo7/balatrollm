@@ -126,6 +126,7 @@ class Bot:
         self._shop_refusal_exits: int = 0
         # Committed MAIN_HAND, carried between decisions (P2-4)
         self._main_commit: dict[str, Any] | None = None
+        self._deadline_deferred: int | None = None  # F5: round of the first deadline shop
         # After a buy took money below $10 from Ante 4, the shop is locked (F1)
         self._shop_locked: bool = False
         # Boss rerolls per ante, harness's and Luna's (decision C: at most 1)
@@ -891,9 +892,15 @@ class Bot:
             and ante >= DEADLINE_ANTE
             and self.harness.get("deadline_commit", True)  # pass 4 A1
         ):
-            # C6: still OPEN at the end of Ante 2 -> commit (sticky like a joker commit)
-            self._main_commit = deadline_commit(gamestate, self._history)
-            logger.info(f"Harness MAIN_HAND deadline commit: {self._main_commit['hand']} ({self._main_commit['trigger']})")
+            # C6: still OPEN at the end of Ante 2 -> commit (sticky like a joker commit).
+            # F5: no hand played twice -> stay OPEN for this shop, commit with the fallback at the next one
+            rnd = int(gamestate.get("round_num") or 0)
+            deferred = getattr(self, "_deadline_deferred", None)
+            if deferred is None:
+                deferred = self._deadline_deferred = rnd
+            self._main_commit = deadline_commit(gamestate, self._history, final=rnd > deferred)
+            if self._main_commit is not None:
+                logger.info(f"Harness MAIN_HAND deadline commit: {self._main_commit['hand']} ({self._main_commit['trigger']})")
         self._clear_stale_request(gamestate)
         # Investment Tag pays at this ante's boss cash-out: gone once the ante moves on
         self._pending_tags = [t for t in getattr(self, "_pending_tags", []) if t["ante"] >= ante]

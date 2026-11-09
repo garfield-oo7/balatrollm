@@ -1575,14 +1575,18 @@ DEADLINE_NEAR = 0.10  # plays break a near-tie (within 10% of the best score)
 DEADLINE_ORDER = ["Pair", "Two Pair", "Three of a Kind", "Straight", "Flush", "Full House", "Four of a Kind"]
 
 
-def deadline_commit(G: dict[str, Any], history: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def deadline_commit(
+    G: dict[str, Any], history: list[dict[str, Any]] | None = None, final: bool = True
+) -> dict[str, Any] | None:
     """C6 (owner, after pass 2 Q2 / before pass 3 Q4a): MAIN_HAND still OPEN at
     the end of Ante 2 -> commit to one of the 3 hands played most in Antes 1-2
     (not High Card; the game's own counts): the one scoring most per hand with
     the jokers Luna owns and her levels (mean over the sampled draws, one
     discard; 0 where the type is not made). Within 10%: played more, then
     levelled more, then Pair first. No plays: the leaning hand. Flush: MAIN_SUIT
-    = the suit of most Flush plays (history ``flush_suit``), else main_suit."""
+    = the suit of most Flush plays (history ``flush_suit``), else main_suit.
+    Pass 4 F5: a hand counts only when played 2+ times; with none and
+    ``final`` False, None (stay OPEN one more shop), then the fallback."""
     hands = G.get("hands") or {}
 
     def played(t: str) -> int:
@@ -1592,12 +1596,14 @@ def deadline_commit(G: dict[str, Any], history: list[dict[str, Any]] | None = No
         return int((hands.get(t) or {}).get("level", 1))
 
     ante, rnd = int(G.get("ante_num") or 1), int(G.get("round_num") or 0)
-    top = sorted((t for t in hands if t != "High Card" and played(t) > 0), key=lambda t: (-played(t), DEADLINE_ORDER.index(t) if t in DEADLINE_ORDER else 99))[:DEADLINE_TOP]
+    top = sorted((t for t in hands if t != "High Card" and played(t) >= 2), key=lambda t: (-played(t), DEADLINE_ORDER.index(t) if t in DEADLINE_ORDER else 99))[:DEADLINE_TOP]
+    if not top and not final:
+        return None
     if not top:
         # the hand levelled most (never High Card), else Pair
         hand = max(DEADLINE_ORDER, key=lambda t: (level(t), -DEADLINE_ORDER.index(t)))
         hand = hand if level(hand) > 1 else "Pair"
-        return {"hand": hand, "trigger": f"end of Ante 2: no hand beyond High Card played; leaning {hand}",
+        return {"hand": hand, "trigger": f"end of Ante 2: no hand beyond High Card played twice; leaning {hand}",
                 "ante": ante, "round": rnd, "deadline": True}
     G_owned = _with_jokers(G, _area_cards(G, "jokers"))
     G_owned["blinds"] = {
