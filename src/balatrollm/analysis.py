@@ -585,20 +585,34 @@ def ancient_suit(G: dict[str, Any]) -> str | None:
     return None
 
 
+def _joker_debuffed(j: dict[str, Any]) -> bool:
+    return bool((j.get("state") or {}).get("debuff"))
+
+
+def _copy_target(jokers: list[dict[str, Any]], idx: int) -> dict[str, Any]:
+    """The joker Blueprint (right neighbour) / Brainstorm (leftmost) at
+    ``idx`` copies, on the FULL joker list: a debuffed target copies nothing
+    (pass 4 F6; the game does not skip to the next joker). Others: {}."""
+    key = jokers[idx].get("key", "")
+    if key == "j_blueprint":
+        target = jokers[idx + 1] if idx + 1 < len(jokers) else {}
+    elif key == "j_brainstorm":
+        target = jokers[0] if jokers and jokers[0] is not jokers[idx] else {}
+    else:
+        return {}
+    return {} if _joker_debuffed(target) else target
+
+
 def copied_keys(G: dict[str, Any]) -> list[str]:
     """Keys of the jokers Blueprint (the joker to its right) and Brainstorm
     (the leftmost joker) copy, in joker order."""
-    jokers = [
-        j for j in _area_cards(G, "jokers") if not (j.get("state") or {}).get("debuff")
-    ]
+    jokers = _area_cards(G, "jokers")  # F6: positions on the full list
     out = []
     for idx, j in enumerate(jokers):
+        if _joker_debuffed(j):
+            continue
         key = j.get("key", "")
-        target: dict[str, Any] = {}
-        if key == "j_blueprint" and idx + 1 < len(jokers):
-            target = jokers[idx + 1]
-        elif key == "j_brainstorm" and jokers and jokers[0] is not j:
-            target = jokers[0]
+        target = _copy_target(jokers, idx)
         if target.get("key") not in (None, "", "j_blueprint", "j_brainstorm"):
             out.append(str(target.get("key")))
     return out
@@ -795,9 +809,7 @@ def estimate_play(
             mult += 2 * CHIP_VALUE[low["rank"]]
 
     # Independent joker effects, left to right (with Blueprint/Brainstorm)
-    jokers = [
-        j for j in _area_cards(G, "jokers") if not (j.get("state") or {}).get("debuff")
-    ]
+    jokers = _area_cards(G, "jokers")  # F6: full list; debuffed jokers skipped in the loop
     ctx = {
         "G": G,
         "htype": htype,
@@ -812,17 +824,15 @@ def estimate_play(
     unknown: list[str] = []
     baseball = keys.count("j_baseball")
     for idx, j in enumerate(jokers):
+        if _joker_debuffed(j):
+            continue
         edition = (j.get("modifier") or {}).get("edition")
         if edition == "FOIL":
             chips += 50
         elif edition == "HOLO":
             mult += 10
         key = j.get("key", "")
-        target = j
-        if key == "j_blueprint":
-            target = jokers[idx + 1] if idx + 1 < len(jokers) else {}
-        elif key == "j_brainstorm":
-            target = jokers[0] if jokers and jokers[0] is not j else {}
+        target = _copy_target(jokers, idx) if key in ("j_blueprint", "j_brainstorm") else j
         tkey = target.get("key", "")
         if tkey == "j_baseball":
             pass  # applied below, after each Uncommon joker
@@ -2913,6 +2923,8 @@ def discard_payers(G: dict[str, Any], cards: Iterable[int]) -> list[int]:
     ranks = [c["rank"] for c in chosen]
     out = []
     for i, j in enumerate(_area_cards(G, "jokers")):
+        if _joker_debuffed(j):  # F6: a debuffed joker pays nothing (and is no copy target)
+            continue
         key = j.get("key")
         hit = (
             (key == "j_mail" and (r := mail_rank(G)) is not None and r in ranks)
@@ -2940,11 +2952,15 @@ def discard_phase_order(G: dict[str, Any], cards: Iterable[int]) -> list[int] | 
         return None
     target = payers[0]
     order = list(range(len(jokers)))
-    if "j_blueprint" in keys:
+    if "j_blueprint" in keys and not _joker_debuffed(jokers[keys.index("j_blueprint")]):
         bp = keys.index("j_blueprint")
         order.remove(bp)
         order.insert(order.index(target), bp)
-    if "j_brainstorm" in keys and keys.index("j_brainstorm") != target:
+    if (
+        "j_brainstorm" in keys
+        and keys.index("j_brainstorm") != target
+        and not _joker_debuffed(jokers[keys.index("j_brainstorm")])
+    ):
         order.remove(target)
         order.insert(0, target)
     return None if order == list(range(len(jokers))) else order
@@ -2990,18 +3006,22 @@ def joker_order(G: dict[str, Any]) -> list[int] | None:
     trigger = (main_hand_plan(G).get("commit") or {}).get("trigger")
     copiers = {"j_blueprint", "j_brainstorm"}
     defining = next(
-        (i for i, j in enumerate(jokers) if trigger and j.get("label") == trigger and keys[i] not in copiers),
+        (i for i, j in enumerate(jokers)
+         if trigger and j.get("label") == trigger and keys[i] not in copiers and not _joker_debuffed(j)),
         None,
     )
     if "j_blueprint" in keys:
         bp = keys.index("j_blueprint")
         order.remove(bp)
-        xs = [i for i in order if weight(jokers[i]) >= 5 and keys[i] not in copiers]
-        target = defining if defining is not None else xs[-1] if xs else order[-1]
+        # F6: a debuffed joker is no copy target (Blueprint would copy nothing)
+        xs = [i for i in order if weight(jokers[i]) >= 5 and keys[i] not in copiers and not _joker_debuffed(jokers[i])]
+        live = [i for i in order if not _joker_debuffed(jokers[i])]
+        target = defining if defining is not None else xs[-1] if xs else live[-1] if live else order[-1]
         order.insert(order.index(target), bp)
     if "j_brainstorm" in keys:
         bs = keys.index("j_brainstorm")
-        xs = [i for i in order if i != bs and weight(jokers[i]) >= 5 and keys[i] not in copiers]
+        xs = [i for i in order if i != bs and weight(jokers[i]) >= 5 and keys[i] not in copiers
+              and not _joker_debuffed(jokers[i])]
         target = defining if defining is not None else xs[-1] if xs else None
         if target is not None and target != bs:
             order.remove(target)
