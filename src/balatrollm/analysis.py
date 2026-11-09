@@ -2193,6 +2193,32 @@ def mark_play(G: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _padding_holds(
+    G: dict[str, Any], hand_raw: list[dict[str, Any]], base: list[int], padded: list[int], target: float | None
+) -> bool:
+    """Pass 4 F2: keep filler padding only if the padded play scores no less
+    than the unpadded one (same estimate_play on the same view), is not newly
+    blocked and, for a WINS play, still reaches ``target``."""
+    if sorted(padded) == sorted(base):
+        return True
+
+    def est(sel: list[int]) -> dict[str, Any]:
+        chosen = set(sel)
+        return estimate_play(
+            G, [hand_raw[i] for i in sorted(chosen)], [c for i, c in enumerate(hand_raw) if i not in chosen]
+        )
+
+    try:
+        e0, e1 = est(base), est(padded)
+    except (IndexError, TypeError, ValueError):
+        return False
+    if e1["blocked"] and not e0["blocked"]:
+        return False
+    if e1["score"] < e0["score"]:
+        return False
+    return target is None or e1["score"] >= target
+
+
 def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
     """Everything the PLAY phase needs: plays with WINS flags, discard, suggestion."""
     # C3: under The Mark the advice sees face-down cards as masked face cards
@@ -2313,8 +2339,11 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
             why += " and keeps the Blue Seal card in hand"
         cards = list(best["cards"])
         if square and len(cards) < 4:
-            cards = sorted(cards + _filler(G, hand, cards, plan, 4 - len(cards)))
-            why += "; 4 cards grow Square Joker"
+            padded = sorted(cards + _filler(G, hand, cards, plan, 4 - len(cards)))
+            win_margin = 1.0 if exact and not best["unknown"] else WIN_MARGIN
+            if _padding_holds(G, hand_raw, cards, padded, win_margin * remaining):  # F2
+                cards = padded
+                why += "; 4 cards grow Square Joker"
         action = {"tool": "play", "cards": cards, "why": why}
     elif mark and mark["wins"]:
         action = {
@@ -2380,6 +2409,8 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
                 key=lambda i: (hand[i]["rank"] in held_scoring_ranks(G), CHIP_VALUE.get(hand[i]["rank"] or "", 0)),
             )
             cards = sorted(cards + rest[: 5 - len(cards)])
+        if not _padding_holds(G, hand_raw, list(best["cards"]), cards, None):  # F2
+            cards = list(best["cards"])
         action = {"tool": "play", "cards": cards, "why": f"best play ({best['hand']})"}
     else:
         action = {"tool": "discard", "cards": discard, "why": "no visible play"}
