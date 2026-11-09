@@ -2228,11 +2228,11 @@ def _padding_holds(
 # it. One discard is modelled (a lower bound when more discards are left).
 # Deterministic: the RNG is seeded from the cards, the result is cached per G.
 # ---------------------------------------------------------------------------
-E3_SAMPLES = 160  # draws per finished option (common random numbers)
-E3_SCREEN = 40  # every option is first screened on this many draws
-E3_FINAL = 3  # the best screened options (plus the old choice) get all draws
-E3_SWITCH = 0.02  # another option must beat the old choice by more than this
-E3_MAX_OPTIONS = 16
+E3_SAMPLES = 96  # draws per finished option (common random numbers)
+E3_SCREEN = 24  # every option is first screened on this many draws
+E3_FINAL = 2  # the best screened options (plus the old choice) get all draws
+E3_SWITCH = 0.04  # another option must beat the old choice by more than this
+E3_MAX_OPTIONS = 10
 
 
 def _e3_round(G: dict[str, Any], hands_left: int, discards_left: int) -> dict[str, Any]:
@@ -2348,19 +2348,21 @@ def _e3_sample(
     perms = [rng.sample(range(len(deck)), take) for _ in range(E3_SAMPLES)]
 
     norms = {id(c): _norm(c) for c in [*hand_raw, *deck]}
+    ctx = _estimate_ctx(G)
 
-    def best_of(Gx: dict[str, Any], cards: list[dict[str, Any]]) -> tuple[int, str, list[int]]:
-        return _best_play(Gx, cards, pad, memo={"norm": [norms[id(c)] for c in cards]}, expected=False)
+    def best_of(Gx: dict[str, Any], cards: list[dict[str, Any]], stop: float | None) -> tuple[int, str, list[int]]:
+        memo = {"norm": [norms[id(c)] for c in cards], "ctx": ctx}  # ctx does not depend on round
+        return _best_play(Gx, cards, pad, memo=memo, expected=False, stop_at=stop)
 
     def refill(n_held: int) -> int:
         return 3 if serpent else max(size - n_held, 0)
 
     G_last = _e3_round(G, 1, discards - 1)
 
-    def second(rest: list[dict[str, Any]], perm: list[int], start: int, Gx: dict[str, Any]) -> int:
+    def second(rest: list[dict[str, Any]], perm: list[int], start: int, Gx: dict[str, Any], need: float) -> int:
         n = min(refill(len(rest)), len(perm) - start)
         nxt = rest + [deck[j] for j in perm[start:start + max(n, 0)]]
-        return best_of(Gx, nxt)[0]
+        return best_of(Gx, nxt, need)[0]
 
     # Play the best play now
     if best is None:
@@ -2371,19 +2373,19 @@ def _e3_sample(
         s0 = best.get("floor", best["score"])
         rest = [c for i, c in enumerate(hand_raw) if i not in set(best["cards"])]
         G_after = _e3_round(G, 1, discards)
-        hits = sum(1 for perm in perms if s0 + second(rest, perm, 0, G_after) >= goal)
+        hits = sum(1 for perm in perms if s0 + second(rest, perm, 0, G_after, goal - s0) >= goal)
         play_chance = hits / len(perms)
 
     G1 = _e3_round(G, h, discards - 1)
 
     def hit(kept: list[dict[str, Any]], n_draw: int, perm: list[int]) -> bool:
         new = kept + [deck[j] for j in perm[:n_draw]]
-        s1, _t, play1 = best_of(G1, new)
+        s1, _t, play1 = best_of(G1, new, goal)
         if s1 >= goal:
             return True
         if h == 2 and s1 > 0:
             rest = [c for i, c in enumerate(new) if i not in set(play1)]
-            return s1 + second(rest, perm, n_draw, G_last) >= goal
+            return s1 + second(rest, perm, n_draw, G_last, goal - s1) >= goal
         return False
 
     # Screen every option on the first E3_SCREEN draws, then finish the old
@@ -3619,17 +3621,19 @@ def _best_play(
     only: str | None = None,
     memo: dict[Any, Any] | None = None,
     expected: bool = True,
+    stop_at: float | None = None,
 ) -> tuple[int, str, list[int]]:
     """Best candidate play (score, hand type, indices); ``only`` = that type.
 
     ``expected=False`` scores the FLOOR (random effects at zero), as the
-    listed plays and WINS do (pass 4 E3 last-hand sampler).
+    listed plays and WINS do (pass 4 E3 last-hand sampler); ``stop_at``
+    returns the first play scoring at least that much (E3 needs only hit/miss).
 
     ``memo`` (one dict per dealt hand, sampler only) keeps the normalised
     cards and the candidate plays, which depend only on the hand, the pad
     size, the classify flags and the held-card jokers owned.
     """
-    ctx = _estimate_ctx(G)
+    ctx = memo["ctx"] if memo is not None and "ctx" in memo else _estimate_ctx(G)
     if memo is None:
         norm = [_norm(c) for c in hand]
         cands = _candidates(G, norm, pad_to)
@@ -3649,6 +3653,8 @@ def _best_play(
             continue
         if est["score"] > best[0]:
             best = (int(est["score"]), est["hand"], play)
+            if stop_at is not None and best[0] >= stop_at:
+                break
     return best
 
 
