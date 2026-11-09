@@ -494,6 +494,38 @@ BOSSES: dict[str, str] = {
     "Crimson Heart": "a random joker is disabled each hand: play normally",
     "Cerulean Bell": "one card is always forced into your selection: build around it",
 }
+# Pass 4 A1 (mastery-noadvice): the plain rule of each boss, no counter-play.
+# BOSSES above mixes the rule with an instruction ("play your best hand now").
+BOSS_FACTS: dict[str, str] = {
+    "The Hook": "after each hand played, 2 random cards held in hand are discarded",
+    "The Ox": "playing your most played hand type sets your money to $0",
+    "The House": "the first hand of the round is drawn face down; face-down cards still score",
+    "The Wall": "the target score is 4x a normal boss",
+    "The Wheel": "1 in 7 cards is drawn face down; face-down cards still score",
+    "The Arm": "each hand played loses 1 level of its hand type",
+    "The Club": "Clubs are debuffed: they give 0 chips and trigger nothing",
+    "The Fish": "cards drawn after each hand played are face down; they still score",
+    "The Psychic": "every play must be exactly 5 cards",
+    "The Goad": "Spades are debuffed: they give 0 chips and trigger nothing",
+    "The Water": "the round starts with 0 discards",
+    "The Window": "Diamonds are debuffed: they give 0 chips and trigger nothing",
+    "The Manacle": "hand size -1 this round",
+    "The Eye": "no hand type may be played twice this round",
+    "The Mouth": "only one hand type may be played this round: your first play sets it",
+    "The Plant": "face cards (J, Q, K) are debuffed: they give 0 chips and trigger nothing",
+    "The Serpent": "after each play or discard you always draw exactly 3 cards",
+    "The Pillar": "cards already played this ante are debuffed",
+    "The Needle": "only 1 hand this round",
+    "The Head": "Hearts are debuffed: they give 0 chips and trigger nothing",
+    "The Tooth": "you lose $1 per card played",
+    "The Flint": "the base chips and Mult of every hand are halved",
+    "The Mark": "face cards are drawn face down; each face-down card is a J, Q or K and still scores",
+    "Amber Acorn": "your jokers are flipped face down and shuffled",
+    "Verdant Leaf": "all cards are debuffed until you sell 1 joker",
+    "Violet Vessel": "the target score is 6x a normal boss",
+    "Crimson Heart": "one random joker is disabled each hand",
+    "Cerulean Bell": "one card in hand is always forced into your selection",
+}
 # Jokers that only fire when the played hand CONTAINS a specific hand type.
 REQUIRED_HAND = {
     "Jolly Joker": "Pair",
@@ -570,6 +602,7 @@ _CONS_N = {_norm_name(k): (k, v) for k, v in CONSUMABLES.items()}
 _VOUCH_N = {_norm_name(k): (k, v) for k, v in VOUCHERS.items()}
 _PLANET_N = {_norm_name(k): v for k, v in PLANET_HAND.items()}
 _BOSS_N = {_norm_name(k): (k, v) for k, v in BOSSES.items()}
+_BOSS_FACTS_N = {_norm_name(k): v for k, v in BOSS_FACTS.items()}
 _ALIASES = {"caino": "canio", "seance": "seance", "riffraff": "riffraff"}
 
 
@@ -694,6 +727,11 @@ def boss_counter(name: Any) -> str:
     """One-line counter-play instruction for a boss blind."""
     hit = _BOSS_N.get(_norm_name(name))
     return hit[1] if hit else ""
+
+
+def boss_fact(name: Any) -> str:
+    """Pass 4 A1: the plain rule of a boss blind ("" if unknown)."""
+    return _BOSS_FACTS_N.get(_norm_name(name), "")
 
 
 def planet_hand(name: Any) -> str | None:
