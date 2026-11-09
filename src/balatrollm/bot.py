@@ -285,10 +285,10 @@ class Bot:
 
         logger.info("Starting game")
         logger.info(f"Run data will be saved to: {self._collector.run_dir}")
-        if self.harness.get("book"):
-            self._book_setup(runs_dir, start_args.get("seed"))
 
         try:
+            if self.harness.get("book"):
+                self._book_setup(runs_dir, start_args.get("seed"))
             await self._balatro.call("menu")
             await self._wait_for_menu()
             gamestate = await self._balatro.call("start", start_args)
@@ -300,7 +300,10 @@ class Bot:
                 raise BotError(f"Game did not start on the seed generated for {self.task.seed}")
             await self._run_game_loop(gamestate)
             if self._book is not None and self._finish_reason in ("won", "lost"):
-                await self._book_game_end()
+                try:
+                    await self._book_game_end()
+                except Exception as e:  # the game is over: never change its result
+                    logger.warning(f"Book update failed: {type(e).__name__}: {e}")
         except BotError:
             logger.error("Game ended due to bot error")
             raise

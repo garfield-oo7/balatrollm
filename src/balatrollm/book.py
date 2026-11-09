@@ -29,6 +29,7 @@ counters never change the version a game reads.
 import fcntl
 import hashlib
 import json
+import logging
 import os
 import re
 from contextlib import contextmanager
@@ -264,6 +265,8 @@ def _tags_from(edit: dict[str, Any], focus: str) -> tuple[dict[str, Any], list[s
     phase = edit.get("phase") or []
     if isinstance(phase, str):
         phase = [phase]
+    if not isinstance(phase, list):
+        return out, ["phase must be a list"]
     phase = sorted({str(p).lower() for p in phase})
     if any(p not in PHASES for p in phase):
         why.append(f"phase must be from {PHASES}")
@@ -282,6 +285,8 @@ def _tags_from(edit: dict[str, Any], focus: str) -> tuple[dict[str, Any], list[s
     boss = edit.get("boss") or []
     if isinstance(boss, str):
         boss = [boss]
+    if not isinstance(boss, list):
+        return out, why + ["boss must be a list of boss names"]
     if boss:
         out["boss"] = [str(b) for b in boss][:5]
     out["top"] = bool(edit.get("top"))
@@ -322,6 +327,11 @@ def check_edit(
         if len(text) > MAX_RULE_CHARS:
             why.append(f"text longer than {MAX_RULE_CHARS} characters")
         why += text_problems(text, own_seed, words)
+        if op == "change":
+            # a change that leaves a tag out keeps the rule's tag
+            old = by_id[out["id"]]
+            edit = {**{k: old.get(k) for k in ("phase", "ante", "boss", "top")},
+                    **{k: v for k, v in edit.items() if v is not None}}
         tags, tag_why = _tags_from(edit, focus)
         why += tag_why
         out.update(text=text, **tags)
@@ -488,22 +498,31 @@ class MergeQueue:
         while self._next in self._done:
             p = self._done.pop(self._next)
             self._next += 1
-            if p is not None and Path(p).exists():
-                rec = merge_file(Path(p))
-                if rec:
-                    out.append(rec)
+            rec = _merge_quietly(p)
+            if rec:
+                out.append(rec)
         return out
 
     def flush(self) -> list[dict[str, Any]]:
         """Merge whatever finished, in order, past any task that never finished."""
         out = []
         for i in sorted(self._done):
-            p = self._done.pop(i)
-            if p is not None and Path(p).exists():
-                rec = merge_file(Path(p))
-                if rec:
-                    out.append(rec)
+            rec = _merge_quietly(self._done.pop(i))
+            if rec:
+                out.append(rec)
         return out
+
+
+def _merge_quietly(p: Path | None) -> dict[str, Any] | None:
+    """One game's merge; a failure loses only that game's edits (logged, the
+    file stays unmerged for book.merge_file) and never stalls later games."""
+    if p is None or not Path(p).exists():
+        return None
+    try:
+        return merge_file(Path(p))
+    except Exception:
+        logging.getLogger(__name__).exception(f"Book merge failed for {p}")
+        return None
 
 
 ################################################################################

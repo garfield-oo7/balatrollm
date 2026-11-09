@@ -36,6 +36,18 @@ def test_checks_reject_seeds_positions_one_seed_facts_form_and_size():
     assert _check(GOOD.upper().lower(), version=dup)[0] is None
 
 
+def test_change_keeps_tags_it_leaves_out_and_bad_tags_are_rejected():
+    v = {**book.EMPTY, "rules": [{"id": "R1", "text": GOOD, "phase": ["shop"], "ante": [3, 5], "top": True}]}
+    new_text = GOOD.replace("first", "before planets")
+    kept, why = book.check_edit({"op": "change", "id": "R1", "text": new_text}, v, "shop", FAKE_SEED, set())
+    assert why == []
+    merged, _ = book.apply_edits(v, [kept], 2)
+    r = merged["rules"][0]
+    assert (r["text"], r["phase"], r["ante"], r["top"]) == (new_text, ["shop"], [3, 5], True)
+    assert book.check_edit({"op": "add", "text": GOOD, "phase": 3}, dict(book.EMPTY))[0] is None
+    assert book.check_edit({"op": "add", "text": GOOD, "boss": 5}, dict(book.EMPTY))[0] is None
+
+
 def test_at_most_three_edits_kept():
     edits = [{"op": "add", "text": GOOD.replace("Ante 5", f"Ante {n}"), "phase": ["shop"]} for n in range(4, 8)]
     kept, rejected = book.check_edits(edits, dict(book.EMPTY), "shop_and_hand", FAKE_SEED, set())
