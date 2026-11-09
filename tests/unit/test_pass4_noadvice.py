@@ -152,3 +152,16 @@ def test_validate_split_legality_still_fires() -> None:
     assert analysis.validate_action(B, "reroll_boss", {}, advice=False) is None
     B["used_vouchers"] = {}
     assert "Director's Cut or Retcon" in analysis.validate_action(B, "reroll_boss", {}, advice=False)
+
+
+def test_f1_wrong_item_guard_never_refuses_a_buy_naming_its_item() -> None:
+    # pass 4 F1: the guard repairs a wrong index; a buy whose reasoning names the chosen item is legal
+    G = _full_shop()
+    G["shop"]["cards"] = [{"key": "c_pluto", "set": "PLANET", "label": "Pluto"}, joker("j_scholar", "Scholar")]
+    named_both = "Scholar is +80% but Pluto levels High Card: buy Pluto."
+    assert analysis.shop_wrong_item_veto(G, {"card": 0}, named_both) is None
+    assert analysis.shop_wrong_item_veto(G, {"card": 1}, "Scholar costs $4.") is None
+    assert analysis.shop_wrong_item_veto(G, {"card": 0}, "Cheap level.") is None  # names nothing
+    msg = analysis.shop_wrong_item_veto(G, {"card": 0}, "Scholar costs $4, buy it.")
+    assert msg is not None and "Pluto" in msg and "Scholar" in msg and "card 1" in msg
+

@@ -4345,6 +4345,41 @@ def _legal_only_rest(
     return None
 
 
+WRONG_ITEM_SETS = ("JOKER", "TAROT", "PLANET", "SPECTRAL")
+
+
+def wrong_item_veto(offers: dict[int, str], chosen: Any, reasoning: str) -> str | None:
+    """Pass 4 F1: a shop card buy whose reasoning names another offered item
+    and not the chosen one (pass 1 tool index_mismatch.py: 16 of 896 logged
+    card buys, always index 0). ``offers``: shop index -> label. Not advice:
+    it repairs Luna's own intent, so it stays on with advice vetoes off."""
+    try:
+        i = int(chosen)
+    except (TypeError, ValueError):
+        return None
+    why = str(reasoning or "")
+    if i not in offers or not why or offers[i] in why:
+        return None
+    named = [(j, label) for j, label in sorted(offers.items()) if j != i and label and label in why]
+    if not named:
+        return None
+    j, label = named[0]
+    return (
+        f"Wrong item? You chose card {i} ({offers[i]}) but your reasoning names {label} (card {j}). "
+        f"To buy {label}, use card {j}; to buy {offers[i]}, say so in your reasoning."
+    )
+
+
+def shop_wrong_item_veto(G: dict[str, Any], params: dict[str, Any], reasoning: str) -> str | None:
+    """F1 on a live shop: offers are the shop cards' labels (jokers and
+    consumables; playing cards show no label line in the prompt)."""
+    if G.get("state") != "SHOP" or "card" not in params:
+        return None
+    cards = _area_cards(G, "shop")
+    offers = {i: str(c.get("label") or "") for i, c in enumerate(cards) if c.get("set") in WRONG_ITEM_SETS}
+    return wrong_item_veto(offers, params.get("card"), reasoning)
+
+
 def validate_action(
     G: dict[str, Any], method: str, params: dict[str, Any], shop_rerolls: int = 0, advice: bool = True
 ) -> str | None:

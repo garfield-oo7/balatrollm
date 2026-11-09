@@ -29,6 +29,7 @@ from .analysis import (
     round_record,
     summarize_outcome,
     swap_plan,
+    shop_wrong_item_veto,
     validate_action,
 )
 from .client import BalatroClient, BalatroError
@@ -683,6 +684,9 @@ class Bot:
             veto = validate_action(
                 before, fn_name, params, self._shop_rerolls, advice=self._advice_vetoes_on()
             )
+            if veto is None and fn_name == "buy":
+                # pass 4 F1: wrong-item buy (repairs Luna's intent; on with advice vetoes off too)
+                veto = shop_wrong_item_veto(before, params, str(fn_args.get("reasoning") or ""))
         max_rearranges = int(self.harness.get("max_consecutive_rearranges", 0) or 0)
         if fn_name == "rearrange":
             self._consecutive_rearranges += 1
