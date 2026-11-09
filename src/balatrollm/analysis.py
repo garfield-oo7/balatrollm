@@ -2219,6 +2219,242 @@ def _padding_holds(
     return target is None or e1["score"] >= target
 
 
+# ---------------------------------------------------------------------------
+# Pass 4 E3: play for the win. On the last hand (and the second-last when the
+# best play cannot reach the remaining target in two hands) the suggested
+# action is chosen by its chance to beat the blind, sampled over the REMAINING
+# deck: each discard option = discard, draw back up, play the best play (FLOOR
+# scores, the WINS threshold), and on the second-last hand one more hand after
+# it. One discard is modelled (a lower bound when more discards are left).
+# Deterministic: the RNG is seeded from the cards, the result is cached per G.
+# ---------------------------------------------------------------------------
+E3_SAMPLES = 160  # draws per finished option (common random numbers)
+E3_SCREEN = 40  # every option is first screened on this many draws
+E3_FINAL = 3  # the best screened options (plus the old choice) get all draws
+E3_SWITCH = 0.02  # another option must beat the old choice by more than this
+E3_MAX_OPTIONS = 16
+
+
+def _e3_round(G: dict[str, Any], hands_left: int, discards_left: int) -> dict[str, Any]:
+    rnd = dict(G.get("round") or {})
+    rnd["hands_left"] = hands_left
+    rnd["discards_left"] = max(discards_left, 0)
+    return {**G, "round": rnd}
+
+
+def _e3_keep_sets(G: dict[str, Any], hand: list[dict[str, Any]], plays: list[dict[str, Any]]) -> list[set[int]]:
+    """Cards worth keeping for one dig: each listed play, each suit, each
+    Straight window with 3+ ranks, each rank held twice or more, nothing."""
+    keeps: list[set[int]] = [set(p["cards"]) for p in plays if not p["blocked"]]
+    smeared = _classify_flags(G)["smeared"]
+    groups = _suit_groups(smeared)
+    for g in sorted(set(groups.values())):
+        ids = [i for i, c in enumerate(hand)
+               if not c["stone"] and (c["enh"] == "WILD" or (c["suit"] and groups[c["suit"]] == g))]
+        if len(ids) >= 2:
+            ids.sort(key=lambda i: -CHIP_VALUE.get(hand[i]["rank"] or "", 0))
+            keeps.append(set(ids[:5]))
+    by_rank: dict[str, list[int]] = {}
+    for i, c in enumerate(hand):
+        if c["rank"] and not c["stone"]:
+            by_rank.setdefault(c["rank"], []).append(i)
+    for lo in range(1, 11):
+        window = ["A" if v in (1, 14) else RANKS[v - 2] for v in range(lo, lo + 5)]
+        have = [by_rank[r][0] for r in window if r in by_rank]
+        if len(have) >= 3:
+            keeps.append(set(have))
+    for _r, ids in by_rank.items():
+        if len(ids) >= 2:
+            keeps.append(set(ids))
+    keeps.append(set())
+    return keeps
+
+
+def _e3_choice(
+    G: dict[str, Any],
+    plays: list[dict[str, Any]],
+    progress: dict[str, Any],
+    discards: int,
+    margin: float,
+    old: dict[str, Any],
+    suggested: list[int] | None,
+) -> dict[str, Any] | None:
+    """Chance to beat the blind of playing the best play now vs each discard
+    option. None when E3 does not apply; else the options and the choice."""
+    hand_raw = _area_cards(G, "hand")
+    hand = [_norm(c) for c in hand_raw]
+    deck_raw = _area_cards(G, "cards")
+    remaining = int(progress.get("remaining") or 0)
+    h = int(progress.get("hands_left") or 0)
+    goal = margin * remaining
+    live = [p for p in plays if not p["blocked"]]
+    best = max(live, key=lambda p: p.get("floor", p["score"]), default=None)
+    best_floor = best.get("floor", best["score"]) if best else 0
+    if (
+        remaining <= 0 or discards <= 0 or not deck_raw or not hand_raw
+        or any(c["hidden"] for c in hand)
+        or not (h == 1 or (h == 2 and best_floor * 2 < goal))
+    ):
+        return None
+    key = _state_key(G, "e3", margin, old.get("tool"), old.get("cards"), suggested)
+
+    def make() -> dict[str, Any]:
+        return _e3_sample(G, hand_raw, hand, deck_raw, live, best, h, remaining, goal, discards, old, suggested)
+
+    return _cached(key, make)
+
+
+def _e3_sample(
+    G: dict[str, Any],
+    hand_raw: list[dict[str, Any]],
+    hand: list[dict[str, Any]],
+    deck_raw: list[dict[str, Any]],
+    live: list[dict[str, Any]],
+    best: dict[str, Any] | None,
+    h: int,
+    remaining: int,
+    goal: float,
+    discards: int,
+    old: dict[str, Any],
+    suggested: list[int] | None,
+) -> dict[str, Any]:
+    deck = sorted((_face_up(c) for c in deck_raw), key=_card_id)
+    size = _hand_size(G)
+    limit = int((G.get("hand") or {}).get("highlighted_limit", 5) or 5)
+    boss = _active_boss(G)
+    pad = 5 if boss == "The Psychic" else 0
+    serpent = boss == "The Serpent"
+    keys = _joker_keys(G)
+
+    # Options: the old choice first (so it is compared on equal terms), then
+    # the suggested discard, then one dig per keep set
+    options: list[tuple[int, ...]] = []
+    old_discard = tuple(sorted(old["cards"])) if old.get("tool") == "discard" and old.get("cards") else None
+    for d in (old_discard, tuple(sorted(suggested)) if suggested else None):
+        if d and d not in options:
+            options.append(d)
+    lim = min(limit, len(deck))
+    for keep in _e3_keep_sets(G, hand, live):
+        d = tuple(_discard_choice(hand, keep, lim, keys=keys))
+        if d and d not in options:
+            options.append(d)
+    options = options[:E3_MAX_OPTIONS]
+
+    ids = sorted(_card_id(c) for c in hand_raw)
+    seed = int(hashlib.md5(json.dumps([ids, [_card_id(c) for c in deck], remaining, h, discards]).encode())
+               .hexdigest()[:12], 16)
+    rng = random.Random(seed)
+    take = min(len(deck), 2 * max(limit, 5) + 3)
+    perms = [rng.sample(range(len(deck)), take) for _ in range(E3_SAMPLES)]
+
+    norms = {id(c): _norm(c) for c in [*hand_raw, *deck]}
+
+    def best_of(Gx: dict[str, Any], cards: list[dict[str, Any]]) -> tuple[int, str, list[int]]:
+        return _best_play(Gx, cards, pad, memo={"norm": [norms[id(c)] for c in cards]}, expected=False)
+
+    def refill(n_held: int) -> int:
+        return 3 if serpent else max(size - n_held, 0)
+
+    G_last = _e3_round(G, 1, discards - 1)
+
+    def second(rest: list[dict[str, Any]], perm: list[int], start: int, Gx: dict[str, Any]) -> int:
+        n = min(refill(len(rest)), len(perm) - start)
+        nxt = rest + [deck[j] for j in perm[start:start + max(n, 0)]]
+        return best_of(Gx, nxt)[0]
+
+    # Play the best play now
+    if best is None:
+        play_chance = 0.0
+    elif h == 1:
+        play_chance = 1.0 if best.get("floor", best["score"]) >= goal else 0.0
+    else:
+        s0 = best.get("floor", best["score"])
+        rest = [c for i, c in enumerate(hand_raw) if i not in set(best["cards"])]
+        G_after = _e3_round(G, 1, discards)
+        hits = sum(1 for perm in perms if s0 + second(rest, perm, 0, G_after) >= goal)
+        play_chance = hits / len(perms)
+
+    G1 = _e3_round(G, h, discards - 1)
+
+    def hit(kept: list[dict[str, Any]], n_draw: int, perm: list[int]) -> bool:
+        new = kept + [deck[j] for j in perm[:n_draw]]
+        s1, _t, play1 = best_of(G1, new)
+        if s1 >= goal:
+            return True
+        if h == 2 and s1 > 0:
+            rest = [c for i, c in enumerate(new) if i not in set(play1)]
+            return s1 + second(rest, perm, n_draw, G_last) >= goal
+        return False
+
+    # Screen every option on the first E3_SCREEN draws, then finish the old
+    # choice and the E3_FINAL best on all E3_SAMPLES (same draws for all)
+    stats = []
+    for d in options:
+        kept = [c for i, c in enumerate(hand_raw) if i not in d]
+        n_draw = min(refill(len(kept)), take)
+        hits = sum(hit(kept, n_draw, perm) for perm in perms[:E3_SCREEN])
+        stats.append([d, kept, n_draw, hits, E3_SCREEN])
+    order = sorted(range(len(stats)), key=lambda k: -stats[k][3])
+    finish = set(order[:E3_FINAL]) | ({0} if old_discard and stats else set())
+    for k in finish:
+        d, kept, n_draw, hits, _n = stats[k]
+        stats[k][3] = hits + sum(hit(kept, n_draw, perm) for perm in perms[E3_SCREEN:])
+        stats[k][4] = len(perms)
+    results = [{"discard": list(d), "chance": hits / n, "samples": n} for d, _k, _n, hits, n in stats]
+    top = max((r for r in results if r["samples"] == len(perms)), key=lambda r: r["chance"], default=None)
+    return {
+        "hands_left": h,
+        "remaining": remaining,
+        "play": {"hand": best["hand"], "cards": list(best["cards"]), "chance": play_chance} if best else None,
+        "options": results,
+        "best": top,
+        "old_discard": list(old_discard) if old_discard else None,
+    }
+
+
+def _e3_action(G: dict[str, Any], e3: dict[str, Any], old: dict[str, Any]) -> dict[str, Any]:
+    """The suggested action from the E3 chances (the old one unless another
+    option beats it by more than E3_SWITCH); its why names the chance."""
+    hand_raw = _area_cards(G, "hand")
+
+    def names(idx: list[int]) -> str:
+        return ", ".join(card_name(hand_raw[i]) for i in idx)
+
+    play = e3["play"]
+    top = e3["best"]
+    p_play = play["chance"] if play else 0.0
+    p_top = top["chance"] if top else 0.0
+    if p_top <= 0 and p_play <= 0:
+        return old
+    if old.get("tool") == "discard" and e3["old_discard"]:
+        p_old = next(r["chance"] for r in e3["options"] if r["discard"] == e3["old_discard"])
+    elif old.get("tool") == "play":
+        p_old = p_play
+    else:
+        p_old = -1.0
+    reach = f"to reach {fmt_num(e3['remaining'])}" + (
+        " over your last 2 hands" if e3["hands_left"] == 2 else " after this discard"
+    )
+    now = f"playing {play['hand']} now" if play else "playing now"
+    if top and p_top > p_play and p_top > p_old + E3_SWITCH:
+        cards = top["discard"]
+    elif old.get("tool") == "discard" and e3["old_discard"] and p_old >= p_play:
+        cards = e3["old_discard"]
+    elif play and p_play > (p_top if top else 0.0):
+        cards = None
+    else:
+        return old
+    if cards is not None:
+        p = next(r["chance"] for r in e3["options"] if r["discard"] == cards)
+        why = f"discard {names(cards)}: {pct(p)} {reach} vs {pct(p_play)} {now}"
+        return {"tool": "discard", "cards": list(cards), "why": why}
+    alt = f"{pct(p_top)} discarding {names(top['discard'])}" if top else "no discard helps"
+    reach_p = f"to reach {fmt_num(e3['remaining'])}" + (" over your last 2 hands" if e3["hands_left"] == 2 else "")
+    why = f"play {play['hand']} now: {pct(p_play)} {reach_p} vs {alt}"
+    cards_play = old["cards"] if old.get("tool") == "play" else list(play["cards"])
+    return {"tool": "play", "cards": cards_play, "why": why}
+
+
 def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
     """Everything the PLAY phase needs: plays with WINS flags, discard, suggestion."""
     # C3: under The Mark the advice sees face-down cards as masked face cards
@@ -2414,6 +2650,13 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         action = {"tool": "play", "cards": cards, "why": f"best play ({best['hand']})"}
     else:
         action = {"tool": "discard", "cards": discard, "why": "no visible play"}
+    # Pass 4 E3: on the last hand(s) without a sure win, choose by the chance
+    # to beat the blind (sampled over the remaining deck)
+    e3 = None
+    if not winners and not mark:
+        e3 = _e3_choice(G, plays, progress, discards, margin, action, discard)
+        if e3 is not None:
+            action = _e3_action(G, e3, action)
     # The House (P2, owner row 128): with jokers that lose value on every
     # discard, the suggestion is to play the face-down cards blind
     blind = house_blind_play(G)
@@ -2454,6 +2697,7 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         "deck_size": analysis_["deck_size"],
         "deck_suits": analysis_["deck_suits"],
         "mark_unseen": bool(G.get("mark_unseen")),
+        "win_chance": e3,
     }
 
 
@@ -3374,8 +3618,12 @@ def _best_play(
     pad_to: int,
     only: str | None = None,
     memo: dict[Any, Any] | None = None,
+    expected: bool = True,
 ) -> tuple[int, str, list[int]]:
     """Best candidate play (score, hand type, indices); ``only`` = that type.
+
+    ``expected=False`` scores the FLOOR (random effects at zero), as the
+    listed plays and WINS do (pass 4 E3 last-hand sampler).
 
     ``memo`` (one dict per dealt hand, sampler only) keeps the normalised
     cards and the candidate plays, which depend only on the hand, the pad
@@ -3396,7 +3644,7 @@ def _best_play(
     for play in cands:
         rest = [i for i in range(len(hand)) if i not in play]
         pre = {"ctx": ctx, "played": [norm[i] for i in play], "held": [norm[i] for i in rest]}
-        est = estimate_play(G, [hand[i] for i in play], [hand[i] for i in rest], expected=True, _pre=pre)
+        est = estimate_play(G, [hand[i] for i in play], [hand[i] for i in rest], expected=expected, _pre=pre)
         if est["blocked"] or (only is not None and est["hand"] != only):
             continue
         if est["score"] > best[0]:
