@@ -4431,8 +4431,8 @@ WRONG_ITEM_SETS = ("JOKER", "TAROT", "PLANET", "SPECTRAL")
 
 def wrong_item_veto(offers: dict[int, str], chosen: Any, reasoning: str) -> str | None:
     """Pass 4 F1: a shop card buy whose reasoning names another offered item
-    and not the chosen one (pass 1 tool index_mismatch.py: 16 of 896 logged
-    card buys, always index 0). ``offers``: shop index -> label. Not advice:
+    and not the chosen one (pass 1 tool index_mismatch.py: 16 of 1069 logged
+    shop card buys in passes 1-3 + A0, always index 0). ``offers``: shop index -> label. Not advice:
     it repairs Luna's own intent, so it stays on with advice vetoes off."""
     try:
         i = int(chosen)
