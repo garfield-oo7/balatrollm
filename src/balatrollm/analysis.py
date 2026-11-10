@@ -3168,8 +3168,21 @@ def situation(
     status, need = "UNKNOWN", None
     raw = chance = None
     margin = None
-    w = win_inputs(power.get("boss_rounds" if kind == "boss" else "rounds"), hands, target) if per else None
-    if w is not None:
+    known = None
+    if cur and hands == 1 and target > 0 and int((G.get("round") or {}).get("discards_left", 0) or 0) <= 0:
+        # pass 5 G1c(a): the last hand with no discard left is fully known: read
+        # the listed plays, not the sampler (which redraws the hand; B2: 13 of
+        # 62 such prompts read THIN or COMFORTABLE with nothing winning)
+        live = [p for p in play_advice(G)["plays"] if not p.get("blocked")]
+        best = max((p.get("floor") if p.get("floor") is not None else p["score"] for p in live), default=0)
+        known = "COMFORTABLE" if any(p.get("wins") for p in live) else "THIN" if best >= target else "SHORT"
+    w = None if known else (
+        win_inputs(power.get("boss_rounds" if kind == "boss" else "rounds"), hands, target) if per else None
+    )
+    if known:
+        status, per = known, int(best)
+        need = 1 if known != "SHORT" else None
+    elif w is not None:
         raw, margin, per = w["raw"], w["margin"], w["per"]
         chance = calibrated_win_chance(
             raw, margin=margin, boss=kind == "boss", ante=int(G.get("ante_num") or 1), n=w["n"]
@@ -3184,7 +3197,7 @@ def situation(
     elif last is not None:
         status = "COMFORTABLE" if last_spare else "THIN"
     net = False
-    if chance is None:
+    if chance is None and not known:
         if not cur and last_spare == 0 and status == "COMFORTABLE":
             status = "THIN"
         if (

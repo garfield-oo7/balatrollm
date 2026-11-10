@@ -154,3 +154,14 @@ def test_ankh_needs_a_free_joker_slot() -> None:
         assert analysis.validate_action(pack_state(4, 5), "pack", {"card": 0}, advice=advice) is None
         # a Negative joker owned: 5 of 6, still a free slot -> allowed
         assert analysis.validate_action(pack_state(5, 6), "pack", {"card": 0}, advice=advice) is None
+
+
+def test_last_hand_status_reads_the_held_cards() -> None:
+    """B2 N24: no discards, best listed High Card far below NEED read COMFORTABLE 99%."""
+    G = make_state("C_K D_9 S_7 H_4 C_2", hands_left=1, discards_left=0, chips=0)
+    G["blinds"]["small"]["score"] = 1926
+    sit = analysis.run_status(G)
+    assert sit["status"] == "SHORT" and sit["win_pct"] is None
+    G = make_state("C_K D_K S_K H_K C_2", hands_left=1, discards_left=0, chips=0)
+    G["blinds"]["small"]["score"] = 100
+    assert analysis.run_status(G)["status"] == "COMFORTABLE"
