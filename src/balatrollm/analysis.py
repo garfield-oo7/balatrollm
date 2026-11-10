@@ -14,6 +14,7 @@ never in draw order, and face-down cards are never revealed.
 
 import hashlib
 import json
+import math
 import random
 import re
 from collections import Counter, OrderedDict
@@ -2737,6 +2738,72 @@ def ante_goals(
 
 
 SITUATIONS = ("COMFORTABLE", "THIN", "SHORT")
+# E2a (pass 4, owner Q4 a): STATUS bands on the calibrated win chance of the
+# next blind, frozen 2026-11-09: COMFORTABLE >= 95%, THIN 80-95%, SHORT < 80%.
+WIN_BANDS = (0.95, 0.80)
+# E2a calibration: logistic fit of "won the blind" on the sampler's round
+# totals for the blind's hands: logit(raw) (raw = share of totals >= target),
+# margin = ln(median total / target) (clipped to +-MARGIN_CLIP), boss or not and
+# the ante (capped at WIN_ANTE_CAP: few blinds beyond it), fitted on passes 1-3
+# blinds (BLIND_SELECT snapshots) by scripts/fit_win_chance.py. The raw and
+# margin weights are >= 0, so more sampled score never lowers the chance.
+# Logit = intercept + raw * logit(raw) + margin * margin + boss * [boss] + ante * min(ante, cap)
+# Fitted 2026-11-09 on 795 blinds (58 lost).
+WIN_FIT = {"intercept": 3.7251, "raw": 0.1447, "margin": 2.2711, "boss": -1.1127, "ante": -0.6524}
+WIN_ANTE_CAP = 6
+MARGIN_CLIP = 3.0
+# Every sampled round wins -> at least THIN at any ante (pooled Ante 5+ bosses
+# with raw >= 99% in passes 1-3 + A0: 37 of 43 won = 86%)
+ALL_WIN_FLOOR = 0.80
+
+
+def _logit(p: float) -> float:
+    return math.log(p / (1 - p))
+
+
+def win_inputs(rounds: dict[int, list[int]] | None, hands: int, target: int) -> dict[str, Any] | None:
+    """E2a: from the sampled round totals of ``hands`` hands: ``raw`` = share
+    that reach ``target``, ``margin`` = ln(median / target) (clipped) and
+    ``per`` = the median round's score per hand; None without a distribution."""
+    if not rounds or hands <= 0 or target <= 0:
+        return None
+    h = min(hands, max(rounds))
+    totals = rounds.get(h)
+    if not totals:
+        return None
+    med = sorted(totals)[len(totals) // 2]
+    margin = math.log(med / target) if med > 0 else -MARGIN_CLIP
+    return {
+        "raw": sum(1 for v in totals if v >= target) / len(totals),
+        "margin": max(min(margin, MARGIN_CLIP), -MARGIN_CLIP),
+        "per": max(int(med / h), 1),
+        "n": len(totals),
+    }
+
+
+def raw_win_chance(rounds: dict[int, list[int]] | None, hands: int, target: int) -> float | None:
+    """Share of the sampled round totals of ``hands`` hands that reach
+    ``target`` (E2a), or None without a distribution."""
+    w = win_inputs(rounds, hands, target)
+    return None if w is None else w["raw"]
+
+
+def calibrated_win_chance(raw: float, *, margin: float, boss: bool, ante: int, n: int = 150) -> float:
+    """E2a: the fitted chance of winning the blind (WIN_FIT); non-decreasing
+    in ``raw`` and ``margin``; ALL_WIN_FLOOR when every sampled round wins."""
+    eps = 0.5 / max(n, 1)
+    x = _logit(min(max(raw, eps), 1 - eps))
+    f = WIN_FIT
+    z = (
+        f["intercept"] + f["raw"] * x + f["margin"] * margin + f["boss"] * boss
+        + f["ante"] * min(ante, WIN_ANTE_CAP)
+    )
+    p = 1 / (1 + math.exp(-max(min(z, 40), -40)))
+    return max(p, ALL_WIN_FLOOR) if raw >= 1 else p
+
+
+def win_band(chance: float) -> str:
+    return SITUATIONS[0 if chance >= WIN_BANDS[0] else 1 if chance >= WIN_BANDS[1] else 2]
 
 
 def situation(
@@ -2747,11 +2814,17 @@ def situation(
     """COMFORTABLE / THIN / SHORT for the NEXT blind only (owner: "1 round
     ahead"); the boss counts only when it is that blind, against its hands.
 
-    hands_needed = ceil(target / per hand): <= hands - 1 COMFORTABLE (a hand to
-    spare), == hands THIN, > hands SHORT (K4); per hand = the K5 low
-    percentile. Last blind won on its final hand -> at least THIN. Safety net
-    (fix 2, pass 3 C2): THIN (never SHORT) becomes COMFORTABLE when the last 2
-    blinds were each won with 2+ hands left, never for a boss.
+    E2a (pass 4): the band is the calibrated win chance of that blind
+    (WIN_BANDS) from the sampler's round totals (boss rules inside). The
+    hands needed (shown) = ceil(target / per hand) at the median sampled
+    round (the margin in the fit), never more than the hands when the band
+    is not SHORT, so the line agrees with the band. Without a sampled distribution: per hand = the K5 low
+    percentile and the pass-3 rule applies:
+    <= hands - 1 COMFORTABLE, == hands THIN, > hands SHORT (K4); last blind
+    won on its final hand -> at least THIN; safety net (fix 2, pass 3 C2):
+    THIN (never SHORT) becomes COMFORTABLE when the last 2 blinds were each
+    won with 2+ hands left, never for a boss. The calibrated band has no
+    overrides (the fit is the test).
     """
     cur = current_blind(G) if G.get("state") == "SELECTING_HAND" else None
     nxt = cur or next_blind(G) or {}
@@ -2767,22 +2840,35 @@ def situation(
     last = rounds[-1] if rounds else None
     last_spare = int(last.get("hands_left", 0)) if last else None
     status, need = "UNKNOWN", None
-    if per and target and hands:
+    raw = chance = None
+    margin = None
+    w = win_inputs(power.get("boss_rounds" if kind == "boss" else "rounds"), hands, target) if per else None
+    if w is not None:
+        raw, margin, per = w["raw"], w["margin"], w["per"]
+        chance = calibrated_win_chance(
+            raw, margin=margin, boss=kind == "boss", ante=int(G.get("ante_num") or 1), n=w["n"]
+        )
+        status = win_band(chance)
+        need = -(-target // per)
+        if status != "SHORT":  # the line agrees with the band: a likely win fits in the hands
+            need = min(need, hands)
+    elif per and target and hands:
         need = -(-target // per)
         status = SITUATIONS[0 if need <= hands - 1 else 1 if need == hands else 2]
     elif last is not None:
         status = "COMFORTABLE" if last_spare else "THIN"
-    if not cur and last_spare == 0 and status == "COMFORTABLE":
-        status = "THIN"
     net = False
-    if (
-        status == "THIN"  # C2: the safety net never lifts SHORT
-        and kind != "boss"
-        and rounds
-        and len(rounds) >= 2
-        and all(int(r.get("hands_left", 0)) >= 2 for r in rounds[-2:])
-    ):
-        status, net = "COMFORTABLE", True
+    if chance is None:
+        if not cur and last_spare == 0 and status == "COMFORTABLE":
+            status = "THIN"
+        if (
+            status == "THIN"  # C2: the safety net never lifts SHORT
+            and kind != "boss"
+            and rounds
+            and len(rounds) >= 2
+            and all(int(r.get("hands_left", 0)) >= 2 for r in rounds[-2:])
+        ):
+            status, net = "COMFORTABLE", True
     return {
         "status": status,
         "hands_needed": need,
@@ -2793,6 +2879,89 @@ def situation(
         "per_hand": per,
         "net": net,
         "last_spare": last_spare,
+        "win_raw": raw,
+        "win_margin": margin,
+        "win_chance": chance,
+    }
+
+
+INVEST_MIN_PCT = 25  # E2b: SCORE +25% per hand or more
+
+
+def shop_investment(G: dict[str, Any], sit: dict[str, Any], score_spendable: int) -> dict[str, Any] | None:
+    """E2b shop investment (pass 4, owner Q5 a / Q7 a): in a shop, when the
+    next blind reads THIN or SHORT or needs hands - 1 or more (2+ hands), the
+    shop joker with the best SCORE % per hand of +25% or more whose price is
+    within SCORE_SPENDABLE (with full slots: its best swap) -> the PRIORITY
+    text and one "buy vs save vs reroll" line: money after, interest lost and
+    the next blind's win chance with and without it. Advice only (no veto)."""
+    if G.get("state") != "SHOP":
+        return None
+    need, hands = sit.get("hands_needed"), int(sit.get("hands") or 0)
+    tight = sit.get("status") in ("THIN", "SHORT") or (need is not None and hands >= 2 and need >= hands - 1)
+    if not tight:
+        return None
+    imp = shop_impact(G)
+    base = imp.get("score") or 0
+    jokers = G.get("jokers") or {}
+    full = int(jokers.get("count", 0)) >= int(jokers.get("limit", 5))
+    shop = _area_cards(G, "shop")
+    best = None
+    for i, card in enumerate(shop):
+        if card.get("set") != "JOKER" or (card.get("state") or {}).get("hidden"):
+            continue
+        cost = int((card.get("cost") or {}).get("buy", 0) or 0)
+        if cost > score_spendable:
+            continue
+        swap = None
+        if full and _norm(card)["ed"] != "NEGATIVE":
+            swap = (imp.get("swaps") or {}).get(i)
+            if not swap or not base:
+                continue
+            pct = round(swap["delta"] * 100 / base)
+        else:
+            pct = (imp.get("shop_pct") or {}).get(i)
+        if pct is None or pct < INVEST_MIN_PCT:
+            continue
+        if best is None or pct > best["pct"]:
+            best = {"index": i, "label": card.get("label"), "cost": cost, "pct": pct, "swap": swap}
+    if best is None:
+        return None
+    money = int(G.get("money") or 0)
+    after = money - best["cost"]
+    card = shop[best["index"]]
+    owned = _area_cards(G, "jokers")
+    if best["swap"]:
+        owned = [j for n, j in enumerate(owned) if n != best["swap"]["index"]]
+        after += int((_area_cards(G, "jokers")[best["swap"]["index"]].get("cost") or {}).get("sell", 0) or 0)
+    area = {**jokers, "cards": [*owned, card], "count": len(owned) + 1}
+    G_buy = {**G, "jokers": area, "money": after}
+    sit_buy = situation(G_buy, power_check(G_buy), None)
+    now, then = sit.get("win_chance"), sit_buy.get("win_chance")
+    reroll = int((G.get("round") or {}).get("reroll_cost", 5) or 0)
+
+    def chance(p: float | None) -> str:
+        return "?" if p is None else f"{int(p * 100)}%"
+
+    sell = f", selling {best['swap']['label']}" if best["swap"] else ""
+    why = sit.get("status") if sit.get("status") in ("THIN", "SHORT") else f"needs {need} of {hands} hands"
+    line = (
+        f"buy {best['label']} (${best['cost']}{sell}): ${after} left, interest next round ${interest(after)}"
+        f" (loses ${interest(money) - interest(after)}), next blind win chance about {chance(then)}"
+        f" | save: ${money} left, interest ${interest(money)}, win chance about {chance(now)}"
+        f" | reroll (${reroll}): ${money - reroll} left, the joker it finds is not known"
+    )
+    return {
+        **best,
+        "money_after": after,
+        "interest_lost": interest(money) - interest(after),
+        "win_now": now,
+        "win_with": then,
+        "line": line,
+        "priority": (
+            f"buy {best['label']} (SCORE +{best['pct']}% per hand{sell}) before rerolling or saving for an"
+            f" [XMULT] joker: the next blind is {why}"
+        ),
     }
 
 
@@ -2851,6 +3020,11 @@ def run_status(
         if open_goals
         else "buy what builds your run (see STATUS); keep money and empty slots while COMFORTABLE"
     )
+    score_spendable = max(money - reserve(G, status, boss_short), money - effective_floor, 0)
+    invest = shop_investment(G, sit, score_spendable)
+    if invest:
+        # E2b: a +25% joker within SCORE_SPENDABLE goes ahead of the [XMULT] goal
+        priority = invest["priority"]
     milestone = f"Ante {ante} goals met: {len(goals) - len(open_goals)}/{len(goals)}."
     return {
         "ante": ante,
@@ -2874,6 +3048,11 @@ def run_status(
         "next_name": sit["name"],
         "next_hands": sit["hands"],
         "safety_net": sit["net"],
+        # E2a: calibrated chance to win the next blind (None = no distribution)
+        "win_chance": sit["win_chance"],
+        "win_pct": None if sit["win_chance"] is None else int(sit["win_chance"] * 100),
+        "win_raw": sit["win_raw"],
+        "win_margin": sit["win_margin"],
         "last_spare": sit["last_spare"],
         "boss_check": bcheck,
         "best_types": power.get("best_types", []),
@@ -2891,7 +3070,9 @@ def run_status(
         # money a score buy may use: a joker filling an empty slot (Antes 1-3),
         # a joker with SCORE +50% or more, an on-plan [XMULT] joker, a [MAIN]
         # planet, a Buffoon pack with a free slot, or a SCORE > 0 joker while TOO WEAK
-        "score_spendable": max(money - reserve(G, status, boss_short), money - effective_floor, 0),
+        "score_spendable": score_spendable,
+        # E2b: "buy vs save vs reroll" for the best +25% joker (None = no line)
+        "invest": invest,
         "shop_locked": bool((G.get("luna") or {}).get("shop_locked")),
         # C4: Luna may ask for a boss reroll in this shop
         "boss_reroll_ok": G.get("state") == "SHOP"
@@ -3374,12 +3555,16 @@ def _best_play(
     pad_to: int,
     only: str | None = None,
     memo: dict[Any, Any] | None = None,
+    by_type: dict[str, int] | None = None,
 ) -> tuple[int, str, list[int]]:
     """Best candidate play (score, hand type, indices); ``only`` = that type.
 
     ``memo`` (one dict per dealt hand, sampler only) keeps the normalised
     cards and the candidate plays, which depend only on the hand, the pad
-    size, the classify flags and the held-card jokers owned.
+    size, the classify flags and the held-card jokers owned. ``by_type``
+    (E2a, The Eye / The Mouth) is filled with the best score per hand type.
+    A face-down card (The Wheel, sampler only) is never picked for a play
+    (Luna cannot see it) but still scores as the card it is.
     """
     ctx = _estimate_ctx(G)
     if memo is None:
@@ -3392,13 +3577,20 @@ def _best_play(
         cands = memo.get(sig)
         if cands is None:
             cands = memo[sig] = _candidates(G, norm, pad_to)
+    if any(c["hidden"] for c in norm):  # E2a The Wheel: a face-down card still scores
+        hand = [_face_up(c) for c in hand]
+        snorm = [_norm(c) for c in hand]
+    else:
+        snorm = norm
     best = (0, "High Card", [])
     for play in cands:
         rest = [i for i in range(len(hand)) if i not in play]
-        pre = {"ctx": ctx, "played": [norm[i] for i in play], "held": [norm[i] for i in rest]}
+        pre = {"ctx": ctx, "played": [snorm[i] for i in play], "held": [snorm[i] for i in rest]}
         est = estimate_play(G, [hand[i] for i in play], [hand[i] for i in rest], expected=True, _pre=pre)
         if est["blocked"] or (only is not None and est["hand"] != only):
             continue
+        if by_type is not None and est["score"] > by_type.get(est["hand"], 0):
+            by_type[est["hand"]] = int(est["score"])
         if est["score"] > best[0]:
             best = (int(est["score"]), est["hand"], play)
     return best
@@ -3476,16 +3668,39 @@ def _dealt_hands(G: dict[str, Any], draws: list, *, boss: str = "", discards: bo
     return out
 
 
-def _strength(G: dict[str, Any], draws: list, *, boss: str = "", discards: bool = True) -> dict[str, Any]:
+def _strength(
+    G: dict[str, Any], draws: list, *, boss: str = "", discards: bool = True, rounds: bool = False
+) -> dict[str, Any]:
     """Mean score per hand over ``draws`` under G (jokers, levels, boss)."""
-    return _score_hands(G, _dealt_hands(G, draws, boss=boss, discards=discards), boss=boss)
+    return _score_hands(G, _dealt_hands(G, draws, boss=boss, discards=discards), boss=boss, rounds=rounds)
 
 
-def _score_hands(G: dict[str, Any], dealt: list[list], *, boss: str = "") -> dict[str, Any]:
+RESTRICTED_TYPE_BOSSES = ("The Eye", "The Mouth")
+
+
+def _round_totals(n: int, h: int, score: Any) -> list[int]:
+    """E2a: ``n`` round totals of ``h`` hands, each hand from a different
+    draw (draw j, j + n//h, j + 2n//h, ... mod n); ``score(i, k)`` = draw i's
+    score as the round's hand k (k = 0 first, k = h - 1 last)."""
+    off = max(n // max(h, 1), 1)
+    return [int(sum(score((j + k * off) % n, k) for k in range(h))) for j in range(n)]
+
+
+def _score_hands(
+    G: dict[str, Any], dealt: list[list], *, boss: str = "", rounds: bool = False
+) -> dict[str, Any]:
     """Best play per dealt hand under G, plus Spare Trousers growth inside the
-    blind, Card Sharp repeats and Acrobat's last hand: mean score per hand."""
+    blind, Card Sharp repeats and Acrobat's last hand: mean score per hand.
+
+    E2a boss rules inside the estimate: The Needle = one hand per round (Card
+    Sharp never repeats, Acrobat's X3 is on that hand); The Eye = no hand type
+    twice in a round, The Mouth = one hand type for the whole round (the type
+    with the best mean; Card Sharp's X3 on its hands 2..), both judged on
+    rounds built from different draws. ``rounds=True`` adds "rounds": {h: the
+    sampled round totals of h hands} for h = 1..hands (the win chance).
+    """
     pad = 5 if boss == "The Psychic" else 0
-    hands = _hands_per_round(G)
+    hands = 1 if boss == "The Needle" else _hands_per_round(G)
     chosen = []
     reuse = dealt.first if isinstance(dealt, _Dealt) and dealt.G is G and dealt.pad == pad else {}
     memos = dealt.memo if isinstance(dealt, _Dealt) else None
@@ -3493,10 +3708,13 @@ def _score_hands(G: dict[str, Any], dealt: list[list], *, boss: str = "") -> dic
         s, t, play = reuse[n] if n in reuse else _best_play(G, hand, pad, memo=memos[n] if memos else None)
         chosen.append((s, t, hand, play))
     if not chosen:
-        return {"per_hand": 0, "per_hand_low": 0, "types": Counter(), "chosen": []}
+        return {"per_hand": 0, "per_hand_low": 0, "types": Counter(), "chosen": [], "rounds": {}}
     types = Counter(t for _, t, _, _ in chosen)
     keys = set(_joker_keys(G)) | set(copied_keys(G))
     scores = [s for s, _, _, _ in chosen]
+
+    def face_up(hand: list) -> list:
+        return [_face_up(c) for c in hand]
 
     def rescore(Gv: dict[str, Any], only: str | None = None) -> list[int]:
         out = []
@@ -3504,6 +3722,7 @@ def _score_hands(G: dict[str, Any], dealt: list[list], *, boss: str = "") -> dic
             if only is not None and t != only:
                 out.append(s)
                 continue
+            hand = face_up(hand)
             est = estimate_play(Gv, [hand[i] for i in play],
                                 [hand[i] for i in range(len(hand)) if i not in play], expected=True)
             out.append(int(est["score"]))
@@ -3517,28 +3736,100 @@ def _score_hands(G: dict[str, Any], dealt: list[list], *, boss: str = "") -> dic
         G = _with_effect(G, "j_trousers", f"(Currently +{grown:g} Mult)")
         scores = rescore(G)
     per_round = [s * hands for s in scores]
+    rep = scores
+    sharp = "j_card_sharp" in keys and boss != "The Eye" and hands > 1
     # Card Sharp: hands 2.. repeat the most common hand type for X3, played
     # from any draw that contains it when that beats the draw's best play
     # (owner S3: "play Pairs"; findings P4)
-    if "j_card_sharp" in keys and boss != "The Eye":
+    if sharp and boss != "The Mouth":
         modal = types.most_common(1)[0][0]
         hands_tbl = {k: dict(v or {}) for k, v in (G.get("hands") or {}).items()}
         hands_tbl.setdefault(modal, {})["played_this_round"] = 1
         G_rep = {**G, "hands": hands_tbl}
-        pad = 5 if boss == "The Psychic" else 0
         rep = [
             max(s, _best_play(G_rep, hand, pad, only=modal)[0])
             for s, (_, _, hand, _) in zip(scores, chosen)
         ]
         per_round = [s + (hands - 1) * r for s, r in zip(scores, rep)]
     # Acrobat: X3 on the final hand only (owner, pass 1)
+    last = scores
     if "j_acrobat" in keys:
         rnd = dict(G.get("round") or {})
         last = rescore({**G, "round": {**rnd, "hands_left": 1}})
         per_round = [pr - s + l for pr, s, l in zip(per_round, scores, last)]
+    # E2a round totals (Sol g3 finding 1): the final hand of a 2+ hand round is
+    # a Card Sharp repeat too, with Acrobat's last-hand X3 on top
+    last_rep = last
+    if rounds and sharp and boss != "The Mouth":
+        if "j_acrobat" in keys:
+            rnd = dict(G_rep.get("round") or {})
+            G_rep_last = {**G_rep, "round": {**rnd, "hands_left": 1}}
+            last_rep = [
+                max(l, _best_play(G_rep_last, hand, pad, only=modal)[0])
+                for l, (_, _, hand, _) in zip(last, chosen)
+            ]
+        else:
+            last_rep = rep
+    n = len(chosen)
+    if boss in RESTRICTED_TYPE_BOSSES:
+        by_type: list[dict[str, int]] = []
+        for k, (_, _, hand, _) in enumerate(chosen):
+            d: dict[str, int] = {}
+            _best_play(G, hand, pad, memo=memos[k] if memos else None, by_type=d)
+            by_type.append(d)
+        lift = [l / s if s else 1.0 for s, l in zip(scores, last)]  # Acrobat on the last hand
+        if boss == "The Mouth":
+            tot: Counter = Counter()
+            for d in by_type:
+                tot.update(d)
+            only = tot.most_common(1)[0][0] if tot else "High Card"
+            rep_only = [d.get(only, 0) for d in by_type]
+            if sharp:
+                hands_tbl = {k: dict(v or {}) for k, v in (G.get("hands") or {}).items()}
+                hands_tbl.setdefault(only, {})["played_this_round"] = 1
+                G_rep = {**G, "hands": hands_tbl}
+                rep_only = [_best_play(G_rep, hand, pad, only=only)[0] for (_, _, hand, _) in chosen]
+
+            def restricted(h: int) -> list[int]:
+                def one(i: int, k: int) -> float:
+                    v = by_type[i].get(only, 0) if k == 0 else rep_only[i]
+                    return v * lift[i] if k == h - 1 else v
+                return _round_totals(n, h, one)
+        else:
+
+            def restricted(h: int) -> list[int]:
+                off = max(n // max(h, 1), 1)
+                out = []
+                for j in range(n):
+                    used: set[str] = set()
+                    total = 0.0
+                    for k in range(h):
+                        i = (j + k * off) % n
+                        left = [(v, t) for t, v in by_type[i].items() if t not in used]
+                        if not left:
+                            continue
+                        v, t = max(left)
+                        used.add(t)
+                        total += v * lift[i] if k == h - 1 else v
+                    out.append(int(total))
+                return out
+
+        per_round = restricted(hands)
+        totals = {h: restricted(h) for h in range(1, hands + 1)} if rounds else {}
+    elif rounds:
+
+        def one_hand(i: int, k: int, h: int) -> float:
+            if k == 0:  # the first hand (a one-hand round: Acrobat, no repeat)
+                return last[i] if h == 1 else scores[i]
+            return last_rep[i] if k == h - 1 else rep[i]
+
+        totals = {h: _round_totals(n, h, lambda i, k, h=h: one_hand(i, k, h)) for h in range(1, hands + 1)}
+    else:
+        totals = {}
     per_hand = int(sum(per_round) / len(per_round) / hands)
     per_hand_low = int(percentile(per_round, K5_PERCENTILE) / hands)
-    return {"per_hand": per_hand, "per_hand_low": per_hand_low, "types": types, "chosen": chosen}
+    return {"per_hand": per_hand, "per_hand_low": per_hand_low, "types": types, "chosen": chosen,
+            "rounds": {h: sorted(v) for h, v in totals.items()}}
 
 
 def percentile(values: list[float] | list[int], p: float) -> float:
@@ -3572,6 +3863,20 @@ def _boss_view(G: dict[str, Any], draws: list) -> tuple[dict[str, Any], list]:
 
     if suit or name in BOSS_DEBUFF_FACES:
         draws = [(under(h), under(r)) for h, r in draws]
+    if name == "The Manacle":  # E2a: hand size - 1 (the same draws minus their last card)
+        draws = [(h[:-1], [h[-1], *r] if h else r) for h, r in draws]
+    if name == "The Wheel":
+        # E2a: 1 in 7 drawn cards face down (Luna cannot plan with them; they
+        # still score as the card they are: a random card of the deck mix)
+        rng = random.Random(7)
+
+        def wheel(cards: list) -> list:
+            return [
+                {**c, "state": {**(c.get("state") or {}), "hidden": True}} if rng.random() < 1 / 7 else c
+                for c in cards
+            ]
+
+        draws = [(wheel(h), wheel(r)) for h, r in draws]
     return Gb, draws
 
 
@@ -3665,14 +3970,12 @@ def _power_check(G: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
         for k, v in (G.get("blinds") or {}).items()
     }
     draws = sample_draws(G)
-    now = _strength(G_owned, draws)
+    now = _strength(G_owned, draws, rounds=True)
     boss = (G.get("blinds") or {}).get("boss") or {}
     name = str(boss.get("name") or "")
     Gb, bdraws = _boss_view(G_owned, draws)
-    if name == "The Mouth" or name == "The Eye":
-        bstr = now
-    else:
-        bstr = _strength(Gb, bdraws, boss=name, discards=name != "The Water")
+    # E2a: every boss's rules inside the estimate (The Eye / The Mouth too)
+    bstr = _strength(Gb, bdraws, boss=name, discards=name != "The Water", rounds=True)
     total = max(sum(now["types"].values()), 1)
     made = now["types"].get(plan["hand"], 0) / total
     return {
@@ -3686,6 +3989,9 @@ def _power_check(G: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
         "boss_per_hand": bstr["per_hand"],
         "boss_per_hand_low": bstr["per_hand_low"],
         "boss_hands_allowed": 1 if name == "The Needle" else _hands_per_round(G),
+        # E2a: sampled round totals (h hands -> sorted totals) for the win chance
+        "rounds": now["rounds"],
+        "boss_rounds": bstr["rounds"],
     }
 
 
@@ -3716,10 +4022,7 @@ def boss_check(
         Gg = grown(G, before, Counter(power.get("types") or {}), history)
         Gg = _with_jokers(Gg, _area_cards(Gg, "jokers"))
         Gb, bdraws = _boss_view(Gg, sample_draws(G))
-        if name in ("The Eye", "The Mouth"):
-            per = _strength(Gg, sample_draws(G))["per_hand_low"]
-        else:
-            per = _strength(Gb, bdraws, boss=name, discards=name != "The Water")["per_hand_low"]
+        per = _strength(Gb, bdraws, boss=name, discards=name != "The Water")["per_hand_low"]
         allowed = 1 if name == "The Needle" else _hands_per_round(G)
         hands = -(-target // max(per, 1))
         return {
@@ -3924,6 +4227,9 @@ def _shop_impact(G: dict[str, Any]) -> dict[str, Any]:
         "score": 0,
         "shop": {},
         "pack": {},
+        # E2b: numeric SCORE % per hand of each shop / pack joker (now)
+        "shop_pct": {},
+        "pack_pct": {},
         "owned": {},
         "swaps": {},
         "pack_swaps": {},
@@ -3955,9 +4261,13 @@ def _shop_impact(G: dict[str, Any]) -> dict[str, Any]:
     def signed(v: float) -> str:
         return f"{'+' if v >= 0 else ''}{fmt_num(v)}"
 
+    pct_now: dict[int, int] = {}
+
     def joker_text(card: dict[str, Any]) -> str:
         key = card.get("key", "")
         new = score([*owned, card])
+        if base:
+            pct_now[id(card)] = round((new - base) * 100 / base)
         txt = f"{signed(new - base)} per hand{pct(new - base)}"
         if key in GROWING or str(card.get("label")) in knowledge.GROWS_XMULT:
             Gg = grown(_with_jokers(G0, [*owned, card]), GROWTH_BLINDS, types)
@@ -3998,6 +4308,8 @@ def _shop_impact(G: dict[str, Any]) -> dict[str, Any]:
             d = item_delta(card)
             if d:
                 out[area][i] = d
+                if card.get("set") == "JOKER" and id(card) in pct_now:
+                    out[area + "_pct"][i] = pct_now[id(card)]
     contrib = {}
     for i, j in enumerate(owned):
         rest = [x for k, x in enumerate(owned) if k != i]

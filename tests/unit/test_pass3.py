@@ -50,8 +50,15 @@ class TestK5:
         G["blinds"]["big"]["score"] = 3 * power["per_hand"]
         analysis._CACHE.clear()
         S = analysis.run_status(G, [], [])
-        assert S["sit_per"] == power["per_hand_low"]
-        assert S["status"] in ("THIN", "SHORT")
+        # E2a: the band comes from the calibrated win chance; the shown per
+        # hand is the median sampled round's, and a band that is not SHORT
+        # never shows more hands than the blind has
+        assert S["status"] == analysis.win_band(S["win_chance"])
+        assert S["sit_per"] >= power["per_hand_low"]
+        assert S["status"] == "SHORT" or S["hands_needed"] <= S["next_hands"]
+        G["blinds"]["big"]["score"] = 10_000_000
+        analysis._CACHE.clear()
+        assert analysis.run_status(G, [], [])["status"] == "SHORT"
 
     def test_boss_check_reads_the_low_value(self) -> None:
         G = shop(boss="The Club")
@@ -94,11 +101,13 @@ class TestSafetyNet:
         assert S["status"] == "SHORT" and not S["safety_net"]
 
     def test_thin_lifts(self) -> None:
+        """The pass-3 rule (no sampled distribution: E2a fallback)."""
         G = shop()
-        G["blinds"]["big"]["score"] = 4 * analysis.power_check(G)["per_hand_low"]
-        S = analysis.run_status(G, self.easy, [])
-        assert S["status"] == "COMFORTABLE" and S["safety_net"]
-        assert analysis.run_status(G, [{"hands_left": 1}, {"hands_left": 3}], [])["status"] == "THIN"
+        power = {k: v for k, v in analysis.power_check(G).items() if k not in ("rounds", "boss_rounds")}
+        G["blinds"]["big"]["score"] = 4 * power["per_hand_low"]
+        sit = analysis.situation(G, power, self.easy)
+        assert sit["status"] == "COMFORTABLE" and sit["net"]
+        assert analysis.situation(G, power, [{"hands_left": 1}, {"hands_left": 3}])["status"] == "THIN"
 
 
 # ---------------------------------------------------------------------------

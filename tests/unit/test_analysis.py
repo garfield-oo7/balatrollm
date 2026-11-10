@@ -240,29 +240,43 @@ class TestLookAheadAndRefusals:
         assert analysis.run_status(G, [], [])["status"] == "SHORT"
 
     def test_safety_net_never_on_a_boss(self) -> None:
+        """The pass-3 rule (no sampled distribution: E2a fallback)."""
         G = make_state("H_2", state="SHOP")
         G["blinds"]["small"]["status"] = "DEFEATED"
         G["blinds"]["big"].update(status="UPCOMING", score=10_000_000)
         easy = [{"hands_left": 2}, {"hands_left": 3}]
+        power = {k: v for k, v in analysis.power_check(G).items() if k not in ("rounds", "boss_rounds")}
         # C2 (pass 3): the safety net never lifts SHORT ...
-        S = analysis.run_status(G, easy, [])
-        assert S["status"] == "SHORT" and not S["safety_net"]
+        sit = analysis.situation(G, power, easy)
+        assert sit["status"] == "SHORT" and not sit["net"]
         # ... it lifts THIN: a Big Blind that takes all 4 hands at the low per hand
-        G["blinds"]["big"]["score"] = 4 * analysis.power_check(G)["per_hand_low"]
-        S = analysis.run_status(G, easy, [])
-        assert S["status"] == "COMFORTABLE" and S["safety_net"]
-        assert analysis.run_status(G, [{"hands_left": 1}, {"hands_left": 3}], [])["status"] == "THIN"
+        G["blinds"]["big"]["score"] = 4 * power["per_hand_low"]
+        sit = analysis.situation(G, power, easy)
+        assert sit["status"] == "COMFORTABLE" and sit["net"]
+        assert analysis.situation(G, power, [{"hands_left": 1}, {"hands_left": 3}])["status"] == "THIN"
         G["blinds"]["big"]["score"] = 10_000_000
         G["blinds"]["big"]["status"] = "DEFEATED"
         G["blinds"]["boss"]["score"] = 10_000_000
-        assert analysis.run_status(G, easy, [])["status"] == "SHORT"
+        assert analysis.situation(G, power, easy)["status"] == "SHORT"
+
+    def test_calibrated_status_has_no_overrides(self) -> None:
+        """E2a: the band is the calibrated win chance; the run's rounds do not move it."""
+        G = make_state("H_2", state="SHOP")
+        G["blinds"]["small"]["status"] = "DEFEATED"
+        G["blinds"]["big"]["status"] = "UPCOMING"
+        G["blinds"]["big"]["score"] = 4 * analysis.power_check(G)["per_hand_low"]
+        S = analysis.run_status(G, [{"hands_left": 2}, {"hands_left": 3}], [])
+        assert S["status"] == analysis.win_band(S["win_chance"]) and not S["safety_net"]
+        assert analysis.run_status(G, [{"hands_left": 0}], [])["status"] == S["status"]
 
     def test_last_blind_won_on_its_final_hand_is_thin(self) -> None:
+        """The pass-3 rule (no sampled distribution: E2a fallback)."""
         G = make_state("H_2", state="SHOP")
         G["blinds"]["small"]["status"] = "DEFEATED"
         G["blinds"]["big"]["status"] = "UPCOMING"
         G["hands"]["Pair"].update(chips=600, mult=20, level=20)
-        assert analysis.run_status(G, [{"hands_left": 0}], [])["status"] == "THIN"
+        power = {k: v for k, v in analysis.power_check(G).items() if k not in ("rounds", "boss_rounds")}
+        assert analysis.situation(G, power, [{"hands_left": 0}])["status"] == "THIN"
 
     def test_needle_boss_line_always_shown(self) -> None:
         G = make_state("H_2", state="SHOP")
