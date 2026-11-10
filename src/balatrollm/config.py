@@ -142,6 +142,11 @@ def _load_from_yaml(path: Path) -> dict[str, Any]:
         if not isinstance(data["interleave"], bool):
             raise ValueError("interleave must be true or false")
         result["interleave"] = data["interleave"]
+    # pass 5 G2: the write-only log book, strategy -> arm name (YAML only)
+    if "book" in data and data["book"] is not None:
+        if not isinstance(data["book"], dict):
+            raise ValueError("book must map strategy -> arm name, e.g. {mastery: C-on}")
+        result["book"] = {str(k): str(v) for k, v in data["book"].items()}
     return result
 
 
@@ -193,6 +198,9 @@ class Config:
     views: bool = False
     # pass 5: seed outer, strategy inner (N61 on, N61 off, N62 on, ...)
     interleave: bool = False
+    # pass 5 G2: write-only log book per strategy: {strategy: arm}; the store is
+    # <runs_dir>/runs/book/<arm>. Never read by the game prompts.
+    book: dict[str, str] = field(default_factory=dict)
 
     # Connection
     host: str = "127.0.0.1"
@@ -259,6 +267,16 @@ class Config:
             strategy_path = STRATEGIES_DIR / strategy
             if not strategy_path.exists():
                 raise ValueError(f"Strategy not found: {strategy}")
+
+        from .book import ARM_NAME
+
+        for strategy, arm in self.book.items():
+            if strategy not in self.strategy:
+                raise ValueError(f"book: strategy {strategy} is not in strategy {self.strategy}")
+            if not ARM_NAME.match(arm):
+                raise ValueError(f"book: invalid arm name {arm!r}")
+        if len(set(self.book.values())) != len(self.book):
+            raise ValueError("book: each strategy needs its own arm (one store per arm)")
 
     def generate_tasks(self) -> list[Task]:
         """Generate all run combinations as Tasks."""

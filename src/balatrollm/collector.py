@@ -247,6 +247,13 @@ class Collector:
         # Write latest.json pointer for overlay
         self._write_latest_json()
 
+    def add_task_fields(self, fields: dict[str, Any]) -> None:
+        """Add fields to task.json (pass 5 G2: the book arm and store)."""
+        path = self.run_dir / "task.json"
+        data = json.loads(path.read_text())
+        data.update(fields)
+        path.write_text(json.dumps(data, indent=2))
+
     def record_call(self, outcome: Literal["successful", "error", "failed"]) -> None:
         """Record a call outcome."""
         match outcome:

@@ -181,3 +181,61 @@ def test_f4_consumable_slots_refuse_only_when_full() -> None:
     G["consumables"]["count"] = 2
     for advice in (True, False):
         assert "consumable slots are full" in analysis.validate_action(G, "buy", {"card": 0}, advice=advice)
+
+
+# --- Pass 5 G2: the write-only book never changes a game request (critical test d)
+
+
+@pytest.mark.parametrize("strategy", ["mastery", "mastery-noadvice"])
+def test_book_on_or_off_game_requests_are_byte_identical(tmp_path, monkeypatch, strategy) -> None:
+    """The bot's real requests (messages AND tools, as sent and as logged in
+    requests.jsonl) on the logged states, with config ``book`` on vs off, and
+    the strategy hash in task.json."""
+    import asyncio
+
+    from openai.types.chat import ChatCompletion
+
+    from balatrollm import book
+    from balatrollm.bot import Bot
+    from balatrollm.collector import Collector
+    from balatrollm.config import Config
+
+    monkeypatch.setenv("BALATROLLM_SEED_LABELS", str(tmp_path / "no-map.json"))
+
+    class LLM:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def call(self, model, messages, tools, model_config=None):
+            self.sent.append(json.dumps({"messages": messages, "tools": tools, "model_config": model_config}))
+            return ChatCompletion.model_validate({
+                "id": "x", "object": "chat.completion", "created": 0, "model": model,
+                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}]})
+
+    class Game:
+        async def call(self, method, params=None):
+            return {}
+
+    def run(arm: str | None) -> tuple[list[str], str, dict[str, Any]]:
+        config = Config(model=["openai/gpt-6-luna"], seed=["SEED-ZZ"], strategy=[strategy],
+                        book={strategy: arm} if arm else {})
+        b = Bot(config.generate_tasks()[0], config)
+        root = tmp_path / (arm or "off")
+        b._collector = Collector(b.task, root)
+        if arm:  # as play() sets it up
+            assert b._book_arm == arm
+            b._book_store = book.store_dir(root, arm)
+            b._game_started = True
+        else:
+            assert b._book_arm is None
+        b._llm, b._balatro = LLM(), Game()
+        for G in _states():
+            asyncio.run(b._get_llm_response(G))
+        logged = (b._collector.run_dir / "requests.jsonl").read_text()
+        task = json.loads((b._collector.run_dir / "task.json").read_text())
+        return b._llm.sent, logged, task["code"]
+
+    on, off = run("C-on"), run(None)
+    assert len(on[0]) == len(_states()) and on[0] == off[0]
+    assert on[1] == off[1]
+    assert on[2]["strategy_hash"] == off[2]["strategy_hash"]

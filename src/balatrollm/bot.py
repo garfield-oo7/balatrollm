@@ -5,6 +5,7 @@ import contextvars
 import dataclasses
 import json
 import logging
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,7 @@ from typing import Any
 import httpx
 from openai.types.chat import ChatCompletion
 
-from . import seeds
+from . import book, seeds
 from .analysis import (
     BOSS_REROLL_MAX_PER_ANTE,
     current_blind,
@@ -45,6 +46,7 @@ from .collector import (
 from .config import Config, Task, get_model_config
 from . import ledger
 from .llm import LLMClient, LLMClientError, LLMPolicyRefusalError, LLMTimeoutError
+from .pricing import add_cost
 from .strategy import StrategyManager, StrategyManifest
 
 logger = logging.getLogger(__name__)
@@ -92,6 +94,14 @@ class BotError(Exception):
 
 class Bot:
     """One-shot LLM-powered Balatro bot. Creates clients, plays a single game, returns stats."""
+
+    # Pass 5 G2 defaults (class level, so bots built without __init__ in tests have them)
+    _book_arm: str | None = None
+    _book_store: Path | None = None
+    _book_seed: str | None = None
+    _game_started: bool = False
+    _end_state: dict[str, Any] | None = None
+    book_update_path: Path | None = None
 
     def __init__(self, task: Task, config: Config, port: int | None = None) -> None:
         self.task = task
@@ -142,6 +152,13 @@ class Bot:
         self._phase_moved: bool = False
         # Tags the harness skipped for that have not paid yet (M1)
         self._pending_tags: list[dict[str, Any]] = []
+
+        # Pass 5 G2: write-only log book (config ``book``: strategy -> arm).
+        # Read only at game end, never by the game prompts.
+        self._book_arm = (getattr(config, "book", None) or {}).get(task.strategy)
+        self._game_started = False
+        self._end_state = None
+        self.book_update_path = None
 
         # Finish reason tracking
         self._finish_reason: FinishReason | None = None
@@ -276,6 +293,10 @@ class Bot:
 
         self._collector = Collector(self.task, runs_dir)
         self._setup_file_logging()
+        if self._book_arm:
+            self._book_store = book.store_dir(Path(runs_dir), self._book_arm)
+            self._book_seed = start_args.get("seed")
+            self._collector.add_task_fields({"book": {"arm": self._book_arm, "store": str(self._book_store)}})
 
         logger.info("Starting game")
         logger.info(f"Run data will be saved to: {self._collector.run_dir}")
@@ -290,6 +311,7 @@ class Bot:
                 self._finish_reason = "unexpected_error"
                 logger.error(f"Game did not start on the seed generated for {self.task.seed}")
                 raise BotError(f"Game did not start on the seed generated for {self.task.seed}")
+            self._game_started = True
             await self._run_game_loop(gamestate)
         except BotError:
             logger.error("Game ended due to bot error")
@@ -308,6 +330,10 @@ class Bot:
                     logger.debug(
                         f"Could not write stats (normal if run failed early): {e}"
                     )
+                # Pass 5 G2: the write-up call, after the game's stats (never
+                # counted in them) and never changing the result
+                if self._writeup_due(sys.exc_info()[0]):
+                    await self._book_writeup()
             self._teardown_file_logging()
 
         return self._collector._calculate_stats(
@@ -321,6 +347,8 @@ class Bot:
         assert self._collector is not None
 
         while True:
+            # Pass 5 G2: the last state seen (read-only; for the write-up)
+            self._end_state = gamestate
             if is_real_win(gamestate):
                 self._finish_reason = "won"
                 logger.info("Game won! Waiting for GAME_OVER state...")
@@ -379,6 +407,132 @@ class Bot:
                 case _:
                     await asyncio.sleep(1)
                     gamestate = await self._balatro.call("gamestate")
+
+    ############################################################################
+    # Pass 5 G2: write-only log book (config ``book``), one call per game end
+    ############################################################################
+
+    def _writeup_due(self, exc_type: type[BaseException] | None) -> bool:
+        """Every ending of a game that started, except a cancel / Ctrl-C."""
+        if not self._book_arm or not self._game_started or self._collector is None or self._llm is None:
+            return False
+        return not (exc_type is not None and issubclass(exc_type, (asyncio.CancelledError, KeyboardInterrupt)))
+
+    def _book_words(self) -> set[str]:
+        texts = []
+        for f in ("STRATEGY.md.jinja", "GAMESTATE.md.jinja", "MEMORY.md.jinja"):
+            try:
+                texts.append((self.strategy.path / f).read_text())
+            except OSError:
+                pass
+        texts.append((Path(__file__).parent / "knowledge.py").read_text())
+        texts.append(book.writeup_system(book.EMPTY) + json.dumps(book.WRITE_BOOK_TOOL))
+        return book.known_words(*texts)
+
+    async def _book_writeup(self) -> None:
+        """One extra LLM call outside the game: write-up + at most 3 rule
+        edits into run_dir/book_update.json (merged by the executor in task
+        order). Its cost and time stay out of stats.json / responses.jsonl.
+        Any failure is logged and never changes the game's result."""
+        assert self._collector is not None
+        logger.info("WRITEUP begin")
+        record: dict[str, Any] = {
+            "label": self.task.seed, "arm": self._book_arm, "store": str(self._book_store),
+            "finish_reason": self._finish_reason or "unexpected_error", "merged": False,
+            "kept": [], "rejected": [], "error": None,
+        }
+        started = time.time()
+        redact = book.Redactor(self._book_seed, frozenset())
+        try:
+            words = self._book_words()
+            redact = book.Redactor(self._book_seed, words)
+            record["_words"] = words
+            if self._llm is not None:
+                self._llm.reset_timeout_counter()  # an llm_abort ending left it at 3
+            await asyncio.wait_for(self._book_writeup_call(record, redact), book.WRITEUP_TIMEOUT_S)
+        except TimeoutError:
+            logger.warning(f"Write-up timed out after {book.WRITEUP_TIMEOUT_S} s")
+            record["error"] = f"timeout after {book.WRITEUP_TIMEOUT_S} s"
+        except Exception as e:  # noqa: BLE001 - the game is over; never fail it here
+            logger.warning(f"Write-up failed: {type(e).__name__}: {e}")
+            record["error"] = record.get("error") or f"{type(e).__name__}: {e}"
+        finally:
+            record.pop("_words", None)
+            record["time_ms"] = int((time.time() - started) * 1000)
+            try:
+                path = self._collector.run_dir / "book_update.json"
+                data = redact.obj(json.loads(json.dumps(record, default=str)))
+                path.write_text(json.dumps(data, indent=1, ensure_ascii=False))
+                self.book_update_path = path
+                logger.info(
+                    f"Write-up: {len(record.get('kept') or [])} edits kept, {len(record.get('rejected') or [])} "
+                    f"rejected, cost {record.get('cost')}, error {record.get('error')}"
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Write-up file not written: {type(e).__name__}: {e}")
+            logger.info("WRITEUP end")
+
+    def _book_rows(self) -> list[dict[str, Any]]:
+        assert self._collector is not None
+        path = self._collector.run_dir / "decisions.jsonl"
+        if not path.exists():
+            return []
+        rows = []
+        for line in path.read_text().splitlines():
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                continue
+        return rows
+
+    async def _book_writeup_call(self, record: dict[str, Any], redact: book.Redactor) -> None:
+        assert self._llm is not None and self._book_store is not None
+        words = record["_words"]
+        h, version = book.read_head(self._book_store)  # HEAD at game end
+        record["read"] = h
+        user, code_summary, final_ante = book.game_digest(
+            self._book_rows(), self._rounds, self._history, self._end_state, self._finish_reason
+        )
+        record["code_summary"] = redact(code_summary)
+        record["final_ante"] = final_ante
+        messages = [  # the whole outgoing prompt is redacted
+            {"role": "system", "content": [{"type": "text", "text": redact(book.writeup_system(version))}]},
+            {"role": "user", "content": [{"type": "text", "text": redact(user)}]},
+        ]
+        tools = [book.WRITE_BOOK_TOOL]
+        record["request"] = {"model": self.task.model, "messages": messages, "tools": tools}
+        response = await self._llm.call(
+            model=self.task.model, messages=messages, tools=tools, model_config=self.model_config
+        )
+        body = response.model_dump()
+        record["response"] = body
+        usage = dict(body.get("usage") or {})
+        if usage.get("cost") is None:
+            add_cost(usage, str(body.get("model") or self.task.model.split("/")[-1]))
+        record["usage"] = usage
+        record["cost"] = usage.get("cost")
+        record["tokens_in"] = usage.get("prompt_tokens")
+        record["tokens_out"] = usage.get("completion_tokens")
+        try:
+            args: dict[str, Any] = {}
+            calls = response.choices[0].message.tool_calls or []
+            if calls:
+                fn = getattr(calls[0], "function", calls[0])
+                parsed = json.loads(getattr(fn, "arguments", "") or "{}")
+                args = parsed if isinstance(parsed, dict) else {}
+            else:
+                record["error"] = "no tool call in the reply"
+            record["proposed"] = args.get("edits")
+            text, problems = book.check_writeup(args.get("writeup"), self._book_seed, words)
+            record["writeup"] = text if book.writeup_ok(problems) else None
+            if record["writeup"] is None and text:
+                record["writeup_rejected_text"] = text  # audit only (redacted on write)
+            record["writeup_problems"] = problems
+            record["kept"], record["rejected"] = book.check_edits(args.get("edits"), version, self._book_seed, words)
+        except Exception as e:  # noqa: BLE001 - the file and the cost are still written
+            logger.warning(f"Write-up checks failed: {type(e).__name__}: {e}")
+            record["error"] = f"checks failed: {type(e).__name__}: {e}"
+            record["kept"] = []
 
     async def _reroll_boss(self, gamestate: dict[str, Any]) -> dict[str, Any] | None:
         """Reroll the boss when the strategy opted in and the boss is a bad one.

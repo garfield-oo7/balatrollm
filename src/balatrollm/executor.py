@@ -8,6 +8,7 @@ from pathlib import Path
 from balatrobot import BalatroInstance
 from balatrobot import Config as BalatrobotConfig
 
+from . import book
 from .bot import Bot
 from .config import Config, Task
 
@@ -115,12 +116,24 @@ class Executor:
         """Execute tasks with port pool."""
         total = len(self.tasks)
         count = 0
+        # Pass 5 G2: book updates merge in task (label) order as games finish;
+        # each update names its own store, so every arm merges in label order
+        merges = book.MergeQueue(total)
 
-        async def run_task(task: Task) -> None:
+        def merged(i: int, bot: Bot | None) -> None:
+            try:
+                for rec in merges.done(i, getattr(bot, "book_update_path", None)):
+                    logger.info(f"Book merge {rec['label']}: game {rec['game']} -> {rec['new']} {rec['edits']}")
+            except Exception:
+                logger.exception("Book merge failed")
+
+        async def run_task(i: int, task: Task) -> None:
             nonlocal count
             if self._shutdown.is_set():
+                merged(i, None)
                 return
             port = await self._port_pool.get()
+            bot: Bot | None = None
             try:
                 count += 1
                 instance = self._instances[port]
@@ -140,15 +153,21 @@ class Executor:
                     f"[{count:0{len(str(total))}d}/{total}] ERROR     | {log_path} | {task}"
                 )
             finally:
+                merged(i, bot)
                 await asyncio.sleep(1)
                 await self._port_pool.put(port)
 
-        pending = [asyncio.create_task(run_task(t)) for t in self.tasks]
+        pending = [asyncio.create_task(run_task(i, t)) for i, t in enumerate(self.tasks)]
         try:
             await asyncio.gather(*pending, return_exceptions=True)
+            merges.flush()
         except asyncio.CancelledError:
             self._shutdown.set()
             for t in pending:
                 t.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
+            try:
+                merges.flush()
+            except Exception:
+                logger.exception("Book merge failed")
             raise
