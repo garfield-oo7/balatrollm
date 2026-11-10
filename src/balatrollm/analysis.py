@@ -790,7 +790,12 @@ def estimate_play(
             if c["rank"] == "Q":
                 mult += 13 * moons
     if "j_raised_fist" in keyset:
-        ranks = [c for c in held if c["rank"] and not c["debuff"] and not c["hidden"]]
+        # The game's rule (card.lua Raised Fist): the lowest-ranked held card,
+        # debuffed cards included (only Stone, no rank, is skipped), ties going
+        # to the LAST such card in hand order; a debuffed pick adds nothing
+        # (pass 5 G1b, A1 N05: debuffed Steel 2♠ held -> +0, not 7♦'s +14).
+        ranks = [c for c in held if c["rank"] and not c["hidden"]]
+        stand_ins: list[dict[str, Any]] = []
         # The Mark: a held face-down card is a J/Q/K (worth 10), or with
         # Pareidolia any card (counted as a 2): a lower bound (review r4 opus F2b)
         masked = [c for c in held if c["hidden"] and c["face"] and not c["debuff"]]
@@ -799,15 +804,19 @@ def estimate_play(
         # or fewer Stone cards are unseen than face-down cards are held, else it
         # may add nothing (review r8 codex R8-1 / opus R8-1, opus's fix 2)
         if masked and "j_pareidolia" not in keyset:
-            ranks.append({"rank": "J"})
+            stand_ins.append({"rank": "J"})
         elif masked:
             stones = (sum(1 for c in _area_cards(G, "cards") if _norm(c)["stone"]) if G.get("mark_unseen")
                       else len(masked))
             if ranks or stones < len(masked):
-                ranks.append({"rank": "2"})
-        if ranks:
-            low = min(ranks, key=lambda c: RANK_VALUE[c["rank"]])
-            mult += 2 * CHIP_VALUE[low["rank"]]
+                stand_ins.append({"rank": "2"})
+        # stand-ins first, so a visible card wins a tie (a debuffed one -> +0: stays a floor)
+        pool = stand_ins + ranks
+        if pool:
+            lo = min(RANK_VALUE[c["rank"]] for c in pool)
+            low = [c for c in pool if RANK_VALUE[c["rank"]] == lo][-1]
+            if not low.get("debuff"):
+                mult += 2 * CHIP_VALUE[low["rank"]]
 
     # Independent joker effects, left to right (with Blueprint/Brainstorm)
     jokers = _area_cards(G, "jokers")  # F6: full list; debuffed jokers skipped in the loop
