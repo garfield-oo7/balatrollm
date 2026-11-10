@@ -137,6 +137,11 @@ def _load_from_yaml(path: Path) -> dict[str, Any]:
             result[field_name] = data[field_name]
     if "model_config" in data and isinstance(data["model_config"], dict):
         result["model_config"] = data["model_config"]
+    # pass 5: one queue alternating strategies by seed (YAML only)
+    if "interleave" in data:
+        if not isinstance(data["interleave"], bool):
+            raise ValueError("interleave must be true or false")
+        result["interleave"] = data["interleave"]
     return result
 
 
@@ -186,6 +191,8 @@ class Config:
     # Execution
     parallel: int = 1
     views: bool = False
+    # pass 5: seed outer, strategy inner (N61 on, N61 off, N62 on, ...)
+    interleave: bool = False
 
     # Connection
     host: str = "127.0.0.1"
@@ -272,6 +279,18 @@ class Config:
                                     strategy=strategy,
                                 )
                             )
+
+        if self.interleave:
+            # pass 5: the same tasks, seed outer and strategy inner, so the
+            # arms alternate by seed in one queue (N61 on, N61 off, N62 on, ...)
+            tasks = [
+                Task(model=model, seed=seed, deck=deck.upper(), stake=stake.upper(), strategy=strategy)
+                for seed in self.seed
+                for strategy in self.strategy
+                for model in self.model
+                for deck in self.deck
+                for stake in self.stake
+            ]
 
         return tasks
 

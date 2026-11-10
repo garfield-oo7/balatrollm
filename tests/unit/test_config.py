@@ -448,3 +448,27 @@ class TestApiOption:
         yaml_file.write_text("model: m\napi: chat\n")
         args = Namespace(api="responses")
         assert Config.load(yaml_path=yaml_file, args=args).api == "responses"
+
+
+# ============================================================================
+# Pass 5: one queue alternating the arms by seed
+# ============================================================================
+
+
+def test_interleave_alternates_strategies_by_seed(tmp_path: Path) -> None:
+    """``interleave: true`` puts seed outer and strategy inner; off keeps the old order."""
+    yaml_file = tmp_path / "config.yaml"
+    yaml_file.write_text(
+        "model: m\nstrategy: [mastery, mastery-noadvice]\nseed: [SEED-N61, SEED-N62, SEED-N63]\ninterleave: true\n"
+    )
+    config = Config.load(yaml_path=yaml_file)
+    order = [(t.seed, t.strategy) for t in config.generate_tasks()]
+    assert order == [
+        ("SEED-N61", "mastery"), ("SEED-N61", "mastery-noadvice"),
+        ("SEED-N62", "mastery"), ("SEED-N62", "mastery-noadvice"),
+        ("SEED-N63", "mastery"), ("SEED-N63", "mastery-noadvice"),
+    ]
+    yaml_file.write_text(yaml_file.read_text().replace("interleave: true", "interleave: false"))
+    plain = [(t.seed, t.strategy) for t in Config.load(yaml_path=yaml_file).generate_tasks()]
+    assert plain[:3] == [("SEED-N61", "mastery"), ("SEED-N62", "mastery"), ("SEED-N63", "mastery")]
+    assert sorted(plain) == sorted(order)
