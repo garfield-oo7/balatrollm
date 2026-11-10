@@ -3211,7 +3211,8 @@ def situation(
     }
 
 
-INVEST_MIN_PCT = 25  # E2b: SCORE +25% per hand or more
+INVEST_MIN_PCT = 25
+INVEST_MIN_GAIN = 0.05  # pass 5 G1c: next-blind win chance gain the BUY line needs  # E2b: SCORE +25% per hand or more
 
 
 def shop_investment(G: dict[str, Any], sit: dict[str, Any], score_spendable: int) -> dict[str, Any] | None:
@@ -3223,9 +3224,9 @@ def shop_investment(G: dict[str, Any], sit: dict[str, Any], score_spendable: int
     the next blind's win chance with and without it. Advice only (no veto)."""
     if G.get("state") != "SHOP":
         return None
-    need, hands = sit.get("hands_needed"), int(sit.get("hands") or 0)
-    tight = sit.get("status") in ("THIN", "SHORT") or (need is not None and hands >= 2 and need >= hands - 1)
-    if not tight:
+    # pass 5 G1c: only while THIN or SHORT (the "needs hands - 1" leg fired at
+    # COMFORTABLE for about +1 point: 49 of B2's 144 shop visits with the line)
+    if sit.get("status") not in ("THIN", "SHORT"):
         return None
     imp = shop_impact(G)
     base = imp.get("score") or 0
@@ -3264,13 +3265,15 @@ def shop_investment(G: dict[str, Any], sit: dict[str, Any], score_spendable: int
     G_buy = {**G, "jokers": area, "money": after}
     sit_buy = situation(G_buy, power_check(G_buy), None)
     now, then = sit.get("win_chance"), sit_buy.get("win_chance")
+    if now is None or then is None or then - now < INVEST_MIN_GAIN:
+        return None  # pass 5 G1c: the line shows only when buying adds 5+ points
     reroll = int((G.get("round") or {}).get("reroll_cost", 5) or 0)
 
     def chance(p: float | None) -> str:
         return "?" if p is None else f"{int(p * 100)}%"
 
     sell = f", selling {best['swap']['label']}" if best["swap"] else ""
-    why = sit.get("status") if sit.get("status") in ("THIN", "SHORT") else f"needs {need} of {hands} hands"
+    why = sit.get("status")
     line = (
         f"buy {best['label']} (${best['cost']}{sell}): ${after} left, interest next round ${interest(after)}"
         f" (loses ${interest(money) - interest(after)}), next blind win chance about {chance(then)}"
@@ -5084,6 +5087,16 @@ def _legal_only_rest(
 WRONG_ITEM_SETS = ("JOKER", "TAROT", "PLANET", "SPECTRAL")
 
 
+def _offer_core(label: str) -> str:
+    """Lower-case item name without a leading "The " (pass 5 G1e)."""
+    core = str(label).strip().lower()
+    return core[4:] if core.startswith("the ") else core
+
+
+def _named_in(core: str, text: str) -> bool:
+    return bool(core) and re.search(r"\b" + re.escape(core) + r"\b", text) is not None
+
+
 def wrong_item_veto(offers: dict[int, str], chosen: Any, reasoning: str) -> str | None:
     """Pass 4 F1: a shop card buy whose reasoning names another offered item
     and not the chosen one (pass 1 tool index_mismatch.py: 16 of 1069 logged
@@ -5094,9 +5107,25 @@ def wrong_item_veto(offers: dict[int, str], chosen: Any, reasoning: str) -> str 
     except (TypeError, ValueError):
         return None
     why = str(reasoning or "")
-    if i not in offers or not why or offers[i] in why:
+    if i not in offers or not why or not offers[i]:
         return None
-    named = [(j, label) for j, label in sorted(offers.items()) if j != i and label and label in why]
+    # pass 5 G1e: match a name without a leading "The" ("High Priestess" names
+    # The High Priestess), case-insensitive, on word boundaries; a longer offer
+    # name that contains another ("Shoot the Moon" / The Moon) is taken out
+    # first so it cannot name the shorter one
+    low = why.lower()
+    cores = {j: _offer_core(label) for j, label in offers.items() if label}
+
+    def names(j: int) -> bool:
+        text = low
+        for k, other in cores.items():
+            if k != j and len(other) > len(cores[j]) and _named_in(cores[j], other):
+                text = re.sub(r"\b" + re.escape(other) + r"\b", " ", text)
+        return _named_in(cores[j], text)
+
+    if names(i):
+        return None
+    named = [(j, offers[j]) for j in sorted(cores) if j != i and names(j)]
     if not named:
         return None
     j, label = named[0]

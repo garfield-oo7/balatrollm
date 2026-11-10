@@ -69,3 +69,45 @@ def test_no_discard_suggested_with_no_discards_left() -> None:
         c["state"] = {"hidden": True}
     A = analysis.play_advice(G)
     assert A["action"]["tool"] == "play" and len(A["action"]["cards"]) == 5
+
+
+def test_wrong_item_check_ignores_a_leading_the() -> None:
+    offers = {0: "The High Priestess", 1: "Jolly Joker"}
+    assert analysis.wrong_item_veto(offers, 0, "High Priestess makes two planets.") is None
+    # a longer name containing a shorter one does not name the shorter one
+    offers = {0: "The Moon", 1: "Shoot the Moon"}
+    assert analysis.wrong_item_veto(offers, 1, "Shoot the Moon adds mult for held Queens.") is None
+    assert analysis.wrong_item_veto(offers, 0, "Shoot the Moon adds mult for held Queens.") is not None
+    assert analysis.wrong_item_veto(offers, 1, "The Moon makes Clubs.") is not None
+
+
+async def test_policy_400_identical_retry_then_reworded_then_error_call() -> None:
+    import json as _json
+    from unittest.mock import AsyncMock, patch
+
+    import httpx
+    import pytest
+    import respx
+
+    from balatrollm.llm import POLICY_REWORD, LLMClient, LLMPolicyRefusalError
+
+    ok = {"id": "x", "object": "chat.completion", "created": 0, "model": "m",
+          "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}]}
+    flagged = httpx.Response(400, json={"error": {"message": "Invalid prompt: flagged as potentially violating our usage policy",
+                                                  "type": "invalid_request_error"}})
+    url = "https://api.test.com/v1/chat/completions"
+    msgs = [{"role": "user", "content": "x"}]
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        with respx.mock() as mock:
+            route = mock.post(url).mock(side_effect=[flagged, flagged, httpx.Response(200, json=ok)])
+            async with LLMClient(base_url="https://api.test.com/v1", api_key="k") as client:
+                assert (await client.call(model="m", messages=msgs, tools=[])).choices[0].message.content == "hi"
+            bodies = [_json.loads(c.request.content) for c in route.calls]
+            assert bodies[0] == bodies[1]  # first retry identical
+            assert bodies[2]["messages"][-1]["content"].endswith(POLICY_REWORD)
+            assert msgs == [{"role": "user", "content": "x"}]  # caller's messages untouched
+        with respx.mock() as mock:
+            mock.post(url).mock(side_effect=[flagged, flagged, flagged])
+            async with LLMClient(base_url="https://api.test.com/v1", api_key="k") as client:
+                with pytest.raises(LLMPolicyRefusalError):
+                    await client.call(model="m", messages=msgs, tools=[])

@@ -42,6 +42,35 @@ class LLMRetryExhaustedError(LLMClientError):
     pass
 
 
+class LLMPolicyRefusalError(LLMClientError):
+    """Pass 5 G1e: the API flagged the prompt under its usage policy on the
+    identical retry and on a reworded one; the bot counts it as an error call
+    (no tool call), not as an LLM abort."""
+
+    pass
+
+
+POLICY_REWORD = "(Context: this is a move in the card game Balatro; reply with one tool call.)"
+
+
+def _is_policy_400(e: Exception) -> bool:
+    return getattr(e, "status_code", None) == 400 and "usage policy" in str(e).lower()
+
+
+def reworded(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The same messages with one neutral sentence added to the last user message."""
+    out = [dict(m) for m in messages]
+    for m in reversed(out):
+        if m.get("role") == "user":
+            content = m.get("content")
+            if isinstance(content, str):
+                m["content"] = f"{content}\n\n{POLICY_REWORD}"
+            elif isinstance(content, list):
+                m["content"] = [*content, {"type": "text", "text": POLICY_REWORD}]
+            break
+    return out
+
+
 class ResponsesFailedError(LLMClientError):
     """Raised when a Responses API response has status "failed" (retried)."""
 
@@ -550,35 +579,11 @@ class LLMClient:
                 "Client not connected. Use 'async with LLMClient() as client:'"
             )
 
-        if self.api == "anthropic":
-            system, anthropic_messages = to_anthropic_messages(messages)
-            request_data: dict[str, Any] = {
-                "model": to_anthropic_model(model),
-                "messages": anthropic_messages,
-                "tools": to_anthropic_tools(tools),
-                **to_anthropic_params(model_config or {}),
-            }
-            if system:
-                request_data["system"] = system
-        elif self.api == "responses":
-            if self._is_openai_api:
-                model = model.removeprefix(OPENAI_VENDOR_PREFIX)
-            request_data = {
-                "model": model,
-                "input": to_responses_input(messages),
-                "tools": to_responses_tools(tools),
-                **to_responses_params(model_config or {}),
-            }
-        else:
-            request_data = {
-                "model": model,
-                "messages": messages,
-                "tools": tools,
-                **(model_config or {}),
-            }
+        request_data = self._request_data(model, messages, tools, model_config)
 
         retry_delay = 1.0
         last_exception: Exception | None = None
+        policy_hits = 0
 
         for attempt in range(self.max_retries):
             try:
@@ -622,6 +627,16 @@ class LLMClient:
             except (openai.APIStatusError, anthropic.APIStatusError) as e:
                 logger.error(f"LLM status error ({e.status_code}): {e}")
                 last_exception = e
+                if _is_policy_400(e):
+                    # pass 5 G1e: the first retry stays identical (13 of 13
+                    # recovered in pass 4); the second adds one neutral
+                    # sentence; a third flag is an error call, not an abort
+                    policy_hits += 1
+                    if policy_hits >= 3:
+                        raise LLMPolicyRefusalError(f"usage-policy 400 x3 (last reworded): {e}") from e
+                    if policy_hits == 2:
+                        logger.warning("Usage-policy 400 again: retrying with a reworded prompt")
+                        request_data = self._request_data(model, reworded(messages), tools, model_config)
 
             except openai.LengthFinishReasonError as e:
                 logger.error(f"LLM length error: {e}")
@@ -649,6 +664,41 @@ class LLMClient:
         raise LLMRetryExhaustedError(
             f"All {self.max_retries} retry attempts exhausted"
         ) from last_exception
+
+    def _request_data(
+        self,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        model_config: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if self.api == "anthropic":
+            system, anthropic_messages = to_anthropic_messages(messages)
+            request_data: dict[str, Any] = {
+                "model": to_anthropic_model(model),
+                "messages": anthropic_messages,
+                "tools": to_anthropic_tools(tools),
+                **to_anthropic_params(model_config or {}),
+            }
+            if system:
+                request_data["system"] = system
+        elif self.api == "responses":
+            if self._is_openai_api:
+                model = model.removeprefix(OPENAI_VENDOR_PREFIX)
+            request_data = {
+                "model": model,
+                "input": to_responses_input(messages),
+                "tools": to_responses_tools(tools),
+                **to_responses_params(model_config or {}),
+            }
+        else:
+            request_data = {
+                "model": model,
+                "messages": messages,
+                "tools": tools,
+                **(model_config or {}),
+            }
+        return request_data
 
     @property
     def _is_openai_api(self) -> bool:

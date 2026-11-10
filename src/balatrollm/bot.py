@@ -44,7 +44,7 @@ from .collector import (
 )
 from .config import Config, Task, get_model_config
 from . import ledger
-from .llm import LLMClient, LLMClientError, LLMTimeoutError
+from .llm import LLMClient, LLMClientError, LLMPolicyRefusalError, LLMTimeoutError
 from .strategy import StrategyManager, StrategyManifest
 
 logger = logging.getLogger(__name__)
@@ -339,8 +339,12 @@ class Bot:
                     self._ledger_call = None
                     self._ledger_out = {"result": "unknown"}
                     try:
-                        response = await self._get_llm_response(gamestate)
-                        gamestate = await self._execute_tool_call(response, gamestate)
+                        try:
+                            response = await self._get_llm_response(gamestate)
+                        except LLMPolicyRefusalError as e:
+                            gamestate = await self._handle_error_call(f"Usage-policy refusal: {e}")
+                        else:
+                            gamestate = await self._execute_tool_call(response, gamestate)
                     except BaseException as e:
                         # B0c: the call that ends the run still gets its row (Sol g1 #1)
                         self._ledger_out.setdefault("abort", f"{type(e).__name__}: {e}")
@@ -623,6 +627,16 @@ class Bot:
             )
             self._finish_reason = "llm_abort"
             raise BotError("3 consecutive LLM timeouts") from e
+
+        except LLMPolicyRefusalError as e:
+            # pass 5 G1e: flagged on the identical and the reworded retry: an
+            # error call (counts toward consecutive_error_calls), not an abort
+            self._collector.write_response(
+                id=str(time.time_ns() // 1_000_000),
+                custom_id=custom_id,
+                error=ChatCompletionError(code="error", message=str(e)),
+            )
+            raise
 
         except LLMClientError as e:
             self._collector.write_response(
