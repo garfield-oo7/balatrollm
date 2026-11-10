@@ -3074,8 +3074,10 @@ WIN_BANDS = (0.95, 0.80)
 # blinds (BLIND_SELECT snapshots) by scripts/fit_win_chance.py. The raw and
 # margin weights are >= 0, so more sampled score never lowers the chance.
 # Logit = intercept + raw * logit(raw) + margin * margin + boss * [boss] + ante * min(ante, cap)
-# Fitted 2026-11-09 on 795 blinds (58 lost).
-WIN_FIT = {"intercept": 3.7251, "raw": 0.1447, "margin": 2.2711, "boss": -1.1127, "ante": -0.6524}
+# Fitted 2026-11-09 on 795 blinds (58 lost). Pass 5 G1c(b) refit 2026-11-11 on the pass-5 code: passes 1-3 + every
+# pass-4 arm but W / L1 (330 games, 6,135 blinds, 374 lost); W + L1 held out (1,391 blinds): every band within 5
+# points (SHORT 48.8% predicted vs 52.1% won; the old constants read 45.1% vs 59.2%). luna-notes/results/pass5_winfit_refit.txt
+WIN_FIT = {"intercept": 3.3311, "raw": 0.1282, "margin": 1.9273, "boss": -1.2291, "ante": -0.4597}
 WIN_ANTE_CAP = 6
 MARGIN_CLIP = 3.0
 # Every sampled round wins -> at least THIN at any ante (pooled Ante 5+ bosses
