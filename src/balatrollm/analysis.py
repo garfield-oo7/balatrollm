@@ -2525,8 +2525,291 @@ def _e3_action(G: dict[str, Any], e3: dict[str, Any], old: dict[str, Any]) -> di
     return {"tool": "play", "cards": list(chosen_play["cards"]), "why": why, "e3": "play"}
 
 
-def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
-    """Everything the PLAY phase needs: plays with WINS flags, discard, suggestion."""
+# ---------------------------------------------------------------------------
+# Pass 5 G3: dig or play (config ``dig_line``). Before a discard decision with
+# no WINS play, compare two first actions on equal terms, each followed by the
+# SAME continuation policy until the hands run out, over the REMAINING deck
+# (common random numbers: every sample is one full shuffle of the remaining
+# deck, used by both first actions):
+#   (i)  PLAY NOW: play the suggested best play now (FLOOR score, as the
+#        listing), keep every discard;
+#   (ii) DIG NOW: discard (the best keep set over ``_e3_keep_sets`` plus the
+#        harness's suggested discard, by the same sampled chance), draw back
+#        up, one discard spent.
+# Continuation policy (both branches, every later decision of the round):
+#   1. if the best FLOOR play of the hand held reaches the remaining target,
+#      the blind is beaten;
+#   2. else, if a discard is left, the deck is not empty and the best play is
+#      below pace (best * hands left < remaining target: on the last hand that
+#      is any miss), discard every card outside the best play (lowest value
+#      first, up to the selection limit) and draw back up; one discard spent;
+#   3. else play the best play (remaining target minus its floor, one hand
+#      spent, its type counts as played this round: Card Sharp, The Eye, The
+#      Mouth, Supernova; under The Arm its level drops), draw back up; with no
+#      hand left the blind is lost. When every play is blocked (The Eye / The
+#      Mouth) one lowest card is played for 0 so the hand turns over.
+# Step 2 is a pace rule, not "dig whenever no single play wins": a later hand
+# that is on pace is played (as a player would), so a discard is not spent
+# where banking the score is enough. On the last hand both read the same.
+# The target is the WINS threshold (margin x NEED, as E3). Draws refill to the
+# hand size (The Serpent: 3). Cost per sample and first action is at most
+# hands_left + discards_left ``_best_play`` calls (each stops at the first play
+# reaching the target). Unsupported (None): a face-down card in hand, The Mark,
+# The House, The Fish, The Wheel (face-down draws), The Hook (random discards
+# after each hand), Crimson Heart (random joker debuffs) and Cerulean Bell
+# (forced card): the estimator does not model them. Joker changes from
+# discards / plays (Green Joker, Ramen, Ride the Bus, ...) are not modelled.
+# Deterministic: seeded from the cards, cached per G.
+# ---------------------------------------------------------------------------
+DIG_SAMPLES = 64  # shuffles of the remaining deck per finished first action
+DIG_SCREEN = 16  # every dig option is first screened on this many shuffles
+DIG_FINAL = 2  # the best screened dig options get all shuffles
+DIG_MAX_OPTIONS = 6
+DIG_UNSUPPORTED = frozenset(
+    {"The Mark", "The House", "The Fish", "The Wheel", "The Hook", "Crimson Heart", "Cerulean Bell"}
+)
+
+
+def _dig_after_play(G: dict[str, Any], htype: str, arm: bool) -> dict[str, Any]:
+    """``_e3_after_play`` plus The Arm: the played type loses one level."""
+    G2 = _e3_after_play(G, htype)
+    if arm:
+        row = G2["hands"][htype]
+        level = int(row.get("level", 1) or 1)
+        if level > 1:
+            dc, dm = LEVEL_UP.get(htype, (0, 0))
+            row["level"] = level - 1
+            row["chips"] = float(row.get("chips", 0) or 0) - dc
+            row["mult"] = float(row.get("mult", 0) or 0) - dm
+    return G2
+
+
+def dig_or_play(
+    G: dict[str, Any],
+    plays: list[dict[str, Any]],
+    play_cards: list[int],
+    progress: dict[str, Any],
+    discards: int,
+    margin: float,
+    suggested: list[int] | None = None,
+) -> dict[str, Any] | None:
+    """Chance to beat the blind over all remaining hands for PLAY NOW
+    (``play_cards``) vs DIG NOW (see the block comment above for the policy).
+    None when unsupported or not a discard decision."""
+    hand_raw = _area_cards(G, "hand")
+    deck_raw = _area_cards(G, "cards")
+    remaining = int(progress.get("remaining") or 0)
+    h = int(progress.get("hands_left") or 0)
+    if (
+        remaining <= 0 or discards <= 0 or h < 1 or not play_cards or not deck_raw or not hand_raw
+        or any(_norm(c)["hidden"] for c in hand_raw)
+        or _active_boss(G) in DIG_UNSUPPORTED
+    ):
+        return None
+    key = _state_key(G, "dig", margin, sorted(play_cards), sorted(suggested or []))
+    live = [p for p in plays if not p["blocked"]]
+    return _cached(key, lambda: _dig_sample(G, hand_raw, deck_raw, live, list(play_cards), h, remaining,
+                                            margin * remaining, discards, suggested))
+
+
+def _dig_sample(
+    G: dict[str, Any],
+    hand_raw: list[dict[str, Any]],
+    deck_raw: list[dict[str, Any]],
+    live: list[dict[str, Any]],
+    play_cards: list[int],
+    h: int,
+    remaining: int,
+    goal: float,
+    discards: int,
+    suggested: list[int] | None,
+) -> dict[str, Any] | None:
+    hand = [_norm(c) for c in hand_raw]
+    deck = sorted((_face_up(c) for c in deck_raw), key=_card_id)
+    size = _hand_size(G)
+    limit = int((G.get("hand") or {}).get("highlighted_limit", 5) or 5)
+    boss = _active_boss(G)
+    pad = 5 if boss == "The Psychic" else 0
+    serpent = boss == "The Serpent"
+    arm = boss == "The Arm"
+    keys = _joker_keys(G)
+    lim = min(limit, len(deck))
+    ctx = _estimate_ctx(G)
+    norms = {id(c): _norm(c) for c in [*hand_raw, *deck]}
+
+    # Dig options: the harness's suggested discard first, then one per keep set
+    options: list[tuple[int, ...]] = []
+    for d in ([tuple(sorted(suggested))] if suggested else []):
+        if d and len(d) <= limit and d not in options:
+            options.append(d)
+    for keep in _e3_keep_sets(G, hand, live):
+        d = tuple(_discard_choice(hand, keep, lim, keys=keys))
+        if d and d not in options:
+            options.append(d)
+    options = options[:DIG_MAX_OPTIONS]
+
+    ids = sorted(_card_id(c) for c in hand_raw)
+    seed = int(hashlib.md5(json.dumps(["dig", ids, [_card_id(c) for c in deck], remaining, h, discards])
+                           .encode()).hexdigest()[:12], 16)
+    rng = random.Random(seed)
+    heavy = bool((set(keys) | set(copied_keys(G))) & HELD_CANDIDATE_KEYS) or any(c["enh"] == "STEEL" for c in hand)
+    n_samples = DIG_SAMPLES // 2 if heavy else DIG_SAMPLES
+    screen = DIG_SCREEN // 2 if heavy else DIG_SCREEN
+    perms = [rng.sample(range(len(deck)), len(deck)) for _ in range(n_samples)]
+
+    Gs: dict[tuple[Any, ...], dict[str, Any]] = {}
+
+    def G_at(hl: int, dl: int, types: tuple[str, ...]) -> dict[str, Any]:
+        k = (hl, dl, types)
+        if k not in Gs:
+            Gx = _e3_round(G, hl, dl)
+            for t in types:
+                Gx = _dig_after_play(Gx, t, arm)
+            Gs[k] = Gx
+        return Gs[k]
+
+    def refill(n_held: int) -> int:
+        return 3 if serpent else max(size - n_held, 0)
+
+    def run(held: list[dict[str, Any]], perm: list[int], ptr: int, hl: int, dl: int, need: float,
+            types: tuple[str, ...]) -> bool:
+        """The continuation policy from a hand held (``ptr``: next card of ``perm``)."""
+        while True:
+            memo = {"norm": [norms[id(c)] for c in held]}
+            s, t, play = _best_play(G_at(hl, dl, types), held, pad, memo=memo, ctx=ctx, expected=False, stop_at=need)
+            if s >= need:
+                return True
+            if dl > 0 and ptr < len(perm) and s * hl < need:
+                disc = set(_discard_choice(memo["norm"], set(play), min(limit, len(perm) - ptr), keys=keys))
+                if disc:
+                    kept = [c for i, c in enumerate(held) if i not in disc]
+                    n = min(refill(len(kept)), len(perm) - ptr)
+                    held = kept + [deck[j] for j in perm[ptr:ptr + n]]
+                    ptr += n
+                    dl -= 1
+                    continue
+            hl -= 1
+            if hl <= 0:
+                return False
+            if play:
+                need -= s
+                types = (*types, t)
+            else:  # every play is blocked: one lowest card is played for 0 and the hand turns over
+                play = [min(range(len(held)), key=lambda i: CHIP_VALUE.get(memo["norm"][i]["rank"] or "", 0))]
+            rest = [c for i, c in enumerate(held) if i not in set(play)]
+            n = min(refill(len(rest)), len(perm) - ptr)
+            held = rest + [deck[j] for j in perm[ptr:ptr + n]]
+            ptr += n
+
+    # (i) play now: the exact suggested cards, floor score
+    chosen = set(play_cards)
+    est = estimate_play(G, [hand_raw[i] for i in sorted(chosen)], [c for i, c in enumerate(hand_raw) if i not in chosen])
+    s0 = 0 if est["blocked"] else int(est["score"])
+    rest0 = [c for i, c in enumerate(hand_raw) if i not in chosen]
+
+    def play_hit(perm: list[int]) -> bool:
+        if s0 >= goal:
+            return True
+        if h <= 1:
+            return False
+        n = min(refill(len(rest0)), len(perm))
+        return run(rest0 + [deck[j] for j in perm[:n]], perm, n, h - 1, discards, goal - s0, (est["hand"],))
+
+    def dig_hit(kept: list[dict[str, Any]], perm: list[int]) -> bool:
+        n = min(refill(len(kept)), len(perm))
+        return run(kept + [deck[j] for j in perm[:n]], perm, n, h, discards - 1, goal, ())
+
+    play_hits = sum(play_hit(p) for p in perms)
+    stats = []
+    for d in options:
+        kept = [c for i, c in enumerate(hand_raw) if i not in d]
+        stats.append([d, kept, sum(dig_hit(kept, p) for p in perms[:screen]), screen])
+    for k in sorted(range(len(stats)), key=lambda k: -stats[k][2])[:DIG_FINAL]:
+        d, kept, hits, _n = stats[k]
+        stats[k][2] = hits + sum(dig_hit(kept, p) for p in perms[screen:])
+        stats[k][3] = len(perms)
+    done = [s for s in stats if s[3] == len(perms)]
+    top = max(done, key=lambda s: s[2], default=None)
+    if top is None:  # no discard option (nothing to discard): no line
+        return None
+    n = len(perms)
+    dig_hits = top[2]
+    return {
+        "hands_left": h,
+        "discards_left": discards,
+        "remaining": remaining,
+        "samples": n,
+        "options": len(options),
+        "play": {"cards": sorted(chosen), "hand": est["hand"], "hits": play_hits, "chance": play_hits / n},
+        "dig": {"discard": list(top[0]), "hits": dig_hits, "chance": dig_hits / n},
+        "x_pct": round(play_hits * 100 / n),
+        "y_pct": round(dig_hits * 100 / n),
+        # the owner's strict rule: dig only if it is better; ties -> play
+        "dig_better": dig_hits > play_hits,
+    }
+
+
+def _dig_action(
+    G: dict[str, Any], line: dict[str, Any], play_act: dict[str, Any]
+) -> tuple[dict[str, Any], list[int]]:
+    """Pass 5 G3: the suggested action and discard from the dig-or-play line,
+    by the owner's strict rule (dig only if Y > X; ties -> play; no E3_SWITCH)."""
+    hand_raw = _area_cards(G, "hand")
+    cards = line["dig"]["discard"]
+    names = " ".join(card_name(hand_raw[i]) for i in cards)
+    x, y = f"{line['x_pct']}%", f"{line['y_pct']}%"
+    hand = line["play"]["hand"]
+    if line["dig_better"]:
+        why = f"dig: {y} to beat the blind vs {x} playing {hand} now"
+        return {"tool": "discard", "cards": list(cards), "why": why}, list(cards)
+    why = f"play {hand} now: {x} to beat the blind vs {y} digging (discard {names})"
+    return {**play_act, "why": why}, []
+
+
+def _best_play_action(
+    G: dict[str, Any],
+    plays: list[dict[str, Any]],
+    hand: list[dict[str, Any]],
+    hand_raw: list[dict[str, Any]],
+    plan: dict[str, Any],
+    boss: str,
+    square: bool,
+) -> dict[str, Any]:
+    """The "best play" suggestion with its filler (The Psychic, Square Joker,
+    padding); shared by play_advice and the pass 5 G3 dig-or-play line."""
+    # never suggest a BLOCKED play when an unblocked one exists (pass 5 G1d, The Mouth)
+    best = next((p for p in plays if not p["blocked"]), plays[0])
+    cards = list(best["cards"])
+    need = 0
+    if boss == "The Psychic":
+        need = 5 - len(cards)
+    elif square and len(cards) < 4:
+        need = 4 - len(cards)  # Square Joker grows only on 4-card hands
+    elif _pad_allowed(G) and len(cards) < 5 and not square:
+        need = 5 - len(cards)
+    if need > 0:
+        cards = sorted(cards + _filler(G, hand, cards, plan, need))
+    if boss == "The Psychic" and len(cards) < 5:
+        # 5 cards or the play scores 0: pad with the lowest other cards
+        # even if that changes the hand type (the analyser scores both)
+        rest = sorted(
+            (i for i, c in enumerate(hand) if i not in cards and not c["hidden"]),
+            key=lambda i: (hand[i]["rank"] in held_scoring_ranks(G), CHIP_VALUE.get(hand[i]["rank"] or "", 0)),
+        )
+        cards = sorted(cards + rest[: 5 - len(cards)])
+    if not _padding_holds(G, hand_raw, list(best["cards"]), cards, None):  # F2
+        cards = list(best["cards"])
+    return {"tool": "play", "cards": cards, "why": f"best play ({best['hand']})"}
+
+
+def play_advice(G: dict[str, Any], top: int = 5, dig: bool = False) -> dict[str, Any]:
+    """Everything the PLAY phase needs: plays with WINS flags, discard, suggestion.
+
+    ``dig`` (pass 5 G3, config ``dig_line``): compute the dig-or-play line
+    (``dig_or_play``) and let it decide the suggested action / discard by the
+    strict rule (dig only if its chance is higher; ties -> play). It replaces
+    the B1 dig rules and E3 for that state; a WINS play, The Mark, The House
+    blind play and a Tarot first still take precedence as before."""
     # C3: under The Mark the advice sees face-down cards as masked face cards
     mark = mark_play(G)
     G_real = G
@@ -2696,29 +2979,7 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
             "why": f"The Mark: play the face-down cards (about {fmt_num(mark['expected'])}, more than any face-up play)",
         }
     elif plays:
-        # never suggest a BLOCKED play when an unblocked one exists (pass 5 G1d, The Mouth)
-        best = next((p for p in plays if not p["blocked"]), plays[0])
-        cards = list(best["cards"])
-        need = 0
-        if boss == "The Psychic":
-            need = 5 - len(cards)
-        elif square and len(cards) < 4:
-            need = 4 - len(cards)  # Square Joker grows only on 4-card hands
-        elif _pad_allowed(G) and len(cards) < 5 and not square:
-            need = 5 - len(cards)
-        if need > 0:
-            cards = sorted(cards + _filler(G, hand, cards, plan, need))
-        if boss == "The Psychic" and len(cards) < 5:
-            # 5 cards or the play scores 0: pad with the lowest other cards
-            # even if that changes the hand type (the analyser scores both)
-            rest = sorted(
-                (i for i, c in enumerate(hand) if i not in cards and not c["hidden"]),
-                key=lambda i: (hand[i]["rank"] in held_scoring_ranks(G), CHIP_VALUE.get(hand[i]["rank"] or "", 0)),
-            )
-            cards = sorted(cards + rest[: 5 - len(cards)])
-        if not _padding_holds(G, hand_raw, list(best["cards"]), cards, None):  # F2
-            cards = list(best["cards"])
-        action = {"tool": "play", "cards": cards, "why": f"best play ({best['hand']})"}
+        action = _best_play_action(G, plays, hand, hand_raw, plan, boss, square)
     elif discards <= 0:
         # no visible play and no discard left (The Fish: all face down): play
         # face-down cards; a discard suggestion here is illegal (pass 5 G1d)
@@ -2729,7 +2990,13 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
     # Pass 4 E3: on the last hand(s) without a sure win, choose by the chance
     # to beat the blind (sampled over the remaining deck)
     e3 = None
-    if not winners and not mark:
+    dig_line = None
+    if dig and not winners and not mark and any(not p["blocked"] for p in plays):
+        play_act = _best_play_action(G, plays, hand, hand_raw, plan, boss, square)
+        dig_line = dig_or_play(G, plays, play_act["cards"], progress, discards, margin, discard)
+        if dig_line is not None:
+            action, discard = _dig_action(G, dig_line, play_act)
+    if not winners and not mark and dig_line is None:
         e3 = _e3_choice(G, plays, progress, discards, margin, action, discard)
         if e3 is not None:
             action = _e3_action(G, e3, action)
@@ -2781,6 +3048,7 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         "deck_suits": analysis_["deck_suits"],
         "mark_unseen": bool(G.get("mark_unseen")),
         "win_chance": e3,
+        "dig_line": dig_line,
     }
 
 

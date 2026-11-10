@@ -111,6 +111,9 @@ class Bot:
         self.strategy = StrategyManager(task.strategy)
         # Opt-in harness behaviour declared in the strategy manifest
         self.harness: dict[str, Any] = StrategyManifest.from_file(task.strategy).harness
+        if getattr(config, "dig_line", False):
+            # pass 5 G3: a config flag (the strategy files stay as they are)
+            self.harness = {**self.harness, "dig_line": True}
 
         self._balatro: BalatroClient | None = None
         self._llm: LLMClient | None = None

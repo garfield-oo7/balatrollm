@@ -52,7 +52,7 @@
 {%- endif %}
 {%- endif %}
 {% if G.state == "SELECTING_HAND" %}
-{%- set A = play_advice(G) -%}
+{%- set A = play_advice(G, dig=true) if flags and flags.dig_line else play_advice(G) -%}
 {%- set P = A.progress %}
 # ROUND
 - Blind: {{ P.name }}, target {{ P.target | fmt_num }}, scored {{ P.scored | fmt_num }}
@@ -105,6 +105,8 @@
 {% for d in A.draws -%}
 - {{ d.text }}: discard {{ d.discard }} -> {{ d.chance | pct }}{% if d.within is defined %} ({{ d.within | pct }} within your {{ P.discards_left }} discard{{ "s" if P.discards_left != 1 }}){% endif %}{% if d.if_complete %}, if it hits scores {{ d.if_complete | fmt_num }}{% endif %}{% if d.one_shot %} (wins the blind in one hand){% endif %}
 {% endfor %}
+{%- endif %}{%- if A.dig_line %}
+- Dig or play: play now: {{ A.dig_line.x_pct }}% to beat the blind / dig (discard {% for i in A.dig_line.dig.discard %}{{ G.hand.cards[i] | card_name }}{% if not loop.last %} {% endif %}{% endfor %}): {{ A.dig_line.y_pct }}%
 {%- endif %}
 {%- if flags and flags.suggest_discard %}
 - Suggested discard: {% if A.discard %}{{ A.discard }} = {% for i in A.discard %}{{ G.hand.cards[i] | card_name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none: play instead{% endif %}
