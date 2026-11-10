@@ -111,3 +111,46 @@ async def test_policy_400_identical_retry_then_reworded_then_error_call() -> Non
             async with LLMClient(base_url="https://api.test.com/v1", api_key="k") as client:
                 with pytest.raises(LLMPolicyRefusalError):
                     await client.call(model="m", messages=msgs, tools=[])
+
+
+async def test_shop_rejections_and_refusals_together_leave_the_shop() -> None:
+    """L1 N34: two game rejections + one more in a shop -> the harness leaves the
+    shop (next_round), the game is not ended; outside a shop 3 rejections still end it."""
+    from unittest.mock import AsyncMock
+
+    import pytest
+
+    from balatrollm.bot import BotError
+
+    from .test_bot_swap import _bot
+
+    game = AsyncMock()
+    game.call.side_effect = lambda m, *a: {"state": "SELECTING_HAND" if m == "next_round" else "SHOP"}
+    bot = _bot(game)
+    shop = {"state": "SHOP", "money": 10}
+    await bot._handle_failed_call("BalatroError: joker slots are full", shop)
+    await bot._handle_veto("refused", shop)
+    await bot._handle_failed_call("BalatroError: joker slots are full", shop)
+    assert [c.args[0] for c in game.call.call_args_list][-1] == "next_round"
+    assert bot._consecutive_faileds == 0 and bot._shop_refusal_exits == 1
+
+    bot = _bot(game)
+    hand = {"state": "SELECTING_HAND"}
+    await bot._handle_failed_call("x", hand)
+    await bot._handle_failed_call("x", hand)
+    with pytest.raises(BotError):
+        await bot._handle_failed_call("x", hand)
+
+
+def test_ankh_needs_a_free_joker_slot() -> None:
+    def pack_state(count: int, limit: int) -> dict[str, Any]:
+        G = make_state("H_2", [joker("j_jolly", "Jolly Joker")] * count, state="SMODS_BOOSTER_OPENED")
+        G["jokers"]["limit"] = limit
+        G["pack"] = {"cards": [{"key": "c_ankh", "set": "SPECTRAL", "label": "Ankh", "modifier": {}, "state": {}}]}
+        return G
+
+    for advice in (True, False):
+        assert analysis.validate_action(pack_state(5, 5), "pack", {"card": 0}, advice=advice) == analysis.ANKH_FULL_PACK
+        assert analysis.validate_action(pack_state(4, 5), "pack", {"card": 0}, advice=advice) is None
+        # a Negative joker owned: 5 of 6, still a free slot -> allowed
+        assert analysis.validate_action(pack_state(5, 6), "pack", {"card": 0}, advice=advice) is None

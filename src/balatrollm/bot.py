@@ -119,6 +119,9 @@ class Bot:
         self._last_hand_state: dict[str, Any] | None = None
         # Harness guards (only active when enabled in the strategy manifest)
         self._consecutive_vetoes: int = 0
+        # pass 5 G1f (L1 N34): harness refusals AND game rejections in a row in
+        # a shop; at SHOP_REFUSALS_TO_LEAVE the harness leaves the shop
+        self._shop_misses: int = 0
         self._consecutive_rearranges: int = 0
         self._shop_rerolls: int = 0
         # One shop visit = SHOP plus any pack opened from it (SMODS_BOOSTER_OPENED)
@@ -487,6 +490,7 @@ class Bot:
         logger.info(f"Luna asked for a boss reroll of {boss} (queued for the next blind select)")
         self._collector.record_call("successful")
         self._consecutive_vetoes = 0
+        self._shop_misses = 0
         self._consecutive_errors = 0
         self._consecutive_faileds = 0
         self._last_error_msg = None
@@ -739,7 +743,7 @@ class Bot:
                 try:
                     await self._balatro.call("sell", {"joker": swap["sell"]})
                 except BalatroError as e:
-                    return await self._handle_failed_call(f"BalatroError: {e}")
+                    return await self._handle_failed_call(f"BalatroError: {e}", before)
                 logger.info(f"Harness sold {swap['label']} to make room for {swap['buy']}")
                 swap_note = f"harness sold {swap['label']} (WEAKEST) to make room; "
 
@@ -796,6 +800,7 @@ class Bot:
             self._collector.record_call("successful")
             self._collector.write_gamestate(gamestate)
             self._consecutive_vetoes = 0
+            self._shop_misses = 0
             if self.harness.get("shop_lock", True) and shop_lock_after(before, fn_name, gamestate):
                 self._shop_locked = True
                 logger.info("Harness locked the shop: Ante 4+ buy left money below $10")
@@ -828,7 +833,7 @@ class Bot:
             return gamestate
 
         except BalatroError as e:
-            return await self._handle_failed_call(f"BalatroError: {e}")
+            return await self._handle_failed_call(f"BalatroError: {e}", before)
 
         except httpx.TransportError as e:
             logger.warning(f"Game transport error during tool call: {e}")
@@ -973,8 +978,10 @@ class Bot:
         self._collector.record_call("failed")
         self._consecutive_vetoes += 1
         state = (before or {}).get("state")
-        if state in SHOP_STATES and self._consecutive_vetoes >= SHOP_REFUSALS_TO_LEAVE:
-            return await self._leave_shop(before or {})
+        if state in SHOP_STATES:
+            self._shop_misses = max(getattr(self, "_shop_misses", 0) + 1, self._consecutive_vetoes)
+            if self._shop_misses >= SHOP_REFUSALS_TO_LEAVE:
+                return await self._leave_shop(before or {})
         if self._consecutive_vetoes >= 5:
             self._finish_reason = "consecutive_failed_calls"
             raise BotError("Too many consecutive refused calls")
@@ -983,8 +990,10 @@ class Bot:
     async def _leave_shop(self, before: dict[str, Any]) -> dict[str, Any]:
         """Skip an open pack, then call next_round for Luna (logged)."""
         assert self._balatro is not None
-        n = self._consecutive_vetoes
+        n = max(getattr(self, "_shop_misses", 0), self._consecutive_vetoes)
         self._consecutive_vetoes = 0
+        self._shop_misses = 0
+        self._consecutive_faileds = 0
         self._shop_refusal_exits += 1
         money = before.get("money")
         forced = self._ledger_out.setdefault("harness_forced", [])  # B0c (Sol g1 #3)
@@ -1002,7 +1011,7 @@ class Bot:
             return await self._balatro.call("gamestate")
         logger.info(f"Harness left the shop after {n} refusals in a row (money ${money})")
         self._last_failed_msg = (
-            f"The harness left the shop for you after {n} refused actions in a row."
+            f"The harness left the shop for you after {n} refused or rejected actions in a row."
         )
         self._history.append(
             {
@@ -1012,15 +1021,18 @@ class Bot:
                 "state": before.get("state", ""),
                 "ante": before.get("ante_num"),
                 "round": before.get("round_num"),
-                "result": f"harness left the shop after {n} refused actions (${money})",
+                "result": f"harness left the shop after {n} refused or rejected actions (${money})",
                 "score": None,
                 "estimate": None,
             }
         )
         return gamestate
 
-    async def _handle_failed_call(self, msg: str) -> dict[str, Any]:
-        """Handle valid tool call that resulted in BalatroError."""
+    async def _handle_failed_call(self, msg: str, before: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Handle valid tool call that resulted in BalatroError.
+
+        Pass 5 G1f: in a shop, game rejections count with harness refusals
+        toward leaving the shop, checked before the game-ending limit."""
         assert self._balatro is not None
         assert self._collector is not None
 
@@ -1033,6 +1045,11 @@ class Bot:
         # Track consecutive failed calls separately
         self._consecutive_faileds += 1
         self._consecutive_errors = 0
+
+        if (before or {}).get("state") in SHOP_STATES:
+            self._shop_misses = getattr(self, "_shop_misses", 0) + 1
+            if self._shop_misses >= SHOP_REFUSALS_TO_LEAVE:
+                return await self._leave_shop(before or {})
 
         if self._consecutive_faileds >= Collector.MAX_CONSECUTIVE_FAILURES:
             self._finish_reason = "consecutive_failed_calls"

@@ -5017,6 +5017,13 @@ def _consumable_full_veto(G: dict[str, Any], params: dict[str, Any]) -> str | No
     )
 
 
+# Pass 5 G1f (A2 N12): Balatro refuses Ankh with no free joker slot (card.lua
+# check_use); the mod then waits 30 s for a pack close that never comes
+ANKH_FULL_PACK = ("Ankh needs a free joker slot: the game refuses it while your joker slots are full "
+                  "(and you cannot sell inside a pack). Pick another card or skip.")
+ANKH_FULL_USE = "Ankh needs a free joker slot: the game refuses it while your joker slots are full. Sell a joker first."
+
+
 def _legal_only_rest(
     G: dict[str, Any], method: str, params: dict[str, Any], shop_rerolls: int, full: bool
 ) -> str | None:
@@ -5045,6 +5052,8 @@ def _legal_only_rest(
             except (IndexError, TypeError, ValueError):
                 return None
             key = chosen.get("key", "")
+            if key == "c_ankh" and full:
+                return ANKH_FULL_PACK
             sell_in_pack = bool((G.get("luna") or {}).get("sell_in_pack"))
             if (
                 (chosen.get("set") == "JOKER" and not sell_in_pack)
@@ -5077,6 +5086,8 @@ def _legal_only_rest(
         except (IndexError, TypeError, ValueError):
             return None
         key = chosen.get("key", "")
+        if key == "c_ankh" and full:
+            return ANKH_FULL_USE
         if key in ("c_judgement", "c_soul", "c_wraith") and full:
             return "Your joker slots are full: sell a joker before using this card."
         if key == "c_death" and len(params.get("cards") or []) != 2:
@@ -5244,6 +5255,8 @@ def validate_action(
             except (IndexError, TypeError, ValueError):
                 return None
             key = chosen.get("key", "")
+            if key == "c_ankh" and full:
+                return ANKH_FULL_PACK
             sell_in_pack = bool((G.get("luna") or {}).get("sell_in_pack"))
             if (
                 (chosen.get("set") == "JOKER" and not sell_in_pack)
@@ -5296,6 +5309,8 @@ def validate_action(
         except (IndexError, TypeError, ValueError):
             return None
         key = chosen.get("key", "")
+        if key == "c_ankh" and full:
+            return ANKH_FULL_USE
         if key in ("c_judgement", "c_soul", "c_wraith") and full:
             return "Your joker slots are full: sell a joker before using this card."
         if key == "c_death" and len(params.get("cards") or []) != 2:
