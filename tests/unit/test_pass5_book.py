@@ -333,3 +333,22 @@ def test_config_book_key_is_loaded_and_validated(tmp_path):
         y.write_text("model: m\nstrategy: [mastery, mastery-noadvice]\n" + bad + "\n")
         with pytest.raises(ValueError):
             Config.load(yaml_path=y).validate()
+
+
+def test_no_writeup_when_the_game_is_cancelled_through_play(tmp_path):
+    """Ctrl-C / executor cancel: play()'s finally sees CancelledError and makes no call."""
+    b = _bot(tmp_path, {"reasoning": "r", "writeup": "w", "edits": []})
+
+    class Game:
+        async def call(self, method, params=None):
+            return {"state": "MENU"} if method != "start" else {"state": "SELECTING_HAND", "seed": FAKE_SEED}
+
+    async def loop(gamestate):
+        raise asyncio.CancelledError()
+
+    b._balatro = Game()
+    b._run_game_loop = loop
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(b.play(tmp_path))
+    assert b._llm.calls == [] and b.book_update_path is None
+    assert not list(tmp_path.rglob("book_update.json"))

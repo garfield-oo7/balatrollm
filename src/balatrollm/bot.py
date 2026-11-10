@@ -458,6 +458,8 @@ class Bot:
             record["error"] = record.get("error") or f"{type(e).__name__}: {e}"
         finally:
             record.pop("_words", None)
+            if "response" not in record and record.get("error") is None:
+                record["error"] = "interrupted (cancelled before a reply)"
             record["time_ms"] = int((time.time() - started) * 1000)
             try:
                 path = self._collector.run_dir / "book_update.json"
