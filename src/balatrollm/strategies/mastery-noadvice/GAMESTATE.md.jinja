@@ -26,7 +26,7 @@
 - Jokers {{ S.jokers }}/{{ S.joker_limit }}, SLOTS_FREE {{ S.slots_free }}, XMULT_OWNED {{ S.xmult_owned }}
 - Interest next round ${{ S.interest }} | INTEREST_SPARE ${{ S.interest_spare }} | Blue Seal cards owned {{ S.blue_seals }}
 {% for t in S.pending_tags %}- PENDING TAG: {{ t }}
-{% endfor %}- STATUS: {{ S.status }} for the next blind ({{ S.next_name }}){% if S.hands_needed %}: {{ S.sit_target | fmt_num }} needs about {{ S.hands_needed }} of {{ S.next_hands }} hands at about {{ S.sit_per | fmt_num }} per hand (your best plays: {{ S.best_types | join(", ") }}){% endif %}{% if S.safety_net %}; your last 2 blinds were each won with 2+ hands left{% endif %}
+{% endfor %}- STATUS: {{ S.status }} for the next blind ({{ S.next_name }}){% if S.win_pct is not none %}, win chance about {{ S.win_pct }}%{% endif %}{% if S.hands_needed %}: {{ S.sit_target | fmt_num }} needs about {{ S.hands_needed }} of {{ S.next_hands }} hands at about {{ S.sit_per | fmt_num }} per hand (your best plays: {{ S.best_types | join(", ") }}){% endif %}{% if S.safety_net %}; your last 2 blinds were each won with 2+ hands left{% endif %}
 {%- if S.last_spare is not none and G.state != "SELECTING_HAND" %}
 - LAST BLIND: won with {{ S.last_spare }} hand{{ "s" if S.last_spare != 1 }} spare
 {%- endif %}

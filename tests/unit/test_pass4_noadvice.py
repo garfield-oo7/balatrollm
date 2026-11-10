@@ -34,6 +34,8 @@ ADVICE_MARKERS = [
     "[FEED", "[AVOID]", "[CASH ONLY", "[SITUATIONAL]", "[REPEAT", "[NOT AFTER ANTE 2]",
     "Do not sell jokers", "sells WEAKEST for you", "the harness sells", "harness rerolls",
     "buy jokers that build your run", "keep those cards", "Dig only when",
+    # pass 5: E2b investment line and E3's suggestion text (advice; hidden under noadvice)
+    "BUY vs SAVE", "to reach", "score buys may use",
 ]
 
 
@@ -78,6 +80,9 @@ def test_noadvice_render_has_facts_and_no_advice() -> None:
         assert not found, (G["state"], found)
         # facts kept (and the anchors scripts/digest.py parses)
         assert dg.HEAD.search(text) and dg.JOKERS.search(text) and dg.STATUS.search(text)
+        # pass 5: the calibrated STATUS chance (E2a) is a fact, shown with advice off too
+        if analysis.run_status(G).get("win_pct") is not None:
+            assert "win chance about " in text
         assert "INTEREST_SPARE $" in text and "# POKER HANDS" in text and "# JOKERS (left to right)" in text
         assert "To buy a joker with full slots, sell one first." in text or G["state"] != "SHOP"
         if G["state"] == "SELECTING_HAND":

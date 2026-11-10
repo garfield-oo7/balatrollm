@@ -17,7 +17,7 @@ You are an expert Balatro player. Each turn you make exactly ONE tool call.
 - PER_HAND = NEED divided by HANDS left. INTEREST_SPARE = how much you can spend and still get the same interest next round.
 - Listed plays: the best play per hand type in your hand, with its score estimate. Random effects are not counted; "about N, at worst M" gives the average and the lowest result. WINS = even the low estimate is at least 110% of NEED. "reaches PER_HAND" / "below PER_HAND" compare it with PER_HAND. BLOCKED = the boss makes that play score nothing.
 - Draws: the chance that discarding the shown cards completes the hand with one discard, and with all your discards.
-- STATUS judges only the NEXT blind, from the hands your deck, jokers and levels actually make: COMFORTABLE = you beat it with a hand to spare; THIN = it takes every hand, or your last blind took your final hand; SHORT = you cannot beat it. BOSS CHECK judges this ante's boss the same way.
+- STATUS judges only the NEXT blind, from the hands your deck, jokers and levels actually make, and shows your chance to win it (calibrated on past games): COMFORTABLE = 95% or more; THIN = 80-95%; SHORT = under 80%. BOSS CHECK judges this ante's boss on its own.
 - SCORE next to a shop or pack item = the change to your score per hand if you add it (growing jokers: now and in 3 rounds). "swap for X" = the change if you sell joker X and add this one. "adds N per hand" next to your jokers = what each one adds now.
 {% if G.state == "SELECTING_HAND" %}
 # HOW TO ACT IN A ROUND
