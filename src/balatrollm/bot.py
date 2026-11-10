@@ -391,7 +391,19 @@ class Bot:
                             round_record(self._last_hand_state, gamestate)
                         )
                         self._last_hand_state = None
-                    gamestate = await self._balatro.call("cash_out")
+                    try:
+                        gamestate = await self._balatro.call("cash_out")
+                        self._cash_out_misses = 0
+                    except BalatroError as e:
+                        # pass 5 (C-on N64): after a slow call the state read can
+                        # lag the game; re-read and go on instead of ending the run
+                        misses = getattr(self, "_cash_out_misses", 0) + 1
+                        self._cash_out_misses = misses
+                        if (e.data or {}).get("name") != "INVALID_STATE" or misses >= 3:
+                            raise
+                        logger.warning(f"cash_out refused ({e}); re-reading the state ({misses}/3)")
+                        await asyncio.sleep(2)
+                        gamestate = await self._balatro.call("gamestate")
                 case "BLIND_SELECT":
                     # Rerolls a bad boss first (harness ``reroll_boss``), then
                     # selects every blind, except a skip for a tag the strategy
