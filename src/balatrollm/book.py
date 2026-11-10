@@ -683,6 +683,7 @@ def game_digest(
             rerolls.setdefault(int(h.get("ante") or 0), []).append(str(h.get("result") or "boss rerolled"))
 
     blocks: list[tuple[list[str], list[str]]] = []  # (full lines, short lines) per ante
+    last_blind = max(((a, rn) for a in antes for rn in antes[a]), default=None)
     for a in sorted(antes):
         boss = next((_boss(r.get("G") or {}) for rn in sorted(antes[a], reverse=True)
                      for r in antes[a][rn]["hand"] + antes[a][rn]["shop"] if _boss(r.get("G") or {})), None)
@@ -701,6 +702,9 @@ def game_digest(
             if rec:
                 line = (f"- {name} (target {target:,}): beaten, scored {int(rec.get('scored') or 0):,}, "
                         f"{rec.get('hands_left')} hands and {rec.get('discards_left')} discards left")
+            elif part["hand"] and finish_reason == "won" and (a, rn) == last_blind:
+                # the run's winning blind: the loop stops before its round record (Sol p5 g12 #2)
+                line = f"- {name} (target {target:,}): beaten (won the run)"
             elif part["hand"]:
                 line = f"- {name} (target {target:,}): not beaten"
             else:

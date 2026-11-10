@@ -3175,9 +3175,22 @@ def situation(
         # pass 5 G1c(a): the last hand with no discard left is fully known: read
         # the listed plays, not the sampler (which redraws the hand; B2: 13 of
         # 62 such prompts read THIN or COMFORTABLE with nothing winning)
-        live = [p for p in play_advice(G)["plays"] if not p.get("blocked")]
+        A = play_advice(G)
+        live = [p for p in A["plays"] if not p.get("blocked")]
         best = max((p.get("floor") if p.get("floor") is not None else p["score"] for p in live), default=0)
-        known = "COMFORTABLE" if any(p.get("wins") for p in live) else "THIN" if best >= target else "SHORT"
+        mark = A.get("mark_play") or {}
+        hidden = any(_norm(c)["hidden"] for c in _area_cards(G, "hand"))
+        if any(p.get("wins") for p in live):
+            known = "COMFORTABLE"
+        elif hidden:
+            # face-down cards (The Mark etc.): only their proven floor makes the
+            # hand known; otherwise keep the calibrated band (Sol p5 g12 #1)
+            floor = mark.get("floor")
+            if floor is not None and floor >= target:
+                best = max(best, floor)
+                known = "COMFORTABLE" if floor >= WIN_MARGIN * target else "THIN"
+        else:
+            known = "THIN" if best >= target else "SHORT"
     w = None if known else (
         win_inputs(power.get("boss_rounds" if kind == "boss" else "rounds"), hands, target) if per else None
     )
