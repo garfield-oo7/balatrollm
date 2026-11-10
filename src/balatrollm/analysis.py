@@ -2551,7 +2551,7 @@ def _e3_action(G: dict[str, Any], e3: dict[str, Any], old: dict[str, Any]) -> di
 # Step 2 is a pace rule, not "dig whenever no single play wins": a later hand
 # that is on pace is played (as a player would), so a discard is not spent
 # where banking the score is enough. On the last hand both read the same.
-# The target is the WINS threshold (margin x NEED, as E3). Draws refill to the
+# The target is the true remaining NEED (to beat the blind; Sol g3 #1). Draws refill to the
 # hand size (The Serpent: 3). Cost per sample and first action is at most
 # hands_left + discards_left ``_best_play`` calls (each stops at the first play
 # reaching the target). Unsupported (None): a face-down card in hand, The Mark,
@@ -2575,6 +2575,10 @@ DIG_UNSUPPORTED_JOKERS = frozenset({
     "j_ramen", "j_green_joker", "j_ride_the_bus", "j_obelisk", "j_ice_cream", "j_runner", "j_square",
     "j_trousers", "j_wee", "j_hiker", "j_castle", "j_hit_the_road", "j_yorick", "j_burnt", "j_selzer",
     "j_loyalty_card", "j_lucky_cat", "j_vampire", "j_midas_mask", "j_dna", "j_sixth_sense",
+    # Sol g3 re-check: deck size (Blue Joker), money read in score (Bull, Bootstraps: money paid or lost
+    # inside the round only reaches a score through these), card destruction (Trading Card; also Canio,
+    # Glass Joker growth), hand levels on play (Space Joker)
+    "j_blue_joker", "j_bull", "j_bootstraps", "j_trading", "j_space", "j_glass", "j_caino",
 })
 
 
