@@ -464,9 +464,13 @@ def _blocked_by_boss(
     if boss == "The Eye" and (hands.get(htype) or {}).get("played_this_round", 0):
         return "The Eye: hand type already played this round, scores 0"
     if boss == "The Mouth":
+        # The game locks the FIRST type played this round (blind.lua only_hand);
+        # a blocked play still counts as played, so the hands table alone can
+        # show two types. The harness stores the first one (pass 5 G1d, B2 N37).
         played = [n for n, h in hands.items() if (h or {}).get("played_this_round", 0)]
-        if played and htype not in played:
-            return f"The Mouth: only {played[0]} is allowed this round, scores 0"
+        lock = (G.get("luna") or {}).get("mouth_lock") or (played[0] if len(played) == 1 else None)
+        if lock and htype != lock:
+            return f"The Mouth: only {lock} is allowed this round, scores 0"
     return None
 
 
@@ -2692,7 +2696,8 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
             "why": f"The Mark: play the face-down cards (about {fmt_num(mark['expected'])}, more than any face-up play)",
         }
     elif plays:
-        best = plays[0]
+        # never suggest a BLOCKED play when an unblocked one exists (pass 5 G1d, The Mouth)
+        best = next((p for p in plays if not p["blocked"]), plays[0])
         cards = list(best["cards"])
         need = 0
         if boss == "The Psychic":
@@ -2714,6 +2719,11 @@ def play_advice(G: dict[str, Any], top: int = 5) -> dict[str, Any]:
         if not _padding_holds(G, hand_raw, list(best["cards"]), cards, None):  # F2
             cards = list(best["cards"])
         action = {"tool": "play", "cards": cards, "why": f"best play ({best['hand']})"}
+    elif discards <= 0:
+        # no visible play and no discard left (The Fish: all face down): play
+        # face-down cards; a discard suggestion here is illegal (pass 5 G1d)
+        down = ([i for i, c in enumerate(hand) if c["hidden"]] or list(range(len(hand))))[:5]
+        action = {"tool": "play", "cards": down, "why": "no visible play and no discards left: play face-down cards"}
     else:
         action = {"tool": "discard", "cards": discard, "why": "no visible play"}
     # Pass 4 E3: on the last hand(s) without a sure win, choose by the chance

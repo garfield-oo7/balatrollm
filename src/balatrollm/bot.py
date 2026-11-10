@@ -15,6 +15,7 @@ from openai.types.chat import ChatCompletion
 from . import seeds
 from .analysis import (
     BOSS_REROLL_MAX_PER_ANTE,
+    current_blind,
     DEADLINE_ANTE,
     deadline_commit,
     luna_reroll_refusal,
@@ -921,6 +922,17 @@ class Bot:
             "boss_rerolls": getattr(self, "_boss_rerolls", {}).get(ante, 0),
             "boss_reroll_request": getattr(self, "_boss_reroll_request", None),
         }
+        cur = current_blind(gamestate)
+        if cur and cur.get("name") == "The Mouth":
+            # pass 5 G1d: the game locks the first hand type played this round;
+            # a blocked play also marks its type played, so remember the first
+            key = (ante, int(gamestate.get("round_num") or 0))
+            played = [n for n, h in (gamestate.get("hands") or {}).items() if (h or {}).get("played_this_round", 0)]
+            locks = self.__dict__.setdefault("_mouth_locks", {})
+            if key not in locks and len(played) == 1:
+                locks[key] = played[0]
+            if key in locks:
+                gamestate["luna"]["mouth_lock"] = locks[key]
         if not self._advice_vetoes_on():
             # pass 4 A1: only added when off, so G["luna"] is unchanged for mastery
             gamestate["luna"]["advice_vetoes"] = False

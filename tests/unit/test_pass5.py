@@ -50,3 +50,22 @@ def test_raised_fist_tie_goes_to_the_last_card_in_hand() -> None:
     flipped = analysis.estimate_play(G, played, [cards[3], cards[2]])["score"]  # 7♥ last -> +14
     assert base == (10 + 22) * 2
     assert flipped == (10 + 22) * (2 + 14)
+
+
+def test_the_mouth_lock_is_the_first_type_played() -> None:
+    G = make_state("H_A D_A S_9 C_7 H_5", boss="The Mouth", boss_current=True, hands_left=2)
+    # Flush played first, then a (blocked) High Card: both read played_this_round
+    G["hands"]["Flush"]["played_this_round"] = 1
+    G["hands"]["High Card"]["played_this_round"] = 1
+    G["luna"] = {"mouth_lock": "Flush"}
+    A = analysis.play_advice(G)
+    assert all(p["blocked"] for p in A["plays"] if p["hand"] != "Flush")
+    assert not A["action"]["why"].startswith("best play (High Card")
+
+
+def test_no_discard_suggested_with_no_discards_left() -> None:
+    G = make_state("H_A D_K S_9 C_7 H_5", boss="The Fish", boss_current=True, hands_left=2, discards_left=0)
+    for c in G["hand"]["cards"]:
+        c["state"] = {"hidden": True}
+    A = analysis.play_advice(G)
+    assert A["action"]["tool"] == "play" and len(A["action"]["cards"]) == 5
