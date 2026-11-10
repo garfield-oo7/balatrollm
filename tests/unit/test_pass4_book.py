@@ -17,6 +17,7 @@ def test_checks_keep_a_good_rule():
     assert why == [] and kept["text"] == GOOD and kept["phase"] == ["shop"]
     # harness words that fit the seed alphabet are not seeds
     assert _check("when DISCARDS is 0 and a STRAIGHT is listed, do play it, because no dig is left")[1] == []
+    assert _check("when STATUS is THIN before a boss, prioritize a scoring joker over interest, because cash cannot fix a shortfall")[1] == []
 
 
 def test_checks_reject_seeds_positions_one_seed_facts_form_and_size():

@@ -57,7 +57,9 @@ FOCUS = ("shop", "shop_and_hand")
 DEFAULT_FOCUS = "shop_and_hand"
 EMPTY: dict[str, Any] = {"rules": [], "summaries": [], "next_id": 1, "games": 0}
 
-TEXT = re.compile(r"^when .+, do .+, because .+", re.IGNORECASE | re.DOTALL)
+# "when <situation>, <action>, because <reason>": the action is any verb ("do buy", "prioritize", "sell"); W attempt 1 showed
+# Luna reads "do <action>" as a placeholder, so a literal ", do " rejected every real edit.
+TEXT = re.compile(r"^when .+?, .+, because .+", re.IGNORECASE | re.DOTALL)
 # An 8-character token of Balatro's seed alphabet (uppercase, no 0 / O)
 SEED_TOKEN = re.compile(rf"(?<![A-Za-z0-9_])[{seeds.ALPHABET}]{{{seeds.SEED_LENGTH}}}(?![A-Za-z0-9_])")
 HAND_POSITIONS = [
