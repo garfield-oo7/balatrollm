@@ -2568,6 +2568,14 @@ DIG_MAX_OPTIONS = 6
 DIG_UNSUPPORTED = frozenset(
     {"The Mark", "The House", "The Fish", "The Wheel", "The Hook", "Crimson Heart", "Cerulean Bell"}
 )
+# Jokers whose value changes with a discard or a played hand inside the round:
+# the sampler keeps every joker as it is now, so with these owned or copied the
+# two first actions are not on equal terms -> no line (Sol g3 #2)
+DIG_UNSUPPORTED_JOKERS = frozenset({
+    "j_ramen", "j_green_joker", "j_ride_the_bus", "j_obelisk", "j_ice_cream", "j_runner", "j_square",
+    "j_trousers", "j_wee", "j_hiker", "j_castle", "j_hit_the_road", "j_yorick", "j_burnt", "j_selzer",
+    "j_loyalty_card", "j_lucky_cat", "j_vampire", "j_midas_mask", "j_dna", "j_sixth_sense",
+})
 
 
 def _dig_after_play(G: dict[str, Any], htype: str, arm: bool) -> dict[str, Any]:
@@ -2604,12 +2612,13 @@ def dig_or_play(
         remaining <= 0 or discards <= 0 or h < 1 or not play_cards or not deck_raw or not hand_raw
         or any(_norm(c)["hidden"] for c in hand_raw)
         or _active_boss(G) in DIG_UNSUPPORTED
+        or (set(_joker_keys(G)) | set(copied_keys(G))) & DIG_UNSUPPORTED_JOKERS
     ):
         return None
     key = _state_key(G, "dig", margin, sorted(play_cards), sorted(suggested or []))
     live = [p for p in plays if not p["blocked"]]
     return _cached(key, lambda: _dig_sample(G, hand_raw, deck_raw, live, list(play_cards), h, remaining,
-                                            margin * remaining, discards, suggested))
+                                            remaining, discards, suggested))  # the true NEED (Sol g3 #1)
 
 
 def _dig_sample(
@@ -2675,6 +2684,8 @@ def _dig_sample(
             types: tuple[str, ...]) -> bool:
         """The continuation policy from a hand held (``ptr``: next card of ``perm``)."""
         while True:
+            if not held:
+                return False  # deck and hand used up: the blind is lost on this draw (Sol g3 #3)
             memo = {"norm": [norms[id(c)] for c in held]}
             s, t, play = _best_play(G_at(hl, dl, types), held, pad, memo=memo, ctx=ctx, expected=False, stop_at=need)
             if s >= need:

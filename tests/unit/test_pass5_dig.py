@@ -48,3 +48,28 @@ def test_dig_or_play_returns_two_chances() -> None:
     # the strict rule decides the suggestion
     assert A["action"]["tool"] == ("discard" if line["dig_better"] else "play")
     assert analysis.play_advice(G)["dig_line"] is None
+
+
+def test_a_play_that_beats_need_counts_as_a_win_inside_the_wins_margin() -> None:
+    """Sol g3 #1: the chance is to beat the blind (NEED), not the 110% WINS margin."""
+    from .test_analysis import joker
+
+    G = make_state("H_K D_K C_9 S_7 H_4 D_3 C_2 S_5", [joker("j_jolly", "Jolly Joker")], hands_left=1, discards_left=2, chips=0)
+    A = analysis.play_advice(G)
+    pair = next(p for p in A["plays"] if p["hand"] == "Pair")
+    floor = pair.get("floor") or pair["score"]
+    G["blinds"]["small"]["score"] = int(floor / 1.05)  # beaten, but under 110%: not WINS
+    A = analysis.play_advice(G, dig=True)
+    assert not any(p.get("wins") for p in A["plays"])
+    line = A["dig_line"]
+    assert line is not None and set(pair["cards"]) <= set(line["play"]["cards"])  # the Pair (padded) is the play
+    assert line["play"]["chance"] == 1.0
+
+
+def test_a_used_up_deck_does_not_raise() -> None:
+    """Sol g3 #3: an empty simulated hand is a lost trajectory, not an exception."""
+    G = make_state("H_2 D_7 C_9 S_J H_4", hands_left=4, discards_left=3, chips=0)
+    G["cards"]["cards"] = G["cards"]["cards"][:2]
+    G["cards"]["count"] = 2
+    G["blinds"]["small"]["score"] = 10**9
+    analysis.play_advice(G, dig=True)  # must not raise
