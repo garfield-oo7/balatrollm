@@ -194,3 +194,52 @@ def test_cost_and_file_kept_when_checks_fail(tmp_path, private_map, monkeypatch)
     upd = json.loads((b._collector.run_dir / "book_update.json").read_text())
     assert upd["kept"] == [] and "checks failed" in upd["error"]
     assert b._collector.extra_stats["book_update"]["cost"] == 0.002
+
+
+# --- Owner 2026-11-10: the book on the advice-off base (mastery-book-noadvice)
+
+
+def test_book_noadvice_prompt_has_book_and_no_advice(tmp_path, monkeypatch):
+    """The bot's real prompt for the new folder on 3 logged states: the book
+    block comes first in the system message, the notebook is in MEMORY, and no
+    advice marker appears anywhere (empty book, as at the start of W)."""
+    from .test_pass4_noadvice import ADVICE_MARKERS, _states
+
+    monkeypatch.setenv("BALATROLLM_BOOK_STORE", str(tmp_path / "store"))
+    task = Task(model="openai/gpt-6-luna", seed="SEED-ZZ", deck="RED", stake="WHITE", strategy="mastery-book-noadvice")
+    b = botmod.Bot.__new__(botmod.Bot)
+    b.task, b.strategy = task, StrategyManager("mastery-book-noadvice")
+    b.harness = StrategyManifest.from_file("mastery-book-noadvice").harness
+    b.model_config, b._history, b._rounds, b._last_hand_state = {}, [], [], None
+    b._last_error_msg = b._last_failed_msg = None
+    b._collector = Collector(task, tmp_path)
+    b._book_setup(tmp_path, FAKE_SEED)
+    assert b._book["store"] == tmp_path / "store"
+
+    class LLM:
+        async def call(self, model, messages, tools, model_config=None):
+            self.messages, self.tools = messages, tools
+            return ChatCompletion.model_validate({
+                "id": "x", "object": "chat.completion", "created": 0, "model": model,
+                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}]})
+
+    class Game:
+        async def call(self, method, params=None):
+            return {}
+
+    b._llm, b._balatro = LLM(), Game()
+    for G in _states():
+        asyncio.run(b._get_llm_response(G))
+        system = b._llm.messages[0]["content"]
+        assert system[0]["text"].startswith("# YOUR BOOK") and len(system) == 2
+        text = "\n".join(p["text"] for m in b._llm.messages for p in m["content"])
+        assert not [m for m in ADVICE_MARKERS if m in text], G["state"]
+        assert "## Your notebook" in text
+        assert all("note" in t["function"]["parameters"]["properties"] for t in b._llm.tools)
+
+
+def test_book_stores_are_per_strategy(tmp_path, monkeypatch):
+    monkeypatch.delenv("BALATROLLM_BOOK_STORE", raising=False)
+    a = book.store_dir(tmp_path, "mastery-book", StrategyManifest.from_file("mastery-book").harness)
+    n = book.store_dir(tmp_path, "mastery-book-noadvice", StrategyManifest.from_file("mastery-book-noadvice").harness)
+    assert a != n and n == tmp_path / "runs" / "book" / "mastery-book-noadvice"
