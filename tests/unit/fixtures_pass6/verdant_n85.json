@@ -1,0 +1,1532 @@
+{
+ "G": {
+  "ante_num": 8,
+  "blinds": {
+   "big": {
+    "effect": "",
+    "name": "Big Blind",
+    "score": 75000,
+    "status": "DEFEATED",
+    "tag_effect": "After defeating the Boss Blind, gain $25",
+    "tag_name": "Investment Tag",
+    "type": "BIG"
+   },
+   "boss": {
+    "effect": "All cards debuffed until 1 Joker sold",
+    "name": "Verdant Leaf",
+    "score": 100000,
+    "status": "CURRENT",
+    "tag_effect": "",
+    "tag_name": "",
+    "type": "BOSS"
+   },
+   "small": {
+    "effect": "",
+    "name": "Small Blind",
+    "score": 50000,
+    "status": "DEFEATED",
+    "tag_effect": "Next base edition shop Joker is free and becomes Polychrome",
+    "tag_name": "Polychrome Tag",
+    "type": "SMALL"
+   }
+  },
+  "cards": {
+   "cards": [
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 46,
+     "key": "H_8",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "8",
+      "suit": "H"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 31,
+     "key": "D_6",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "6",
+      "suit": "D"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 49,
+     "key": "H_J",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "J",
+      "suit": "H"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 50,
+     "key": "H_K",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "K",
+      "suit": "H"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 62,
+     "key": "S_J",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "J",
+      "suit": "S"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 52,
+     "key": "H_T",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "T",
+      "suit": "H"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 16,
+     "key": "C_4",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "4",
+      "suit": "C"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 39,
+     "key": "D_T",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "T",
+      "suit": "D"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 20,
+     "key": "C_8",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "8",
+      "suit": "C"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 14,
+     "key": "C_2",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "2",
+      "suit": "C"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 23,
+     "key": "C_J",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "J",
+      "suit": "C"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 45,
+     "key": "H_7",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "7",
+      "suit": "H"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 35,
+     "key": "D_A",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "A",
+      "suit": "D"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 53,
+     "key": "S_2",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "2",
+      "suit": "S"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 44,
+     "key": "H_6",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "6",
+      "suit": "H"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 25,
+     "key": "C_Q",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "Q",
+      "suit": "C"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 27,
+     "key": "D_2",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "2",
+      "suit": "D"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 26,
+     "key": "C_T",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "T",
+      "suit": "C"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 59,
+     "key": "S_8",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "8",
+      "suit": "S"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 42,
+     "key": "H_4",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "4",
+      "suit": "H"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 37,
+     "key": "H_K",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "K",
+      "suit": "H"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 64,
+     "key": "S_Q",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "Q",
+      "suit": "S"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 33,
+     "key": "C_8",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "8",
+      "suit": "C"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 47,
+     "key": "H_9",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "9",
+      "suit": "H"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 18,
+     "key": "C_6",
+     "label": "Mult Card",
+     "modifier": {
+      "enhancement": "MULT"
+     },
+     "set": "ENHANCED",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "6",
+      "suit": "C"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 61,
+     "key": "H_A",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "A",
+      "suit": "H"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 57,
+     "key": "S_6",
+     "label": "Mult Card",
+     "modifier": {
+      "enhancement": "MULT"
+     },
+     "set": "ENHANCED",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "6",
+      "suit": "S"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 28,
+     "key": "D_3",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "3",
+      "suit": "D"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 36,
+     "key": "D_J",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "J",
+      "suit": "D"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 40,
+     "key": "H_2",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "2",
+      "suit": "H"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 51,
+     "key": "H_Q",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "Q",
+      "suit": "H"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 43,
+     "key": "H_5",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "5",
+      "suit": "H"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 38,
+     "key": "H_Q",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "Q",
+      "suit": "H"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 24,
+     "key": "C_K",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "K",
+      "suit": "C"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 17,
+     "key": "C_5",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "5",
+      "suit": "C"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 56,
+     "key": "S_5",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "5",
+      "suit": "S"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 41,
+     "key": "H_3",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "3",
+      "suit": "H"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 55,
+     "key": "S_4",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "4",
+      "suit": "S"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 19,
+     "key": "C_7",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "7",
+      "suit": "C"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 65,
+     "key": "S_T",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "T",
+      "suit": "S"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 63,
+     "key": "S_K",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "K",
+      "suit": "S"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 29,
+     "key": "D_4",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "4",
+      "suit": "D"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 22,
+     "key": "C_A",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "A",
+      "suit": "C"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 58,
+     "key": "H_7",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true,
+      "hidden": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "7",
+      "suit": "H"
+     }
+    }
+   ],
+   "count": 44,
+   "highlighted_limit": 5,
+   "limit": 52
+  },
+  "consumables": {
+   "cards": [],
+   "count": 0,
+   "highlighted_limit": 1,
+   "limit": 2
+  },
+  "deck": "RED",
+  "hand": {
+   "cards": [
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 48,
+     "key": "H_A",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "A",
+      "suit": "H"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 60,
+     "key": "S_9",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "9",
+      "suit": "S"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 21,
+     "key": "C_9",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "9",
+      "suit": "C"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 34,
+     "key": "D_9",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "9",
+      "suit": "D"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 32,
+     "key": "C_7",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "7",
+      "suit": "C"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 30,
+     "key": "C_5",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "5",
+      "suit": "C"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 54,
+     "key": "S_3",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "3",
+      "suit": "S"
+     }
+    },
+    {
+     "cost": {
+      "buy": 1,
+      "sell": 1
+     },
+     "id": 15,
+     "key": "C_3",
+     "label": "Base Card",
+     "modifier": [],
+     "set": "DEFAULT",
+     "state": {
+      "debuff": true
+     },
+     "value": {
+      "effect": "Scores no chips and all abilities are disabled",
+      "rank": "3",
+      "suit": "C"
+     }
+    }
+   ],
+   "count": 8,
+   "highlighted_limit": 5,
+   "limit": 8
+  },
+  "hands": {
+   "Five of a Kind": {
+    "chips": 120,
+    "example": [
+     [
+      "S_A",
+      true
+     ],
+     [
+      "H_A",
+      true
+     ],
+     [
+      "H_A",
+      true
+     ],
+     [
+      "C_A",
+      true
+     ],
+     [
+      "D_A",
+      true
+     ]
+    ],
+    "level": 1,
+    "mult": 12,
+    "order": 3,
+    "played": 0,
+    "played_this_round": 0
+   },
+   "Flush": {
+    "chips": 110,
+    "example": [
+     [
+      "H_A",
+      true
+     ],
+     [
+      "H_K",
+      true
+     ],
+     [
+      "H_T",
+      true
+     ],
+     [
+      "H_5",
+      true
+     ],
+     [
+      "H_4",
+      true
+     ]
+    ],
+    "level": 6,
+    "mult": 14,
+    "order": 7,
+    "played": 0,
+    "played_this_round": 0
+   },
+   "Flush Five": {
+    "chips": 160,
+    "example": [
+     [
+      "S_A",
+      true
+     ],
+     [
+      "S_A",
+      true
+     ],
+     [
+      "S_A",
+      true
+     ],
+     [
+      "S_A",
+      true
+     ],
+     [
+      "S_A",
+      true
+     ]
+    ],
+    "level": 1,
+    "mult": 16,
+    "order": 1,
+    "played": 0,
+    "played_this_round": 0
+   },
+   "Flush House": {
+    "chips": 140,
+    "example": [
+     [
+      "D_7",
+      true
+     ],
+     [
+      "D_7",
+      true
+     ],
+     [
+      "D_7",
+      true
+     ],
+     [
+      "D_4",
+      true
+     ],
+     [
+      "D_4",
+      true
+     ]
+    ],
+    "level": 1,
+    "mult": 14,
+    "order": 2,
+    "played": 0,
+    "played_this_round": 0
+   },
+   "Four of a Kind": {
+    "chips": 210,
+    "example": [
+     [
+      "S_J",
+      true
+     ],
+     [
+      "H_J",
+      true
+     ],
+     [
+      "C_J",
+      true
+     ],
+     [
+      "D_J",
+      true
+     ],
+     [
+      "C_3",
+      false
+     ]
+    ],
+    "level": 6,
+    "mult": 22,
+    "order": 5,
+    "played": 0,
+    "played_this_round": 0
+   },
+   "Full House": {
+    "chips": 140,
+    "example": [
+     [
+      "H_K",
+      true
+     ],
+     [
+      "C_K",
+      true
+     ],
+     [
+      "D_K",
+      true
+     ],
+     [
+      "S_2",
+      true
+     ],
+     [
+      "D_2",
+      true
+     ]
+    ],
+    "level": 5,
+    "mult": 12,
+    "order": 6,
+    "played": 1,
+    "played_this_round": 0
+   },
+   "High Card": {
+    "chips": 25,
+    "example": [
+     [
+      "S_A",
+      true
+     ],
+     [
+      "D_Q",
+      false
+     ],
+     [
+      "D_9",
+      false
+     ],
+     [
+      "C_4",
+      false
+     ],
+     [
+      "D_3",
+      false
+     ]
+    ],
+    "level": 3,
+    "mult": 3,
+    "order": 12,
+    "played": 8,
+    "played_this_round": 0
+   },
+   "Pair": {
+    "chips": 145,
+    "example": [
+     [
+      "S_K",
+      false
+     ],
+     [
+      "S_9",
+      true
+     ],
+     [
+      "D_9",
+      true
+     ],
+     [
+      "H_6",
+      false
+     ],
+     [
+      "D_3",
+      false
+     ]
+    ],
+    "level": 10,
+    "mult": 11,
+    "order": 11,
+    "played": 26,
+    "played_this_round": 0
+   },
+   "Straight": {
+    "chips": 150,
+    "example": [
+     [
+      "D_J",
+      true
+     ],
+     [
+      "C_T",
+      true
+     ],
+     [
+      "C_9",
+      true
+     ],
+     [
+      "S_8",
+      true
+     ],
+     [
+      "H_7",
+      true
+     ]
+    ],
+    "level": 5,
+    "mult": 16,
+    "order": 8,
+    "played": 3,
+    "played_this_round": 0
+   },
+   "Straight Flush": {
+    "chips": 220,
+    "example": [
+     [
+      "S_Q",
+      true
+     ],
+     [
+      "S_J",
+      true
+     ],
+     [
+      "S_T",
+      true
+     ],
+     [
+      "S_9",
+      true
+     ],
+     [
+      "S_8",
+      true
+     ]
+    ],
+    "level": 4,
+    "mult": 20,
+    "order": 4,
+    "played": 0,
+    "played_this_round": 0
+   },
+   "Three of a Kind": {
+    "chips": 170,
+    "example": [
+     [
+      "S_T",
+      true
+     ],
+     [
+      "C_T",
+      true
+     ],
+     [
+      "D_T",
+      true
+     ],
+     [
+      "H_6",
+      false
+     ],
+     [
+      "D_5",
+      false
+     ]
+    ],
+    "level": 8,
+    "mult": 17,
+    "order": 9,
+    "played": 4,
+    "played_this_round": 0
+   },
+   "Two Pair": {
+    "chips": 40,
+    "example": [
+     [
+      "H_A",
+      true
+     ],
+     [
+      "D_A",
+      true
+     ],
+     [
+      "C_Q",
+      false
+     ],
+     [
+      "H_4",
+      true
+     ],
+     [
+      "C_4",
+      true
+     ]
+    ],
+    "level": 2,
+    "mult": 3,
+    "order": 10,
+    "played": 1,
+    "played_this_round": 0
+   }
+  },
+  "jokers": {
+   "cards": [
+    {
+     "cost": {
+      "buy": 4,
+      "sell": 2
+     },
+     "id": 110,
+     "key": "j_constellation",
+     "label": "Constellation",
+     "modifier": [],
+     "set": "JOKER",
+     "state": [],
+     "value": {
+      "effect": "This Joker gains X0.1 Mult every time a Planet card is used (Currently X4.9 Mult)"
+     }
+    }
+   ],
+   "count": 1,
+   "highlighted_limit": 1,
+   "limit": 5
+  },
+  "luna": {
+   "advice_vetoes": false,
+   "boss_reroll_request": null,
+   "boss_rerolls": 0,
+   "first_shop": false,
+   "luna_reroll": true,
+   "main_commit": {
+    "ante": 1,
+    "hand": "Pair",
+    "round": 2,
+    "trigger": "Half Joker"
+   },
+   "pending_tags": [],
+   "sell_in_pack": false,
+   "shop_locked": false
+  },
+  "money": 2,
+  "packs": {
+   "cards": [],
+   "count": 2,
+   "highlighted_limit": 1,
+   "limit": 2
+  },
+  "round": {
+   "boss_rerolled": false,
+   "chips": 0,
+   "discards_left": 4,
+   "discards_used": 0,
+   "hands_left": 6,
+   "hands_played": 0,
+   "reroll_cost": 5
+  },
+  "round_num": 24,
+  "shop": {
+   "cards": [],
+   "count": 0,
+   "highlighted_limit": 1,
+   "limit": 3
+  },
+  "stake": "WHITE",
+  "state": "SELECTING_HAND",
+  "used_vouchers": {
+   "v_clearance_sale": "",
+   "v_grabber": "",
+   "v_nacho_tong": "",
+   "v_overstock_norm": "",
+   "v_planet_merchant": "",
+   "v_planet_tycoon": ""
+  },
+  "vouchers": {
+   "cards": [],
+   "count": 0,
+   "highlighted_limit": 1,
+   "limit": 1
+  },
+  "won": false
+ },
+ "label": "C-off N85 decision 211 (request-00212), Verdant Leaf, first in-blind decision"
+}
