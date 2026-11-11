@@ -109,11 +109,10 @@ class Bot:
         self.port = port if port is not None else config.port
         self.model_config = get_model_config(config.model_config)
         self.strategy = StrategyManager(task.strategy)
-        # Opt-in harness behaviour declared in the strategy manifest
+        # Opt-in harness behaviour declared in the strategy manifest (pass 6:
+        # the only source of dig_line; no run-config override, so one queue's
+        # config cannot switch it on for every strategy)
         self.harness: dict[str, Any] = StrategyManifest.from_file(task.strategy).harness
-        if getattr(config, "dig_line", False):
-            # pass 5 G3: a config flag (the strategy files stay as they are)
-            self.harness = {**self.harness, "dig_line": True}
 
         self._balatro: BalatroClient | None = None
         self._llm: LLMClient | None = None
