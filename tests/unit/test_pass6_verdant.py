@@ -50,3 +50,23 @@ def test_disabled_boss_renders_disabled_text_not_the_rule():
     G2 = copy.deepcopy(_g())
     G2["blinds"]["boss"].pop("disabled", None)
     assert "Boss rule now: all cards are debuffed until you sell 1 joker during this blind" in _gamestate(G2)
+
+
+def test_verdant_sale_of_a_negative_joker_removes_its_slot():
+    # Sol H1 blocker 2: Joker Stencil reads limit - count; a sold Negative joker takes its slot with it
+    from balatrollm import analysis
+
+    G = {
+        "jokers": {
+            "cards": [
+                {"key": "j_jolly", "label": "Jolly Joker", "modifier": {"edition": "NEGATIVE"}, "state": {}},
+                {"key": "j_stencil", "label": "Joker Stencil", "modifier": {}, "state": {}},
+            ],
+            "count": 2,
+            "limit": 6,
+        },
+        "blinds": {"boss": {"name": "Verdant Leaf", "status": "Current"}},
+    }
+    Gs = analysis._verdant_sale(G, 0)
+    assert Gs["jokers"]["count"] == 1 and Gs["jokers"]["limit"] == 5
+    assert analysis._verdant_sale(G, 1)["jokers"]["limit"] == 6

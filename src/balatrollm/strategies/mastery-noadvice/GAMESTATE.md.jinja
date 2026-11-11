@@ -162,7 +162,7 @@
 - Reroll cost: ${{ G.round.reroll_cost }}
 {%- set si = (G.luna or {}).shop_intent %}
 {%- if si %}
-- Earlier this shop you said: sold {{ si.sold }} to buy {{ si.item }} ({{ si.field }} {{ si.index }}, ${{ si.price }}); money now ${{ si.money }}.
+- Earlier this shop, when you sold {{ si.sold }}, your reasoning mentioned {{ si.item }} ({{ si.field }} {{ si.index }}, ${{ si.price }}); money now ${{ si.money }}.
 {%- endif %}
 {%- if G.vouchers and G.vouchers.cards %}
 
