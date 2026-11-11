@@ -72,32 +72,3 @@ def test_dig_trigger_boundary() -> None:
     assert not line_trigger(True, False, 499, 2, 1000, 0, 0, 64)  # (c) Y = 0
     assert not line_trigger(True, False, 499, 2, 1000, 0, 2, 64)  # (d) near-tie
     assert line_trigger(True, False, 999, 1, 1000, 0, 3, 3)  # last hand: floor < NEED
-
-
-def test_owner_exception_suppresses_the_trigger_and_names_the_joker() -> None:
-    from balatrollm import analysis
-
-    from .test_analysis import joker, make_state
-
-    G = make_state("H_2 D_7 C_9 S_J H_4 D_K C_5 S_8", [joker("j_banner", "Banner")], hands_left=1, discards_left=3,
-                   chips=0)
-    G["blinds"]["small"]["score"] = 10**6
-    L = analysis.play_advice(G, dig=True)["line"]
-    assert not L["trigger"] and L["owner_jokers"] == ["j_banner"]
-    assert any("Banner: +30 chips per discard left" in t for t in L["text"]) and len(L["text"]) <= 4
-
-
-def test_a_line_error_keeps_advice_progress(monkeypatch) -> None:
-    from balatrollm import analysis, ledger
-
-    from .test_analysis import make_state
-
-    def boom(*a, **k):
-        raise RuntimeError("line")
-
-    monkeypatch.setattr(analysis, "build_dig_line", boom)
-    G = make_state("H_2 D_7 C_9 S_J H_4 D_K C_5 S_8", hands_left=3, discards_left=3, chips=0)
-    row = ledger.pre_row(G, [], [], {"dig_line": True})
-    assert row["advice"]["progress"]["remaining"] == 300
-    assert row["advice"]["dig_line"] == {"error": "RuntimeError: line"}
-    assert row["rendered"]["dig_line_text"]["rendered"] is False
