@@ -332,9 +332,29 @@ def next_blind(G: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def boss_disabled(G: dict[str, Any]) -> bool:
+    """Pass 6 H1a: the boss being played now is disabled (mod field
+    ``blinds.boss.disabled``, live and only for the CURRENT boss; missing = False):
+    a Joker sold under Verdant Leaf, Luchador sold, Chicot."""
+    boss = (G.get("blinds") or {}).get("boss") or {}
+    return boss.get("status") == "CURRENT" and bool(boss.get("disabled"))
+
+
+BOSS_DISABLED_TEXT = "Boss disabled (a joker was sold): no boss rule now"
+
+
+def boss_disabled_text(G: dict[str, Any]) -> str:
+    """The line shown in place of a disabled boss's rule ("" when not disabled)."""
+    if not boss_disabled(G):
+        return ""
+    if "j_chicot" in _joker_keys(G):  # Chicot disables every boss at its start; nothing was sold
+        return "Boss disabled (Chicot): no boss rule now"
+    return BOSS_DISABLED_TEXT
+
+
 def _active_boss(G: dict[str, Any]) -> str:
     cur = current_blind(G)
-    if cur and cur["kind"] == "boss":
+    if cur and cur["kind"] == "boss" and not cur.get("disabled"):  # H1a: disabled = no boss rules
         return str(cur.get("name") or "")
     return ""
 
@@ -3273,11 +3293,18 @@ def boss_impact(
     elif name in ("The Wall", "Violet Vessel"):
         impact = "Score check: buy raw score (xMult/+Mult joker, MAIN_HAND planet) before it."
     elif name == "Verdant Leaf":
-        impact = "Keep a cheap joker you can sell at the start of the round."
+        impact = (
+            "only a joker sold DURING the blind lifts the debuff (shop sales before it do not count); "
+            "selling is optional: compare the keep / sell lines in ROUND"
+        )
     prep = knowledge.BOSS_PREP.get(name, "")
     if name in knowledge.SUIT_BOSSES:
         suit = SUIT_NAME[knowledge.SUIT_BOSSES[name]]
         prep = f"{suit} score 0 against it: jokers that need {suit} do nothing this boss"
+    off = boss_disabled_text(G)
+    if off:  # H1a: a disabled boss has no rule: no raw effect, counter, impact or prep
+        return {"name": name, "effect": off, "score": boss.get("score") or 0,
+                "counter": "", "impact": "", "prep": "", "disabled": True}
     return {
         "name": name,
         "effect": effect,
@@ -3285,6 +3312,99 @@ def boss_impact(
         "counter": knowledge.boss_counter(name),
         "impact": impact,
         "prep": prep,
+        "disabled": False,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Pass 6 H1a (decision B1): Verdant Leaf keep-or-sell facts. Each sale is
+# scored on a copy of G with that joker removed, the joker count lowered,
+# the boss disabled and the debuffs lifted on hand + deck cards; the scorer
+# recomputes copy (Blueprint / Brainstorm) and list-based effects itself.
+# ---------------------------------------------------------------------------
+VERDANT = "Verdant Leaf"
+VERDANT_SHOWN = 5
+# Owned jokers whose value a sale changes in a way the scorer does not model
+# (their "Currently" text would go stale), or effects it gets wrong on
+# debuffed cards: the comparison is hidden and the reason given.
+VERDANT_UNMODELLED = {
+    "j_swashbuckler": "Swashbuckler's Mult depends on the other jokers' sell values",
+    "j_campfire": "Campfire gains Mult for each card sold",
+    "j_bull": "Bull's chips depend on your money, which a sale changes",
+    "j_bootstraps": "Bootstraps' Mult depends on your money, which a sale changes",
+    "j_seeing_double": "Seeing Double's Club check is not modelled on debuffed cards",
+}
+
+
+def _verdant_sale(G: dict[str, Any], i: int) -> dict[str, Any]:
+    """G after selling joker ``i`` under Verdant Leaf (the boss turns off)."""
+    Gs = json.loads(json.dumps(G))
+    jk = Gs.get("jokers") or {}
+    cards = list(jk.get("cards") or [])
+    del cards[i]
+    jk["cards"] = cards
+    jk["count"] = max(int(jk.get("count") or len(cards) + 1) - 1, 0)
+    for area in ("hand", "cards"):
+        for c in _area_cards(Gs, area):
+            st = c.get("state")
+            if isinstance(st, dict) and st.get("debuff"):
+                c["state"] = {k: v for k, v in st.items() if k != "debuff"}
+    boss = (Gs.get("blinds") or {}).get("boss")
+    if isinstance(boss, dict):
+        boss["disabled"] = True
+    return Gs
+
+
+def _verdant_top(G: dict[str, Any]) -> dict[str, Any] | None:
+    """The best listed play (the same plays the prompt lists), as a floor."""
+    plays = [p for p in play_advice(G)["plays"] if not p.get("blocked")]
+    if not plays:
+        return None
+    def floor(p: dict[str, Any]) -> int:
+        return int(p["score"] if p.get("floor") is None else min(p["floor"], p["score"]))
+
+    p = max(plays, key=floor)
+    hand = _area_cards(G, "hand")
+    return {
+        "hand": p["hand"],
+        "cards": list(p["cards"]),
+        "names": ", ".join(card_name(hand[i]) for i in p["cards"]),
+        "score": floor(p),
+    }
+
+
+def verdant_options(G: dict[str, Any]) -> dict[str, Any] | None:
+    """Verdant Leaf (active, not disabled) in SELECTING_HAND with >= 1 joker:
+    {keep, sells (at most 5, highest first), not_shown} or {hidden: reason}."""
+    if G.get("state") != "SELECTING_HAND" or _active_boss(G) != VERDANT:
+        return None
+    jokers = _area_cards(G, "jokers")
+    hand_raw = _area_cards(G, "hand")
+    # no debuffed card in hand = the boss is already off (e.g. an older mod without the field)
+    if not jokers or not any((c.get("state") or {}).get("debuff") for c in hand_raw):
+        return None
+    keys = {j.get("key") for j in jokers}
+    why = [text for key, text in VERDANT_UNMODELLED.items() if key in keys]
+    if any(_norm(c)["enh"] == "WILD" for c in hand_raw):
+        why.append("a debuffed Wild card's suit is not modelled")
+    if why:
+        return {"hidden": "; ".join(why)}
+    keep = _verdant_top(G)
+    if keep is None:
+        return None
+    sells = []
+    for i, j in enumerate(jokers):
+        top = _verdant_top(_verdant_sale(G, i))
+        if top is None:
+            continue
+        label = str(j.get("label") or j.get("key") or "joker")
+        ed = (j.get("modifier") or {}).get("edition")
+        sells.append({"joker": f"{label} ({ed})" if ed else label, **top})
+    sells.sort(key=lambda s: -s["score"])
+    return {
+        "keep": keep,
+        "sells": sells[:VERDANT_SHOWN],
+        "not_shown": max(len(sells) - VERDANT_SHOWN, 0),
     }
 
 
@@ -4521,7 +4641,7 @@ def percentile(values: list[float] | list[int], p: float) -> float:
 def _boss_view(G: dict[str, Any], draws: list) -> tuple[dict[str, Any], list]:
     """G with the ante's boss CURRENT and the draws debuffed by it."""
     boss = (G.get("blinds") or {}).get("boss") or {}
-    name = str(boss.get("name") or "")
+    name = "" if boss.get("disabled") else str(boss.get("name") or "")  # H1a: disabled = no rule
     blinds = {k: dict(v or {}) for k, v in (G.get("blinds") or {}).items()}
     for k, v in blinds.items():
         v["status"] = "CURRENT" if k == "boss" else "DEFEATED"
@@ -4533,12 +4653,13 @@ def _boss_view(G: dict[str, Any], draws: list) -> tuple[dict[str, Any], list]:
     def hit(c: dict[str, Any]) -> bool:
         n = _norm(c)
         return bool((suit and n["suit"] == suit and n["enh"] != "WILD")
-                    or (name in BOSS_DEBUFF_FACES and n["rank"] in FACE_RANKS))
+                    or (name in BOSS_DEBUFF_FACES and n["rank"] in FACE_RANKS)
+                    or name == VERDANT)  # H1a: every card debuffed, jokers kept (never "after selling")
 
     def under(cards: list) -> list:
         return [_debuffed(c) if hit(c) else c for c in cards]
 
-    if suit or name in BOSS_DEBUFF_FACES:
+    if suit or name in BOSS_DEBUFF_FACES or name == VERDANT:
         draws = [(under(h), under(r)) for h, r in draws]
     if name == "The Manacle":  # E2a: hand size - 1 (the same draws minus their last card)
         draws = [(h[:-1], [h[-1], *r] if h else r) for h, r in draws]
@@ -4649,7 +4770,7 @@ def _power_check(G: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
     draws = sample_draws(G)
     now = _strength(G_owned, draws, rounds=True)
     boss = (G.get("blinds") or {}).get("boss") or {}
-    name = str(boss.get("name") or "")
+    name = "" if boss.get("disabled") else str(boss.get("name") or "")  # H1a: disabled = no rule
     Gb, bdraws = _boss_view(G_owned, draws)
     # E2a: every boss's rules inside the estimate (The Eye / The Mouth too)
     bstr = _strength(Gb, bdraws, boss=name, discards=name != "The Water", rounds=True)
@@ -5799,6 +5920,7 @@ TEMPLATE_GLOBALS = {
     "run_status": run_status,
     "shop_impact": shop_impact,
     "boss_impact": boss_impact,
+    "verdant_options": verdant_options,
     "suggest_targets": suggest_targets,
     "joker_order": joker_order,
     "grows_xmult": grows_xmult,
