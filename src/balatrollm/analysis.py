@@ -813,6 +813,7 @@ def estimate_play(
                     mult *= 1.5
             if c["rank"] == "Q":
                 mult += 13 * moons
+    raised_fist: dict[str, Any] | None = None
     if "j_raised_fist" in keyset:
         # The game's rule (card.lua Raised Fist): the lowest-ranked held card,
         # debuffed cards included (only Stone, no rank, is skipped), ties going
@@ -841,6 +842,13 @@ def estimate_play(
             low = [c for c in pool if RANK_VALUE[c["rank"]] == lo][-1]
             if not low.get("debuff"):
                 mult += 2 * CHIP_VALUE[low["rank"]]
+            # pass 6 H1c: the pick, as a fact (held index; None = a face-down stand-in)
+            raised_fist = {
+                "held": next((k for k, c in enumerate(held) if c is low), None),
+                "rank": low["rank"], "debuffed": bool(low.get("debuff")),
+            }
+        else:
+            raised_fist = {"held": None, "rank": None, "debuffed": False}
 
     # Independent joker effects, left to right (with Blueprint/Brainstorm)
     jokers = _area_cards(G, "jokers")  # F6: full list; debuffed jokers skipped in the loop
@@ -892,7 +900,7 @@ def estimate_play(
             mult *= 1.5**baseball
 
     score = 0 if blocked else int(chips * mult * x_total)
-    return {
+    out = {
         "hand": htype,
         "scoring": scoring,
         "score": score,
@@ -902,6 +910,18 @@ def estimate_play(
         "blocked": blocked,
         "unknown": sorted(set(unknown)),
     }
+    # pass 6 H1c: held-card joker facts (only when owned; the score is unchanged)
+    if raised_fist is not None:
+        out["raised_fist"] = raised_fist
+    if "j_blackboard" in keyset or "j_blackboard" in copied:
+        seen = ctx["held"]
+        ok = all(c["suit"] in ("S", "C") or c["enh"] == "WILD" for c in seen) and not ctx["held_masked"]
+        out["blackboard"] = {
+            "met": bool(seen) and ok,  # as scored (_joker_effect)
+            "red": [k for k, c in enumerate(held) if not c["hidden"] and not (c["suit"] in ("S", "C") or c["enh"] == "WILD")],
+            "masked": any(c["hidden"] for c in held),
+        }
+    return out
 
 
 ################################################################################
@@ -1924,7 +1944,74 @@ def _blackboard_pad(
     est = estimate_play(G, [hand_raw[i] for i in cards], [hand_raw[i] for i in range(len(hand)) if i not in cards])
     if int(est["score"]) <= int(p["score"]):
         return p
-    return {**p, "cards": cards, "score": int(est["score"]), "padded": "red cards added: every held card is black (Blackboard X3)"}
+    # pass 6 H1c: scoring positions of the padded selection (were stale)
+    return {**p, "cards": cards, "scoring": est["scoring"], "score": int(est["score"]),
+            "padded": "red cards added: every held card is black (Blackboard X3)"}
+
+
+def _fact_name(c: dict[str, Any]) -> str:
+    return card_name(c) + (" (debuffed)" if (c.get("state") or {}).get("debuff") else "")
+
+
+def _black_in_game(c: dict[str, Any]) -> bool:
+    """Blackboard's test in the game (card.lua: is_suit Clubs/Spades with
+    flush_calc): a Wild card (not debuffed) or a Spade / Club; Stone has no suit."""
+    n = _norm(c)
+    return (n["enh"] == "WILD" and not n["debuff"]) or (not n["stone"] and n["suit"] in ("S", "C"))
+
+
+def selection_facts(G: dict[str, Any], chosen: list[int]) -> dict[str, Any]:
+    """Pass 6 H1c (facts, no advice): for a selection of hand indices, which
+    cards score and, with Raised Fist / Blackboard owned, what the cards left
+    in hand give them. Card names, never indices. ``scoring`` / ``not_scoring``
+    are None when a face-down card is played (unknown)."""
+    seen = mark_view(G)
+    hand = _area_cards(seen, "hand")
+    pick = sorted({int(i) for i in chosen})
+    played = [hand[i] for i in pick]
+    held = [c for i, c in enumerate(hand) if i not in pick]
+    est = estimate_play(seen, played, held)
+    out: dict[str, Any] = {"scoring": None, "not_scoring": None, "held_lines": []}
+    if not any((c.get("state") or {}).get("hidden") for c in played):
+        sc = set(est["scoring"])
+        out["scoring"] = [_fact_name(c) for k, c in enumerate(played) if k in sc]
+        out["not_scoring"] = [_fact_name(c) for k, c in enumerate(played) if k not in sc]
+    hidden_held = any((c.get("state") or {}).get("hidden") for c in held)
+    if (rf := est.get("raised_fist")) is not None:
+        if hidden_held:
+            line = "Raised Fist: lowest card held unknown (face-down cards held)"
+        elif rf["held"] is None:
+            line = "Raised Fist: no ranked card held (adds 0)"
+        else:
+            line = f"Raised Fist: lowest card held {card_name(held[rf['held']])}"
+            if rf["debuffed"]:
+                line += " (debuffed: adds 0)"
+        out["held_lines"].append(line)
+    if "blackboard" in est:
+        breakers = [c for c in held if not _black_in_game(c)]
+        if hidden_held:
+            line = "Blackboard: unknown (face-down cards held)"
+        elif not held:
+            line = "Blackboard: met (no cards held)"
+        elif not breakers:
+            line = "Blackboard: met (every card held is a Spade or Club)"
+        else:
+            line = "Blackboard: not met (held: " + ", ".join(card_name(c) for c in breakers) + ")"
+        out["held_lines"].append(line)
+    return out
+
+
+def play_facts_line(G: dict[str, Any], chosen: list[int]) -> str:
+    """The line added after an executed play (MEMORY; never in outcome.summary)."""
+    f = selection_facts(G, chosen)
+    parts = []
+    if f["scoring"] is not None:
+        txt = "scoring cards: " + (", ".join(f["scoring"]) or "none")
+        if f["not_scoring"]:
+            txt += "; not scoring: " + ", ".join(f["not_scoring"]) + " (add no chips or card triggers)"
+        parts.append(txt)
+    parts += f["held_lines"]
+    return "; ".join(parts)
 
 
 MARK = "The Mark"
@@ -5912,6 +5999,7 @@ def past_lessons(G: dict[str, Any], status: str | None, path: str | None = None)
 
 
 TEMPLATE_GLOBALS = {
+    "selection_facts": selection_facts,
     "suit_pays": suit_pays,
     "analyze_hand": analyze_hand,
     "blind_progress": blind_progress,

@@ -10,7 +10,8 @@
 ## Your last actions (oldest first)
 {% for e in history[-8:] -%}
 - {{ e.method }} {{ e.params | tojson }} -> {{ e.result or "ok" }}
-{% endfor %}
+{% if e.facts %}  ({{ e.facts }})
+{% endif %}{% endfor %}
 {%- else %}
 - First decision of the run.
 {%- endif %}

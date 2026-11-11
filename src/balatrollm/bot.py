@@ -27,6 +27,7 @@ from .analysis import (
     discard_phase_order,
     joker_order,
     mark_view,
+    play_facts_line,
     play_estimate,
     round_record,
     summarize_outcome,
@@ -950,6 +951,7 @@ class Bot:
 
         estimate: int | None = None
         flush_suit: str | None = None
+        facts: str = ""
         if fn_name == "play" and before.get("state") == "SELECTING_HAND":
             try:
                 # C3: under The Mark face-down cards are masked (the estimate
@@ -967,6 +969,12 @@ class Bot:
                     flush_suit = max(set(suits) - {""}, key=suits.count, default=None)
             except (IndexError, TypeError, ValueError):
                 estimate = None
+            try:
+                # pass 6 H1c: which played cards scored + held-card joker facts (own MEMORY line)
+                facts = play_facts_line(before, chosen)
+            except Exception as e:  # noqa: BLE001 - a fact line never breaks a play
+                logger.warning(f"Play facts failed: {e}")
+                facts = ""
 
         ################################################################################
         # Execute tool call
@@ -991,6 +999,8 @@ class Bot:
                 logger.info("Harness locked the shop: Ante 4+ buy left money below $10")
             result = swap_note + summarize_outcome(fn_name, params, before, gamestate)
             self._ledger_out = {"result": "ok", "summary": result, "harness_sold": swap_note or None}
+            if facts:
+                self._ledger_out["play_facts"] = facts
             score: int | None = None
             if fn_name == "play":
                 chips_before = int((before.get("round") or {}).get("chips") or 0)
@@ -1012,6 +1022,7 @@ class Bot:
                     "score": score,
                     "estimate": estimate,
                     **({"flush_suit": flush_suit} if flush_suit else {}),
+                    **({"facts": facts} if facts else {}),
                 }
             )
 
