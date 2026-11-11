@@ -71,6 +71,12 @@ def lovely_log_dir() -> Path | None:
         return None
 
 
+def _warn(msg: str) -> None:
+    """A startup warning in both the log (stderr) and the queue log (stdout)."""
+    logger.warning(msg)
+    print(f"WARNING: {msg}")
+
+
 def _lovely_logs(d: Path) -> set[Path]:
     try:
         return set(d.glob("lovely-*.log"))
@@ -167,8 +173,9 @@ class Executor:
         session dir. A missing log or log dir never blocks or fails a start."""
         log_dir = lovely_log_dir()
         if log_dir is None:
-            logger.warning("Lovely log dir not found: instances start without a port -> log map")
+            _warn("Lovely log dir not found: instances start without a port -> log map")
         seen = _lovely_logs(log_dir) if log_dir else set()
+        before = set(seen)
         tasks: list[asyncio.Task[None]] = []
         found: dict[int, Path] = {}
         try:
@@ -182,7 +189,7 @@ class Executor:
             raise
         results = await asyncio.gather(*tasks, return_exceptions=True)
         if log_dir is not None:
-            self._write_lovely_map(instances, found, session_dir)
+            self._write_lovely_map(instances, found, _lovely_logs(log_dir) - before, session_dir)
         return list(results)
 
     @staticmethod
@@ -215,18 +222,22 @@ class Executor:
                 # instance in a later second so the names cannot collide
                 await asyncio.sleep(1.0)
             else:
-                logger.warning(
+                _warn(
                     f"No new Lovely log for port {port} within {LOVELY_LOG_WAIT_S:g} s: "
                     "starting the next instance (this one stays unmapped)"
                 )
 
     @staticmethod
     def _write_lovely_map(
-        instances: list[tuple[int, BalatroInstance]], found: dict[int, Path], session_dir: Path
+        instances: list[tuple[int, BalatroInstance]],
+        found: dict[int, Path],
+        new_logs: set[Path],
+        session_dir: Path,
     ) -> None:
         """Map port -> Lovely log: the balatrobot "HTTP server listening ...
-        :<port>" line in the file when it is there, else start order."""
-        logged = {path: _lovely_port(path) for path in found.values()}
+        :<port>" line in any log new since the start (a late file is still
+        placed right), else start order."""
+        logged = {path: _lovely_port(path) for path in new_logs | set(found.values())}
         by_line = {p: path for path, p in logged.items() if p is not None}
         mapping: dict[str, dict[str, str] | None] = {}
         for port, _ in instances:
@@ -237,7 +248,7 @@ class Executor:
             mapping[str(port)] = {"file": str(path), "by": how} if path else None
         files = {m["file"] for m in mapping.values() if m}
         if len(files) < len(instances):
-            logger.warning(f"Only {len(files)} distinct Lovely log(s) for {len(instances)} instance(s)")
+            _warn(f"Only {len(files)} distinct Lovely log(s) for {len(instances)} instance(s)")
         # print, like the executor's other progress lines (queue log)
         print(
             "Lovely logs: "
@@ -247,7 +258,7 @@ class Executor:
             session_dir.mkdir(parents=True, exist_ok=True)
             (session_dir / "lovely_logs.json").write_text(json.dumps(mapping, indent=2) + "\n")
         except OSError as e:
-            logger.warning(f"Could not write lovely_logs.json: {e}")
+            _warn(f"Could not write lovely_logs.json: {e}")
 
     async def _stop_instances(self) -> None:
         """Stop all instances."""
