@@ -1,8 +1,8 @@
 """Pass 5 G3: the dig-or-play line is the ONLY change with ``dig_line`` on.
 
 Renders STRATEGY + GAMESTATE + MEMORY for every decision state in the given
-gamestates.jsonl files twice (the strategy's manifest flags, then the same
-flags plus ``dig_line``) and classifies each state: identical, exactly one
+gamestates.jsonl files twice (the strategy's manifest flags with ``dig_line``
+off, then the same flags with it on) and classifies each state: identical, exactly one
 added ``- Dig or play:`` line, that line plus changed ``- Suggested
 discard/action:`` lines (advice on: the line decides the suggestion), or
 other. Prints counts only (logged states
@@ -37,7 +37,7 @@ def render(sm: StrategyManager, G: dict, flags: dict) -> list[str]:
 def main(argv: list[str]) -> None:
     name, files = argv[0], argv[1:]
     sm = StrategyManager(name)
-    off = StrategyManifest.from_file(name).harness
+    off = {**StrategyManifest.from_file(name).harness, "dig_line": False}
     on = {**off, "dig_line": True}
     counts: Counter = Counter()
     for fi, path in enumerate(files):

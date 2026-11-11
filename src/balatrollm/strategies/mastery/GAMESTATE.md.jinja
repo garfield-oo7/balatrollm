@@ -67,6 +67,9 @@
 {%- if boss.prep and G.state in ["SHOP", "SMODS_BOOSTER_OPENED"] %}
 - Boss prep (plan this shop for it): {{ boss.prep }}
 {%- endif %}
+{%- if G.state in ["SHOP", "SMODS_BOOSTER_OPENED"] and boss.name == "Verdant Leaf" and ((G.blinds or {}).boss or {}).status in ["SELECT", "UPCOMING"] %}
+- Joker sales before the Verdant Leaf blind do not count; only a joker sold during that blind turns it off.
+{%- endif %}
 {%- endif %}
 {% if G.state == "SELECTING_HAND" %}
 {%- set A = play_advice(G, dig=true) if flags and flags.dig_line else play_advice(G) -%}
@@ -74,10 +77,27 @@
 # ROUND
 - Blind: {{ P.name }}, target {{ P.target | fmt_num }}, scored {{ P.scored | fmt_num }}
 - NEED {{ P.remaining | fmt_num }} more | HANDS {{ P.hands_left }} | DISCARDS {{ P.discards_left }} | PER_HAND {{ P.per_hand | fmt_num }}
-{%- if P.kind == "boss" and boss.counter %}
+{%- if P.kind == "boss" and boss.disabled %}
+- {{ boss.effect }}
+{%- elif P.kind == "boss" and boss.counter %}
 - Boss rule now: {{ boss.counter }}
 {%- endif %}
-{%- if P.kind == "boss" and "j_luchador" in S.owned_keys %}
+{%- set V = verdant_options(G) %}
+{%- if V %}
+{%- if V.hidden %}
+- Verdant Leaf sale comparison not shown: {{ V.hidden }}
+{%- else %}
+- keep all jokers: cards debuffed, best play {{ V.keep.names }} = {{ V.keep.score | fmt_num }} (floor)
+{%- for s in V.sells %}
+- sell {{ s.joker }}: best play {{ s.names }} = {{ s.score | fmt_num }} (floor)
+{%- endfor %}
+{%- if V.not_shown %}
+- ({{ V.not_shown }} more joker{{ "s" if V.not_shown != 1 }} not shown)
+{%- endif %}
+{%- endif %}
+- Selling is optional; you may win on jokers alone.
+{%- endif %}
+{%- if P.kind == "boss" and "j_luchador" in S.owned_keys and not boss.disabled %}
 {%- set lu = namespace(i=none) %}{% for j in G.jokers.cards %}{% if lu.i is none and j.key == "j_luchador" and not (j.state and j.state.debuff) %}{% set lu.i = loop.index0 %}{% endif %}{% endfor %}
 - Luchador owned (joker {{ lu.i }}): selling it now disables {{ boss.name or "the boss" }} for this blind. If the boss hurts you, sell it (sell joker {{ lu.i }}) before you play.
 {%- endif %}

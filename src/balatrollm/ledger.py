@@ -191,6 +191,24 @@ def pre_row(
     return row
 
 
+def _dig_fields(adv: dict[str, Any], G: dict[str, Any]) -> dict[str, Any] | None:
+    """pass 5 G3: the fact line's ledger fields (None: no line for this state)."""
+    line = adv.get("dig_line")
+    return line and {
+        "play_pct": line["x_pct"],
+        "dig_pct": line["y_pct"],
+        "play_chance": line["play"]["chance"],
+        "dig_chance": line["dig"]["chance"],
+        "play_hand": line["play"]["hand"],
+        "play_cards": _names(G, "hand", line["play"]["cards"]),
+        "dig_cards": _names(G, "hand", line["dig"]["discard"]),
+        "dig_better": line["dig_better"],
+        "samples": line["samples"],
+        "hands_left": line["hands_left"],
+        "discards_left": line["discards_left"],
+    }
+
+
 def finish_row(
     row: dict[str, Any],
     before: dict[str, Any],

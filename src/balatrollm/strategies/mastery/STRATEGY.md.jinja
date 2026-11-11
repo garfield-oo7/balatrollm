@@ -23,10 +23,10 @@ You are an expert Balatro player. Each turn you make exactly ONE tool call.
 3. Otherwise play the "Suggested action" indices (the best listed play plus safe filler cards). A play reaching PER_HAND is played without digging only when DISCARDS = 0 or the dig is not worth its cost.
 4. HANDS = 1: use every remaining discard first (rule 2), then play the best listed play.
 5. Boss rules: The Psychic: play exactly 5 cards. The Tooth: play only the scoring cards. The Needle: use all discards, then play once.
-6. Only the listed plays are real hands. Their scores are FLOOR estimates (random effects not counted), so a real score is usually a little higher.
+6. Only a hand's scoring cards add chips; extra selected cards add no direct chips or card triggers, but they leave your hand (held-card effects such as Raised Fist, Blackboard, Baron and Steel cards see only the cards left in hand). Only the listed plays are real hands. Their scores are FLOOR estimates (random effects not counted), so a real score is usually a little higher.
 7. Consumables during a round: use a Planet only if it is marked [MAIN] or [FEED]; use Black Hole now; use a Tarot only when it shows "Suggested targets", passing those indices as `cards`. Death turns the LEFT card into a copy of the RIGHT card: keep the suggested order.
 8. Never discard to chase a Flush or Straight that is not in "Draws worth chasing".
-9. Do not sell or rearrange jokers during a round. Exceptions: Verdant Leaf boss (sell your weakest joker first), or you own Luchador and the boss blind hurts you: sell Luchador to disable the boss.
+9. Do not sell or rearrange jokers during a round. Exceptions: Verdant Leaf boss (only a joker sold during that blind lifts its debuff; selling is optional: compare the keep / sell lines in ROUND), or you own Luchador and the boss blind hurts you: sell Luchador to disable the boss.
 
 # EXAMPLE (a different hand from yours)
 STATUS: NEED 800, PER_HAND 200, HANDS 4, DISCARDS 3. Listed plays: "Pair [1, 2] = King of Spades, King of Hearts -> 240 (reaches PER_HAND)", "High Card [1] -> 45 (below PER_HAND)". Suggested discard: [0, 5, 6].

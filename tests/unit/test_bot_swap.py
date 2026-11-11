@@ -173,19 +173,24 @@ async def test_retcon_rerolls_once_per_ante_and_keeps_the_next_boss() -> None:
 
 
 async def test_refusal_loop_in_shop_leaves_the_shop() -> None:
-    """Pass 1 Seed P: 5 refusals in a row ended a live run; now the harness
-    leaves the shop after 3 and the run goes on."""
+    """Pass 1 Seed P: 5 refusals in a row ended a live run. Pass 6 H1e: a
+    refused buy is an item-choice miss: it never ends the run, and the harness
+    leaves the shop only after SHOP_ITEM_MISS_CAP (8) in one visit."""
+    from balatrollm.bot import SHOP_ITEM_MISS_CAP
+
     game = AsyncMock()
     game.call.return_value = {"state": "SHOP"}
     bot = _bot(game)
     G = _full_shop()
     G["money"] = 6  # the swap is refused (not enough money)
-    for _ in range(2):
+    for _ in range(SHOP_ITEM_MISS_CAP - 1):
         await bot._execute_tool_call(_buy(0), G)
     assert "next_round" not in [c.args[0] for c in game.call.call_args_list]
+    assert bot._consecutive_vetoes == 0
     await bot._execute_tool_call(_buy(0), G)
     assert [c.args[0] for c in game.call.call_args_list][-1] == "next_round"
     assert bot._consecutive_vetoes == 0 and bot._shop_refusal_exits == 1
+    assert bot._collector.shop_forced_exits == 1
     assert "left the shop" in bot._history[-1]["result"]
 
 

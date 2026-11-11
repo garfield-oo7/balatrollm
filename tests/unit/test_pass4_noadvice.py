@@ -122,8 +122,8 @@ def test_validate_split_full_slot_sell_and_advice_vetoes() -> None:
     assert analysis.validate_action(G, "reroll", {}) is not None  # money line ($8 - $5 < $10)
     # advice off: all three are legal moves
     assert analysis.validate_action(G, "sell", {"joker": 0}, advice=False) is None
-    # a full-slot joker buy is illegal (the game rejects it): refused with "sell one first"
-    assert "sell one first" in analysis.validate_action(G, "buy", {"card": 0}, advice=False)
+    # a full-slot joker buy is illegal (the game rejects it): refused with the procedural steps (pass 6 H1e)
+    assert "sell a joker of your choice with sell, then buy card 0" in analysis.validate_action(G, "buy", {"card": 0}, advice=False)
     assert analysis.validate_action(G, "reroll", {}, advice=False) is None
     G["jokers"]["limit"] = 3  # a free slot: the buy is legal again, advice vetoes off
     G["luna"] = {"first_shop": True, "shop_locked": True}

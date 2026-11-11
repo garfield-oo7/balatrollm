@@ -21,7 +21,7 @@ You are an expert Balatro player. Each turn you make exactly ONE tool call.
 - SCORE next to a shop or pack item = the change to your score per hand if you add it (growing jokers: now and in 3 rounds). "swap for X" = the change if you sell joker X and add this one. "adds N per hand" next to your jokers = what each one adds now.
 {% if G.state == "SELECTING_HAND" %}
 # HOW TO ACT IN A ROUND
-- play: the cards you choose score as one poker hand. discard: they are replaced from your deck (needs DISCARDS > 0).
+- play: the cards you choose form one poker hand. Only the hand's scoring cards add chips (a Pair: its 2 cards; Splash: every played card; a Stone card always scores). Extra selected cards add no direct chips or card triggers, but they leave your hand: held-card effects (Raised Fist, Blackboard, Baron, Steel cards) see only the cards left in hand. discard: they are replaced from your deck (needs DISCARDS > 0).
 - use: a Planet levels up its hand type. A Tarot or Spectral that needs targets takes your hand indices as `cards`. Death turns the LEFT target into a copy of the RIGHT target.
 - sell and rearrange work during a round too (jokers or consumables).
 {% elif G.state == "SHOP" %}

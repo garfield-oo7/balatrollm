@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
@@ -533,6 +534,10 @@ class LLMClient:
     max_retries: int = 3
     sdk_max_retries: int = 0
     api: API = "chat"
+    # pass 6 H1f: connection errors (not timeouts) get their own budget: up to
+    # len + 1 attempts with these waits (89 s of waits; a wait budget, not a
+    # wall-clock cap). Every other error keeps max_retries / 1 s doubling.
+    connection_waits: tuple[float, ...] = (2.0, 4.0, 8.0, 15.0, 30.0, 30.0)
 
     _client: openai.AsyncOpenAI | anthropic.AsyncAnthropic | None = field(
         default=None, init=False, repr=False
@@ -584,86 +589,122 @@ class LLMClient:
         retry_delay = 1.0
         last_exception: Exception | None = None
         policy_hits = 0
+        # pass 6 H1f: two budgets. other_attempts counts every non-connection
+        # failure (timeouts included); conn_failures only connection errors.
+        other_attempts = 0
+        conn_failures = 0
+        conn_attempts = len(self.connection_waits) + 1
+        attempts = 0
+        waited = 0.0
+        outcome = "exhausted"
+        try:
+            while True:
+                attempts += 1
+                try:
+                    if self.api == "anthropic":
+                        client = cast(anthropic.AsyncAnthropic, self._client)
+                        response = anthropic_to_chat_completion(
+                            await client.messages.create(**request_data)
+                        )
+                    elif self.api == "responses":
+                        client = cast(openai.AsyncOpenAI, self._client)
+                        # Params are built dynamically from model_config, which the
+                        # type checker can't match against the SDK's overloads
+                        create = cast(Any, client.responses.create)
+                        response = to_chat_completion(
+                            await create(**request_data),
+                            provider="OpenAI" if self._is_openai_api else None,
+                        )
+                    else:
+                        client = cast(openai.AsyncOpenAI, self._client)
+                        response = await client.chat.completions.create(**request_data)
+                    self._consecutive_timeouts = 0
 
-        for attempt in range(self.max_retries):
-            try:
-                if self.api == "anthropic":
-                    client = cast(anthropic.AsyncAnthropic, self._client)
-                    response = anthropic_to_chat_completion(
-                        await client.messages.create(**request_data)
+                    # Guard against API returning empty/None choices
+                    if not response.choices:
+                        raise LLMClientError("API returned empty response (no choices)")
+
+                    outcome = "recovered"
+                    return response
+
+                except (openai.APITimeoutError, anthropic.APITimeoutError) as e:
+                    # Must stay before APIConnectionError (its subclass)
+                    self._consecutive_timeouts += 1
+                    logger.error(f"LLM timeout ({self._consecutive_timeouts}/3): {e}")
+                    last_exception = e
+
+                    if self._consecutive_timeouts >= 3:
+                        raise LLMTimeoutError("3 consecutive LLM request timeouts") from e
+
+                except (openai.APIConnectionError, anthropic.APIConnectionError) as e:
+                    conn_failures += 1
+                    last_exception = e
+                    logger.error(f"LLM connection error ({conn_failures}/{conn_attempts}): {e}")
+                    if conn_failures >= conn_attempts:
+                        raise LLMRetryExhaustedError(
+                            f"All {conn_attempts} connection retry attempts exhausted"
+                        ) from e
+                    wait = self.connection_waits[conn_failures - 1]
+                    logger.warning(
+                        f"Retrying in {wait:g}s [connection {conn_failures}/{conn_attempts}]"
                     )
-                elif self.api == "responses":
-                    client = cast(openai.AsyncOpenAI, self._client)
-                    # Params are built dynamically from model_config, which the
-                    # type checker can't match against the SDK's overloads
-                    create = cast(Any, client.responses.create)
-                    response = to_chat_completion(
-                        await create(**request_data),
-                        provider="OpenAI" if self._is_openai_api else None,
-                    )
-                else:
-                    client = cast(openai.AsyncOpenAI, self._client)
-                    response = await client.chat.completions.create(**request_data)
-                self._consecutive_timeouts = 0
+                    await asyncio.sleep(wait)
+                    waited += wait
+                    continue
 
-                # Guard against API returning empty/None choices
-                if not response.choices:
-                    raise LLMClientError("API returned empty response (no choices)")
+                except (openai.APIStatusError, anthropic.APIStatusError) as e:
+                    logger.error(f"LLM status error ({e.status_code}): {e}")
+                    last_exception = e
+                    if _is_policy_400(e):
+                        # pass 5 G1e: the first retry stays identical (13 of 13
+                        # recovered in pass 4); the second adds one neutral
+                        # sentence; a third flag is an error call, not an abort
+                        policy_hits += 1
+                        if policy_hits >= 3:
+                            raise LLMPolicyRefusalError(f"usage-policy 400 x3 (last reworded): {e}") from e
+                        if policy_hits == 2:
+                            logger.warning("Usage-policy 400 again: retrying with a reworded prompt")
+                            request_data = self._request_data(model, reworded(messages), tools, model_config)
 
-                return response
+                except openai.LengthFinishReasonError as e:
+                    logger.error(f"LLM length error: {e}")
+                    outcome = "recovered"
+                    return e.completion
 
-            except (openai.APITimeoutError, anthropic.APITimeoutError) as e:
-                self._consecutive_timeouts += 1
-                logger.error(f"LLM timeout ({self._consecutive_timeouts}/3): {e}")
-                last_exception = e
+                except openai.ContentFilterFinishReasonError as e:
+                    logger.error(f"LLM content filter error: {e}")
+                    last_exception = e
 
-                if self._consecutive_timeouts >= 3:
-                    raise LLMTimeoutError("3 consecutive LLM request timeouts") from e
+                except json.JSONDecodeError as e:
+                    logger.error(f"LLM response parse error (malformed JSON): {e}")
+                    last_exception = e
 
-            except (openai.APIConnectionError, anthropic.APIConnectionError) as e:
-                logger.error(f"LLM connection error: {e}")
-                last_exception = e
+                except ResponsesFailedError as e:
+                    logger.error(f"LLM response failed: {e}")
+                    last_exception = e
 
-            except (openai.APIStatusError, anthropic.APIStatusError) as e:
-                logger.error(f"LLM status error ({e.status_code}): {e}")
-                last_exception = e
-                if _is_policy_400(e):
-                    # pass 5 G1e: the first retry stays identical (13 of 13
-                    # recovered in pass 4); the second adds one neutral
-                    # sentence; a third flag is an error call, not an abort
-                    policy_hits += 1
-                    if policy_hits >= 3:
-                        raise LLMPolicyRefusalError(f"usage-policy 400 x3 (last reworded): {e}") from e
-                    if policy_hits == 2:
-                        logger.warning("Usage-policy 400 again: retrying with a reworded prompt")
-                        request_data = self._request_data(model, reworded(messages), tools, model_config)
-
-            except openai.LengthFinishReasonError as e:
-                logger.error(f"LLM length error: {e}")
-                return e.completion
-
-            except openai.ContentFilterFinishReasonError as e:
-                logger.error(f"LLM content filter error: {e}")
-                last_exception = e
-
-            except json.JSONDecodeError as e:
-                logger.error(f"LLM response parse error (malformed JSON): {e}")
-                last_exception = e
-
-            except ResponsesFailedError as e:
-                logger.error(f"LLM response failed: {e}")
-                last_exception = e
-
-            if attempt < self.max_retries - 1:
+                other_attempts += 1
+                if other_attempts >= self.max_retries:
+                    raise LLMRetryExhaustedError(
+                        f"All {self.max_retries} retry attempts exhausted"
+                    ) from last_exception
                 logger.warning(
-                    f"Retrying in {retry_delay}s [{attempt + 1}/{self.max_retries}]"
+                    f"Retrying in {retry_delay}s [{other_attempts}/{self.max_retries}]"
                 )
                 await asyncio.sleep(retry_delay)
+                waited += retry_delay
                 retry_delay *= 2
-
-        raise LLMRetryExhaustedError(
-            f"All {self.max_retries} retry attempts exhausted"
-        ) from last_exception
+        finally:
+            # B3: exactly one line per call that hit >= 1 connection error,
+            # written when the call ends (success, exhaustion, other error or
+            # cancellation); the per-attempt lines above never carry this text
+            if conn_failures:
+                ended = sys.exc_info()[0] if outcome != "recovered" else None
+                why = f" ({ended.__name__})" if ended is not None else ""
+                logger.warning(
+                    f"LLM connection fault: {outcome}{why} after {conn_failures} connection "
+                    f"error(s), {attempts} attempt(s) used, waited {waited:g}s total"
+                )
 
     def _request_data(
         self,

@@ -48,17 +48,38 @@
 {%- if G.state == "SELECTING_HAND" and ((G.blinds or {}).boss or {}).status != "CURRENT" %}
 - Boss this ante (a LATER blind, NOT this one: its rules do not apply now): {{ boss.name }} ({{ boss.score | fmt_num }}): {{ boss.effect }}
 {%- else %}
-- Boss this ante: {{ boss.name }} ({{ boss.score | fmt_num }}): {{ boss.effect }}{% set bf = boss_fact(boss.name) %}{% if bf %} ({{ bf }}){% endif %}
+- Boss this ante: {{ boss.name }} ({{ boss.score | fmt_num }}): {{ boss.effect }}{% set bf = boss_fact(boss.name) if not boss.disabled else "" %}{% if bf %} ({{ bf }}){% endif %}
+{%- endif %}
+{%- if G.state in ["SHOP", "SMODS_BOOSTER_OPENED"] and boss.name == "Verdant Leaf" and ((G.blinds or {}).boss or {}).status in ["SELECT", "UPCOMING"] %}
+- Joker sales before the Verdant Leaf blind do not count; only a joker sold during that blind turns it off.
 {%- endif %}
 {%- endif %}
 {% if G.state == "SELECTING_HAND" %}
 {%- set A = play_advice(G, dig=true) if flags and flags.dig_line else play_advice(G) -%}
 {%- set P = A.progress %}
+{%- set held_jokers = (G.jokers.cards or []) | selectattr("key", "in", ["j_raised_fist", "j_blackboard", "j_blueprint", "j_brainstorm"]) | list %}
 # ROUND
 - Blind: {{ P.name }}, target {{ P.target | fmt_num }}, scored {{ P.scored | fmt_num }}
 - NEED {{ P.remaining | fmt_num }} more | HANDS {{ P.hands_left }} | DISCARDS {{ P.discards_left }} | PER_HAND {{ P.per_hand | fmt_num }}
-{%- if P.kind == "boss" and boss_fact(boss.name) %}
+{%- if P.kind == "boss" and boss.disabled %}
+- {{ boss.effect }}
+{%- elif P.kind == "boss" and boss_fact(boss.name) %}
 - Boss rule now: {{ boss_fact(boss.name) }}
+{%- endif %}
+{%- set V = verdant_options(G) %}
+{%- if V %}
+{%- if V.hidden %}
+- Verdant Leaf sale comparison not shown: {{ V.hidden }}
+{%- else %}
+- keep all jokers: cards debuffed, best play {{ V.keep.names }} = {{ V.keep.score | fmt_num }} (floor)
+{%- for s in V.sells %}
+- sell {{ s.joker }}: best play {{ s.names }} = {{ s.score | fmt_num }} (floor)
+{%- endfor %}
+{%- if V.not_shown %}
+- ({{ V.not_shown }} more joker{{ "s" if V.not_shown != 1 }} not shown)
+{%- endif %}
+{%- endif %}
+- Selling is optional; you may win on jokers alone.
 {%- endif %}
 {%- for sp in A.suit_pays %}
 - {{ sp.label }}: {{ {"H": "Hearts", "D": "Diamonds", "C": "Clubs", "S": "Spades"}[sp.suit] }}{% if sp.label == "Ancient Joker" %} this round{% endif %}, {{ sp.gain }} per {{ {"H": "Heart", "D": "Diamond", "C": "Club", "S": "Spade"}[sp.suit] }} scored
@@ -93,6 +114,7 @@
 {%- if p.repeat %} (Card Sharp X3: type already played this round){% endif %}
 {%- if p.padded %} ({{ p.padded }}){% endif %}
 {%- if p.unknown %} (not counted: {{ p.unknown | join(", ") }}){% endif %}
+{%- if held_jokers %}{% set hf = selection_facts(G, p.cards).held_lines %}{% if hf %} ({{ hf | join("; ") }}){% endif %}{% endif %}
 {% else -%}
 - none
 {% endfor %}
@@ -138,6 +160,10 @@
 - no cards left
 {%- endif %}
 - Reroll cost: ${{ G.round.reroll_cost }}
+{%- set si = (G.luna or {}).shop_intent %}
+{%- if si %}
+- Earlier this shop you said: sold {{ si.sold }} to buy {{ si.item }} ({{ si.field }} {{ si.index }}, ${{ si.price }}); money now ${{ si.money }}.
+{%- endif %}
 {%- if G.vouchers and G.vouchers.cards %}
 
 ## Vouchers (use buy with `voucher`)
