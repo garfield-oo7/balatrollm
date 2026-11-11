@@ -1972,7 +1972,7 @@ def selection_facts(G: dict[str, Any], chosen: list[int]) -> dict[str, Any]:
     held = [c for i, c in enumerate(hand) if i not in pick]
     est = estimate_play(seen, played, held)
     out: dict[str, Any] = {"scoring": None, "not_scoring": None, "held_lines": []}
-    if not any((c.get("state") or {}).get("hidden") for c in played):
+    if not est["blocked"] and not any((c.get("state") or {}).get("hidden") for c in played):
         sc = set(est["scoring"])
         out["scoring"] = [_fact_name(c) for k, c in enumerate(played) if k in sc]
         out["not_scoring"] = [_fact_name(c) for k, c in enumerate(played) if k not in sc]
@@ -5656,13 +5656,18 @@ def shop_buy_veto(G: dict[str, Any], params: dict[str, Any], reasoning: str, aff
     fields = [k for k in given if k in BUY_FIELDS]
     extra = [k for k in given if k not in BUY_FIELDS]
     if extra or len(fields) != 1:
-        target = named[0] if named else None
-        if target is None and "joker" in given:
-            try:
-                j = int(given["joker"])
-            except (TypeError, ValueError):
-                j = -1
-            target = next((o for o in offers if o["field"] == "card" and o["index"] == j and o["set"] == "JOKER"), None)
+        # the shop card at the sent index when it is a joker or named, else the one named offer
+        target = None
+        sent = given.get("joker", given.get(extra[0])) if extra else None
+        try:
+            j = int(sent) if sent is not None else -1
+        except (TypeError, ValueError):
+            j = -1
+        at = next((o for o in offers if o["field"] == "card" and o["index"] == j), None)
+        if at is not None and (at["set"] == "JOKER" or at in named):
+            target = at
+        elif len(named) == 1:
+            target = named[0]
         why = "buy takes exactly one of `card` (shop cards: jokers, Tarots, Planets, Spectrals, playing cards), `voucher` or `pack`"
         if "joker" in extra:
             why += "; `joker` is the sell field"
