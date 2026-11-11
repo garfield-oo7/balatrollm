@@ -350,36 +350,54 @@ def _suit_groups(smeared: bool) -> dict[str, str]:
     return {s: s for s in "HDCS"}
 
 
-def _is_flush(cards: list[dict[str, Any]], need: int, smeared: bool) -> bool:
-    """True if at least ``need`` cards share a suit (Wild counts as any)."""
-    if len(cards) < need:
-        return False
+# The game's get_flush checks suits in this order and returns the first that qualifies.
+_FLUSH_ORDER = "SHCD"
+
+
+def _flush_cards(ranked: list[tuple[int, dict[str, Any]]], need: int, smeared: bool) -> list[int]:
+    """Positions of the cards that make the flush (the game's get_flush): every card of the first
+    qualifying suit group, a non-debuffed Wild counting as any suit. [] when no flush."""
     groups = _suit_groups(smeared)
-    for g in set(groups.values()):
-        n = sum(
-            1
-            for c in cards
-            if c["enh"] == "WILD" or (c["suit"] and groups[c["suit"]] == g)
-        )
-        if n >= need:
-            return True
-    return False
+    seen: list[str] = []
+    for s in _FLUSH_ORDER:
+        g = groups[s]
+        if g in seen:
+            continue
+        seen.append(g)
+        hit = [
+            i
+            for i, c in ranked
+            if (c["enh"] == "WILD" and not c.get("debuff")) or (c["suit"] and groups[c["suit"]] == g)
+        ]
+        if len(hit) >= need:
+            return hit
+    return []
 
 
-def _is_straight(cards: list[dict[str, Any]], need: int, shortcut: bool) -> bool:
-    """True if ``need`` distinct ranks form a run (gap of 1 allowed with Shortcut)."""
-    vals = sorted({RANK_VALUE[c["rank"]] for c in cards if c["rank"]})
+def _straight_cards(ranked: list[tuple[int, dict[str, Any]]], need: int, shortcut: bool) -> list[int]:
+    """Positions of the cards that make the straight (the game's get_straight): every card whose rank
+    lies in the run of at least ``need`` ranks, duplicates included. [] when no straight."""
+    vals = sorted({RANK_VALUE[c["rank"]] for _, c in ranked if c["rank"]})
     if 14 in vals:
         vals = [1, *vals]
-    if len(vals) < need:
-        return False
     max_gap = 2 if shortcut else 1
-    run = 1
+    best: list[int] = []
+    run = vals[:1]
     for a, b in zip(vals, vals[1:], strict=False):
-        run = run + 1 if 0 < b - a <= max_gap else 1
-        if run >= need:
-            return True
-    return run >= need
+        if 0 < b - a <= max_gap:
+            run.append(b)
+        else:
+            if len(run) > len(best):
+                best = run
+            run = [b]
+    if len(run) > len(best):
+        best = run
+    if len(best) < need:
+        return []
+    inrun = set(best)
+    if 1 in inrun:
+        inrun.add(14)
+    return [i for i, c in ranked if c["rank"] and RANK_VALUE[c["rank"]] in inrun]
 
 
 def classify(
@@ -399,8 +417,8 @@ def classify(
     rc = Counter(c["rank"] for _, c in ranked)
     counts = sorted(rc.values(), reverse=True) + [0, 0]
     need = 4 if four_fingers else 5
-    flush = n >= need and _is_flush([c for _, c in ranked], need, smeared)
-    straight = n >= need and _is_straight([c for _, c in ranked], need, shortcut)
+    flush = n >= need and bool(_flush_cards(ranked, need, smeared))
+    straight = n >= need and bool(_straight_cards(ranked, need, shortcut))
 
     def of(k: int) -> list[int]:
         return [i for i, c in ranked if rc[c["rank"]] >= k]
@@ -410,15 +428,17 @@ def classify(
     elif flush and counts[0] == 3 and counts[1] >= 2:
         htype, scoring = "Flush House", allidx
     elif straight and flush:
-        htype, scoring = "Straight Flush", allidx
+        # pass 6 H1b: with Four Fingers only the qualifying cards score (union of the two sets)
+        htype = "Straight Flush"
+        scoring = sorted(set(_flush_cards(ranked, need, smeared)) | set(_straight_cards(ranked, need, shortcut)))
     elif counts[0] == 4:
         htype, scoring = "Four of a Kind", of(4)
     elif counts[0] == 3 and counts[1] >= 2:
         htype, scoring = "Full House", allidx
     elif flush:
-        htype, scoring = "Flush", allidx
+        htype, scoring = "Flush", _flush_cards(ranked, need, smeared)
     elif straight:
-        htype, scoring = "Straight", allidx
+        htype, scoring = "Straight", _straight_cards(ranked, need, shortcut)
     elif counts[0] == 3:
         htype, scoring = "Three of a Kind", of(3)
     elif counts[0] == 2 and counts[1] == 2:
