@@ -142,11 +142,13 @@ def _load_from_yaml(path: Path) -> dict[str, Any]:
         if not isinstance(data["interleave"], bool):
             raise ValueError("interleave must be true or false")
         result["interleave"] = data["interleave"]
-    # pass 5 G3: the dig-or-play fact line (YAML only; not a manifest flag)
+    # pass 6: the dig-or-play fact line is per strategy only (manifest
+    # harness.dig_line); a run-config key would switch it on for every strategy
     if "dig_line" in data:
-        if not isinstance(data["dig_line"], bool):
-            raise ValueError("dig_line must be true or false")
-        result["dig_line"] = data["dig_line"]
+        raise ValueError(
+            "dig_line is not a run-config key: set harness.dig_line in the strategy's "
+            "manifest.json (e.g. strategy mastery-noadvice-line) and remove it from the config"
+        )
     # pass 5 G2: the write-only log book, strategy -> arm name (YAML only)
     if "book" in data and data["book"] is not None:
         if not isinstance(data["book"], dict):
@@ -206,10 +208,6 @@ class Config:
     # pass 5 G2: write-only log book per strategy: {strategy: arm}; the store is
     # <runs_dir>/runs/book/<arm>. Never read by the game prompts.
     book: dict[str, str] = field(default_factory=dict)
-    # pass 5 G3: render the dig-or-play fact line (and, with advice on, let it
-    # decide the suggested dig); passed to the templates as flags.dig_line
-    dig_line: bool = False
-
     # Connection
     host: str = "127.0.0.1"
     port: int = 12346

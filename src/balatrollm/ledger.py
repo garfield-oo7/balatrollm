@@ -108,7 +108,14 @@ def pre_row(
         },
     }
     if state == "SELECTING_HAND":
-        adv = _safe(play_advice, G, dig=bool(flags.get("dig_line")))
+        dig = bool(flags.get("dig_line"))
+        adv = _safe(play_advice, G, dig=dig)
+        line_error = None
+        if dig and "ledger_error" in adv:
+            # pass 6: a failure in the line's code never costs the row its
+            # progress / plays (the measure): retry without the line
+            line_error = adv
+            adv = _safe(play_advice, G)
         if "ledger_error" in adv:
             row["advice"] = adv
         else:
@@ -118,27 +125,31 @@ def pre_row(
                 "suggested_action": _action(adv.get("action"), G),
                 "suggested_discard": _action({"cards": adv.get("discard")} if adv.get("discard") else None, G),
             }
-            if flags.get("dig_line"):
-                # pass 5 G3: the fact line's chances (None: not computed for this state)
-                line = adv.get("dig_line")
-                row["advice"]["dig_line"] = line and {
-                    "play_pct": line["x_pct"],
-                    "dig_pct": line["y_pct"],
-                    "play_chance": line["play"]["chance"],
-                    "dig_chance": line["dig"]["chance"],
-                    "play_hand": line["play"]["hand"],
-                    "play_cards": _names(G, "hand", line["play"]["cards"]),
-                    "dig_cards": _names(G, "hand", line["dig"]["discard"]),
-                    "dig_better": line["dig_better"],
-                    "samples": line["samples"],
-                    "hands_left": line["hands_left"],
-                    "discards_left": line["discards_left"],
-                }
+            if dig:
+                row["advice"]["dig_line"] = line_error or _safe(_dig_fields, adv, G)
     elif state in SHOP_STATES:
         imp = _safe(shop_impact, G)
         row["shop_impact"] = imp
     row["G"] = _no_seed(G)
     return row
+
+
+def _dig_fields(adv: dict[str, Any], G: dict[str, Any]) -> dict[str, Any] | None:
+    """pass 5 G3: the fact line's ledger fields (None: no line for this state)."""
+    line = adv.get("dig_line")
+    return line and {
+        "play_pct": line["x_pct"],
+        "dig_pct": line["y_pct"],
+        "play_chance": line["play"]["chance"],
+        "dig_chance": line["dig"]["chance"],
+        "play_hand": line["play"]["hand"],
+        "play_cards": _names(G, "hand", line["play"]["cards"]),
+        "dig_cards": _names(G, "hand", line["dig"]["discard"]),
+        "dig_better": line["dig_better"],
+        "samples": line["samples"],
+        "hands_left": line["hands_left"],
+        "discards_left": line["discards_left"],
+    }
 
 
 def finish_row(
