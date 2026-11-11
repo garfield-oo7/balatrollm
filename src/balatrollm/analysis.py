@@ -5342,9 +5342,11 @@ def _consumable_full_veto(G: dict[str, Any], params: dict[str, Any]) -> str | No
     count = int(cons.get("count", len(_area_cards(G, "consumables"))) or 0)
     if count < int(cons.get("limit", 2) or 2):
         return None
+    # pass 6 H1e: procedural steps naming the item (Luna chooses what to use or sell)
+    i = int(params["card"])
     return (
         f"Your consumable slots are full ({count}/{int(cons.get('limit', 2) or 2)}). "
-        "To buy this card, use or sell one of your consumables first."
+        f"To buy {_offer_text(card, 'card', i)}: use or sell a consumable of your choice, then buy card {i}."
     )
 
 
@@ -5372,7 +5374,13 @@ def _legal_only_rest(
         except (IndexError, TypeError, ValueError):
             card = {}
         if card.get("set") == "JOKER" and _norm(card)["ed"] != "NEGATIVE":
-            return "Your joker slots are full. To buy a joker with full slots, sell one first."
+            # pass 6 H1e: procedural steps naming the item (Luna chooses the sale)
+            jk = G.get("jokers") or {}
+            i = int(params["card"])
+            return (
+                f"Your joker slots are full ({int(jk.get('count', 0))}/{int(jk.get('limit', 5))}). "
+                f"To buy {_offer_text(card, 'card', i)}: sell a joker of your choice with sell, then buy card {i}."
+            )
     if method == "pack":
         if params.get("skip") and params.get("card") is not None:
             return "Use either `card` or `skip`, not both."
@@ -5485,6 +5493,128 @@ def shop_wrong_item_veto(G: dict[str, Any], params: dict[str, Any], reasoning: s
     cards = _area_cards(G, "shop")
     offers = {i: str(c.get("label") or "") for i, c in enumerate(cards) if c.get("set") in WRONG_ITEM_SETS}
     return wrong_item_veto(offers, params.get("card"), reasoning)
+
+
+BUY_FIELDS = {"card": "shop", "voucher": "vouchers", "pack": "packs"}
+
+
+def _offer_text(card: dict[str, Any], field: str, index: int) -> str:
+    """'Venus (card 1, $3)'."""
+    label = str(card.get("label") or card.get("key") or "item")
+    return f"{label} ({field} {index}, ${int((card.get('cost') or {}).get('buy') or 0)})"
+
+
+def shop_offers(G: dict[str, Any]) -> list[dict[str, Any]]:
+    """Pass 6 H1e/H1d: every shop offer (shop cards, vouchers, packs) with its
+    buy field, index, label, price and id. ``name`` is the label used to match
+    Luna's reasoning: empty for playing cards, face-down cards and the bare
+    "Joker" (the word names any joker)."""
+    out = []
+    for field, area in BUY_FIELDS.items():
+        for i, c in enumerate(_area_cards(G, area)):
+            label = str(c.get("label") or "")
+            nameable = (field != "card" or c.get("set") in WRONG_ITEM_SETS) and not (c.get("state") or {}).get("hidden")
+            out.append({
+                "field": field, "index": i, "label": label or str(c.get("key") or "item"),
+                "name": label if nameable and _offer_core(label) != "joker" else "",
+                "price": int((c.get("cost") or {}).get("buy") or 0), "set": c.get("set"), "id": c.get("id"),
+            })
+    return out
+
+
+def offers_named(offers: list[dict[str, Any]], text: str, mask: tuple[str, ...] = ()) -> list[int]:
+    """Positions in ``offers`` whose name the text mentions (case-insensitive,
+    word boundaries, without a leading "The"; a longer offer name containing a
+    shorter one is taken out first; a pack is also named by its base name,
+    "Buffoon Pack" for Jumbo Buffoon Pack). ``mask``: names taken out of the
+    text first (e.g. the joker just sold)."""
+    low = str(text or "").lower().replace("\u2019", "'")  # curly apostrophe: "Director’s Cut"
+    for m in mask:
+        if core := _offer_core(m):
+            low = re.sub(r"\b" + re.escape(core) + r"\b", " ", low)
+    cores = {k: _offer_core(o["name"]) for k, o in enumerate(offers) if o.get("name")}
+
+    def alts(k: int) -> list[str]:
+        core = cores[k]
+        out = [core]
+        if offers[k]["field"] == "pack":
+            out += [core[len(p):] for p in ("jumbo ", "mega ") if core.startswith(p)]
+        return out
+
+    def names(k: int) -> bool:
+        txt = low
+        for m, other in cores.items():
+            if m != k and len(other) > len(cores[k]) and any(_named_in(a, other) for a in alts(k)):
+                txt = re.sub(r"\b" + re.escape(other) + r"\b", " ", txt)
+        return any(_named_in(a, txt) for a in alts(k))
+
+    return [k for k in sorted(cores) if names(k)]
+
+
+def _offer_where(o: dict[str, Any]) -> str:
+    return f"{o['label']} is {o['field']} {o['index']} (${o['price']})"
+
+
+def shop_buy_veto(G: dict[str, Any], params: dict[str, Any], reasoning: str, afford: bool = True) -> str | None:
+    """Pass 6 H1e (decision B2): a buy the game would reject or that buys
+    another item than the reasoning names, refused with the fix (right field,
+    index and price). Order: field -> wrong item -> index -> affordability;
+    full slots are validate_action's. Repairs Luna's own intent, never advice.
+    ``afford=False`` skips the money check (auto-swap sells first)."""
+    if G.get("state") != "SHOP":
+        return None
+    given = {k: v for k, v in params.items() if v is not None}
+    offers = shop_offers(G)
+    named = [offers[k] for k in offers_named(offers, reasoning)]
+    fields = [k for k in given if k in BUY_FIELDS]
+    extra = [k for k in given if k not in BUY_FIELDS]
+    if extra or len(fields) != 1:
+        target = named[0] if named else None
+        if target is None and "joker" in given:
+            try:
+                j = int(given["joker"])
+            except (TypeError, ValueError):
+                j = -1
+            target = next((o for o in offers if o["field"] == "card" and o["index"] == j and o["set"] == "JOKER"), None)
+        why = "buy takes exactly one of `card` (shop cards: jokers, Tarots, Planets, Spectrals, playing cards), `voucher` or `pack`"
+        if "joker" in extra:
+            why += "; `joker` is the sell field"
+        elif extra:
+            why += f"; `{extra[0]}` is not a buy field"
+        if target:
+            why += f". {_offer_where(target)}: buy with `{target['field']}` {target['index']}"
+        return why + "."
+    field = fields[0]
+    try:
+        i = int(given[field])
+    except (TypeError, ValueError):
+        return f"`{field}` must be an index number."
+    area = [o for o in offers if o["field"] == field]
+    chosen = next((o for o in area if o["index"] == i), None)
+    if chosen is None:
+        what = {"card": "shop cards", "voucher": "vouchers", "pack": "packs"}[field]
+        msg = (f"There is no {field} {i}: no {what} are left in this shop." if not area
+               else f"There is no {field} {i}: the {what} are {field} 0-{len(area) - 1}.")
+        if named:
+            msg += f" Your reasoning names {named[0]['label']}: {_offer_where(named[0])}."
+        return msg
+    if reasoning and chosen not in named and chosen.get("name") and named:
+        o = named[0]
+        return (
+            f"Wrong item? You chose {field} {i} ({chosen['label']}, ${chosen['price']}) but your reasoning names "
+            f"{o['label']}: {_offer_where(o)}. To buy {o['label']}, use buy with `{o['field']}` {o['index']}; "
+            f"to buy {chosen['label']}, name it in your reasoning."
+        )
+    money = int(G.get("money") or 0)
+    # the game allows debt down to -$20 with Credit Card (bankrupt_at)
+    debt = 20 if any(j.get("key") == "j_credit_card" and not _joker_debuffed(j) for j in _area_cards(G, "jokers")) else 0
+    if afford and chosen["price"] > 0 and chosen["price"] > money + debt:
+        msg = f"{chosen['label']} ({field} {i}) costs ${chosen['price']}; you have ${money}."
+        others = [o for o in named if o is not chosen]
+        if others:
+            msg += f" Your reasoning also names {others[0]['label']}: {_offer_where(others[0])}."
+        return msg
+    return None
 
 
 def validate_action(

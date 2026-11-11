@@ -31,7 +31,7 @@ from .analysis import (
     round_record,
     summarize_outcome,
     swap_plan,
-    shop_wrong_item_veto,
+    shop_buy_veto,
     validate_action,
 )
 from .client import BalatroClient, BalatroError
@@ -70,6 +70,12 @@ class _RunFilter(logging.Filter):
 SHOP_STATES = ("SHOP", "SMODS_BOOSTER_OPENED")
 # Refused calls in a row in one shop visit before the harness leaves the shop
 SHOP_REFUSALS_TO_LEAVE = 3
+# Pass 6 H1e (decision B2): a refused or rejected buy / sell / reroll in the
+# shop is an item-choice miss: it never ends the run and never leaves the shop
+# before this many in one shop visit (bounded fallback, counted in stats)
+SHOP_ITEM_MISS_CAP = 8
+RECOVERABLE_SHOP_METHODS = ("buy", "sell", "reroll")
+RECOVERABLE_GAME_ERRORS = ("BAD_REQUEST", "NOT_ALLOWED")
 
 
 
@@ -102,6 +108,8 @@ class Bot:
     _game_started: bool = False
     _end_state: dict[str, Any] | None = None
     book_update_path: Path | None = None
+    # Pass 6 H1e: item-choice misses in this shop visit
+    _shop_item_misses: int = 0
 
     def __init__(self, task: Task, config: Config, port: int | None = None) -> None:
         self.task = task
@@ -878,12 +886,18 @@ class Bot:
         veto: str | None = None
         self._track_shop_visit(before)
         if self.harness.get("validate_actions") and before:
-            veto = validate_action(
-                before, fn_name, params, self._shop_rerolls, advice=self._advice_vetoes_on()
-            )
-            if veto is None and fn_name == "buy":
-                # pass 4 F1: wrong-item buy (repairs Luna's intent; on with advice vetoes off too)
-                veto = shop_wrong_item_veto(before, params, str(fn_args.get("reasoning") or ""))
+            if fn_name == "buy":
+                # pass 4 F1 / pass 6 H1e: wrong field, wrong item, bad index and
+                # money first (repairs Luna's intent; on with advice vetoes off
+                # too), full slots after (validate_action)
+                veto = shop_buy_veto(
+                    before, params, str(fn_args.get("reasoning") or ""),
+                    afford=not self.harness.get("auto_swap_jokers"),
+                )
+            if veto is None:
+                veto = validate_action(
+                    before, fn_name, params, self._shop_rerolls, advice=self._advice_vetoes_on()
+                )
         max_rearranges = int(self.harness.get("max_consecutive_rearranges", 0) or 0)
         if fn_name == "rearrange":
             self._consecutive_rearranges += 1
@@ -1004,7 +1018,9 @@ class Bot:
             return gamestate
 
         except BalatroError as e:
-            return await self._handle_failed_call(f"BalatroError: {e}", before)
+            return await self._handle_failed_call(
+                f"BalatroError: {e}", before, err_name=(e.data or {}).get("name")
+            )
 
         except httpx.TransportError as e:
             logger.warning(f"Game transport error during tool call: {e}")
@@ -1064,9 +1080,11 @@ class Bot:
         in_shop = before.get("state") in SHOP_STATES
         if in_shop and not self._in_shop:
             self._shop_visits += 1
+            self._shop_item_misses = 0
         if not in_shop:
             self._shop_rerolls = 0
             self._shop_locked = False
+            self._shop_item_misses = 0
         self._in_shop = in_shop
 
     def _luna_reroll_on(self) -> bool:
@@ -1147,6 +1165,8 @@ class Bot:
         self._ledger_out = {"result": "vetoed", "msg": msg}
         self._last_failed_msg = f"Refused by harness: {msg}"
         self._collector.record_call("failed")
+        if self._is_shop_item_miss(before, game=False):
+            return await self._shop_item_miss(before or {})
         self._consecutive_vetoes += 1
         state = (before or {}).get("state")
         if state in SHOP_STATES:
@@ -1158,14 +1178,38 @@ class Bot:
             raise BotError("Too many consecutive refused calls")
         return await self._balatro.call("gamestate")
 
-    async def _leave_shop(self, before: dict[str, Any]) -> dict[str, Any]:
+    def _is_shop_item_miss(self, before: dict[str, Any] | None, game: bool, err_name: str | None = None) -> bool:
+        """Pass 6 H1e: a refused (harness) or rejected (game BAD_REQUEST /
+        NOT_ALLOWED) buy / sell / reroll in the SHOP: the cause is the item
+        choice (wrong item or field, bad index, money, full slots, nothing
+        to redeem), so it is recoverable."""
+        call = getattr(self, "_ledger_call", None)
+        if (before or {}).get("state") != "SHOP" or not call or call[0] not in RECOVERABLE_SHOP_METHODS:
+            return False
+        return not game or err_name in RECOVERABLE_GAME_ERRORS
+
+    async def _shop_item_miss(self, before: dict[str, Any]) -> dict[str, Any]:
+        """Count a recoverable shop miss for this visit only (never toward the
+        run-ending limits); at SHOP_ITEM_MISS_CAP the harness leaves the shop."""
+        assert self._balatro is not None
+        self._shop_item_misses += 1
+        self._ledger_out["shop_item_miss"] = self._shop_item_misses
+        if self._shop_item_misses >= SHOP_ITEM_MISS_CAP:
+            return await self._leave_shop(before, cap=True)
+        return await self._balatro.call("gamestate")
+
+    async def _leave_shop(self, before: dict[str, Any], cap: bool = False) -> dict[str, Any]:
         """Skip an open pack, then call next_round for Luna (logged)."""
         assert self._balatro is not None
-        n = max(getattr(self, "_shop_misses", 0), self._consecutive_vetoes)
+        n = self._shop_item_misses if cap else max(getattr(self, "_shop_misses", 0), self._consecutive_vetoes)
+        where = "in this shop" if cap else "in a row"
         self._consecutive_vetoes = 0
         self._shop_misses = 0
+        self._shop_item_misses = 0
         self._consecutive_faileds = 0
         self._shop_refusal_exits += 1
+        if self._collector is not None:
+            self._collector.shop_forced_exits = self._shop_refusal_exits  # stats.json (pass 6 H1e)
         money = before.get("money")
         forced = self._ledger_out.setdefault("harness_forced", [])  # B0c (Sol g1 #3)
         try:
@@ -1180,9 +1224,9 @@ class Bot:
             logger.warning(f"Harness could not leave the shop: {e}")
             forced.append(f"failed: {e}")
             return await self._balatro.call("gamestate")
-        logger.info(f"Harness left the shop after {n} refusals in a row (money ${money})")
+        logger.info(f"Harness left the shop after {n} refusals {where} (money ${money})")
         self._last_failed_msg = (
-            f"The harness left the shop for you after {n} refused or rejected actions in a row."
+            f"The harness left the shop for you after {n} refused or rejected actions {where}."
         )
         self._history.append(
             {
@@ -1199,19 +1243,27 @@ class Bot:
         )
         return gamestate
 
-    async def _handle_failed_call(self, msg: str, before: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def _handle_failed_call(
+        self, msg: str, before: dict[str, Any] | None = None, err_name: str | None = None
+    ) -> dict[str, Any]:
         """Handle valid tool call that resulted in BalatroError.
 
         Pass 5 G1f: in a shop, game rejections count with harness refusals
-        toward leaving the shop, checked before the game-ending limit."""
+        toward leaving the shop, checked before the game-ending limit.
+        Pass 6 H1e: an item-choice rejection in the shop (``err_name``
+        BAD_REQUEST / NOT_ALLOWED of buy / sell / reroll) counts only toward
+        the per-visit cap."""
         assert self._balatro is not None
         assert self._collector is not None
 
         logger.warning(f"Failed call: {msg}")
         self._ledger_out = {"result": "failed", "msg": msg}
         self._last_failed_msg = msg
-        self._collector.record_failure()
         self._collector.record_call("failed")
+        if self._is_shop_item_miss(before, game=True, err_name=err_name):
+            self._consecutive_errors = 0  # a valid tool call, as below
+            return await self._shop_item_miss(before or {})
+        self._collector.record_failure()
 
         # Track consecutive failed calls separately
         self._consecutive_faileds += 1

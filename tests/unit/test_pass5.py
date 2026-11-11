@@ -115,7 +115,9 @@ async def test_policy_400_identical_retry_then_reworded_then_error_call() -> Non
 
 async def test_shop_rejections_and_refusals_together_leave_the_shop() -> None:
     """L1 N34: two game rejections + one more in a shop -> the harness leaves the
-    shop (next_round), the game is not ended; outside a shop 3 rejections still end it."""
+    shop (next_round), the game is not ended; outside a shop 3 rejections still end it.
+    Pass 6 H1e: this old path stays for shop misses that are not item-choice
+    misses (here: no buy / sell / reroll call recorded); see test_pass6_h1e."""
     from unittest.mock import AsyncMock
 
     import pytest
