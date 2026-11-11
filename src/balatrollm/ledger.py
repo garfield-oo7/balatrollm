@@ -79,6 +79,53 @@ def _action(a: Any, G: dict[str, Any]) -> Any:
     return out
 
 
+def _line_row(line: dict[str, Any] | None, G: dict[str, Any]) -> dict[str, Any] | None:
+    """Pass 6 H2: the line's fields (cards named; None: no hand left)."""
+    if line is None:
+        return None
+    if "error" in line:
+        return {"error": line["error"]}
+    play = line.get("play") or {}
+    out: dict[str, Any] = {
+        "need": line.get("need"),
+        "pace": line.get("pace"),
+        "hands_left": line.get("hands_left"),
+        "no_play": play.get("none"),
+        "play_cards": _names(G, "hand", play.get("cards")),
+        "play_hand": play.get("hand"),
+        "play_floor": play.get("floor"),
+        "play_unknown": play.get("unknown"),
+        "play_blocked": play.get("blocked"),
+        "comparison": line.get("comparison"),
+        "suppressed": line.get("suppressed"),
+        "near_tie": line.get("near_tie"),
+        "trigger": line.get("trigger"),
+        "note_zero": line.get("note_zero"),
+        "owner_jokers": line.get("owner_jokers"),
+        "text": line.get("text"),
+    }
+    cmp = line.get("sampled")
+    if cmp:
+        out.update({
+            "play_pct": cmp["x_pct"],
+            "dig_pct": cmp["y_pct"],
+            "play_chance": cmp["play"]["chance"],
+            "dig_chance": cmp["dig"]["chance"],
+            "play_hits": cmp["play"]["hits"],
+            "dig_hits": cmp["dig"]["hits"],
+            "samples": cmp["samples"],
+            "dig_cards": _names(G, "hand", cmp["dig"]["discard"]),
+            "keep_cards": _names(G, "hand", cmp["dig"].get("keep")),
+            "dig_better": cmp["dig_better"],
+            "discards_left": cmp["discards_left"],
+            "play_hands_used": cmp["play"].get("hands_used"),
+            "dig_hands_used": cmp["dig"].get("hands_used"),
+            "play_discards_used": cmp["play"].get("discards_used"),
+            "dig_discards_used": cmp["dig"].get("discards_used"),
+        })
+    return out
+
+
 def pre_row(
     G: dict[str, Any],
     rounds: list[dict[str, Any]],
@@ -109,6 +156,10 @@ def pre_row(
     }
     if state == "SELECTING_HAND":
         adv = _safe(play_advice, G, dig=bool(flags.get("dig_line")))
+        line_error = None
+        if "ledger_error" in adv and flags.get("dig_line"):
+            # pass 6 H2: a line failure never removes advice.progress (F only)
+            line_error, adv = adv["ledger_error"], _safe(play_advice, G)
         if "ledger_error" in adv:
             row["advice"] = adv
         else:
@@ -118,22 +169,21 @@ def pre_row(
                 "suggested_action": _action(adv.get("action"), G),
                 "suggested_discard": _action({"cards": adv.get("discard")} if adv.get("discard") else None, G),
             }
-            if flags.get("dig_line"):
-                # pass 5 G3: the fact line's chances (None: not computed for this state)
-                line = adv.get("dig_line")
-                row["advice"]["dig_line"] = line and {
-                    "play_pct": line["x_pct"],
-                    "dig_pct": line["y_pct"],
-                    "play_chance": line["play"]["chance"],
-                    "dig_chance": line["dig"]["chance"],
-                    "play_hand": line["play"]["hand"],
-                    "play_cards": _names(G, "hand", line["play"]["cards"]),
-                    "dig_cards": _names(G, "hand", line["dig"]["discard"]),
-                    "dig_better": line["dig_better"],
-                    "samples": line["samples"],
-                    "hands_left": line["hands_left"],
-                    "discards_left": line["discards_left"],
+        if flags.get("dig_line"):
+            # pass 6 H2: the reworked fact line (its own try: never touches advice.progress)
+            try:
+                line = adv.get("line") if line_error is None else {"error": line_error, "text": []}
+                row["advice"]["dig_line"] = _line_row(line, G)
+                row["rendered"]["dig_line_text"] = {
+                    "rendered": bool(line and line.get("text")),
+                    "lines": len((line or {}).get("text") or []),
+                    "trigger": bool(line and line.get("trigger")),
+                    "near_tie": bool(line and line.get("near_tie")),
+                    "suppressed": (line or {}).get("suppressed"),
+                    "error": (line or {}).get("error"),
                 }
+            except Exception as e:  # the ledger must never break a game
+                row["advice"]["dig_line"] = {"ledger_error": f"{type(e).__name__}: {e}"}
     elif state in SHOP_STATES:
         imp = _safe(shop_impact, G)
         row["shop_impact"] = imp

@@ -2616,6 +2616,34 @@ def _dig_after_play(G: dict[str, Any], htype: str, arm: bool) -> dict[str, Any]:
     return G2
 
 
+def _dig_guard(
+    G: dict[str, Any], play_cards: list[int], progress: dict[str, Any], discards: int
+) -> tuple[str, Any] | None:
+    """Why ``dig_or_play`` has no comparison for this state (None: supported).
+    The first failing guard, in order: (code, detail) - pass 6 H2 names it."""
+    hand_raw = _area_cards(G, "hand")
+    if int(progress.get("remaining") or 0) <= 0:
+        return ("beaten", None)
+    if discards <= 0:
+        return ("no_discard", None)
+    if int(progress.get("hands_left") or 0) < 1:
+        return ("no_hand", None)
+    if not play_cards:
+        return ("no_play", None)
+    if not _area_cards(G, "cards"):
+        return ("empty_deck", None)
+    if not hand_raw:
+        return ("no_hand_cards", None)
+    if any(_norm(c)["hidden"] for c in hand_raw):
+        return ("face_down", None)
+    if _active_boss(G) in DIG_UNSUPPORTED:
+        return ("boss", _active_boss(G))
+    bad = (set(_joker_keys(G)) | set(copied_keys(G))) & DIG_UNSUPPORTED_JOKERS
+    if bad:
+        return ("joker", sorted(bad))
+    return None
+
+
 def dig_or_play(
     G: dict[str, Any],
     plays: list[dict[str, Any]],
@@ -2632,12 +2660,7 @@ def dig_or_play(
     deck_raw = _area_cards(G, "cards")
     remaining = int(progress.get("remaining") or 0)
     h = int(progress.get("hands_left") or 0)
-    if (
-        remaining <= 0 or discards <= 0 or h < 1 or not play_cards or not deck_raw or not hand_raw
-        or any(_norm(c)["hidden"] for c in hand_raw)
-        or _active_boss(G) in DIG_UNSUPPORTED
-        or (set(_joker_keys(G)) | set(copied_keys(G))) & DIG_UNSUPPORTED_JOKERS
-    ):
+    if _dig_guard(G, play_cards, progress, discards) is not None:
         return None
     key = _state_key(G, "dig", margin, sorted(play_cards), sorted(suggested or []))
     live = [p for p in plays if not p["blocked"]]
@@ -2705,15 +2728,17 @@ def _dig_sample(
         return 3 if serpent else max(size - n_held, 0)
 
     def run(held: list[dict[str, Any]], perm: list[int], ptr: int, hl: int, dl: int, need: float,
-            types: tuple[str, ...]) -> bool:
-        """The continuation policy from a hand held (``ptr``: next card of ``perm``)."""
+            types: tuple[str, ...]) -> tuple[bool, int, int]:
+        """The continuation policy from a hand held (``ptr``: next card of ``perm``).
+        Returns (blind beaten, hands played, discards used) - pass 6 H2 (R4)."""
+        nh = nd = 0
         while True:
             if not held:
-                return False  # deck and hand used up: the blind is lost on this draw (Sol g3 #3)
+                return False, nh, nd  # deck and hand used up: the blind is lost on this draw (Sol g3 #3)
             memo = {"norm": [norms[id(c)] for c in held]}
             s, t, play = _best_play(G_at(hl, dl, types), held, pad, memo=memo, ctx=ctx, expected=False, stop_at=need)
             if s >= need:
-                return True
+                return True, nh + 1, nd
             if dl > 0 and ptr < len(perm) and s * hl < need:
                 disc = set(_discard_choice(memo["norm"], set(play), min(limit, len(perm) - ptr), keys=keys))
                 if disc:
@@ -2722,10 +2747,12 @@ def _dig_sample(
                     held = kept + [deck[j] for j in perm[ptr:ptr + n]]
                     ptr += n
                     dl -= 1
+                    nd += 1
                     continue
             hl -= 1
+            nh += 1
             if hl <= 0:
-                return False
+                return False, nh, nd
             if play:
                 need -= s
                 types = (*types, t)
@@ -2742,27 +2769,40 @@ def _dig_sample(
     s0 = 0 if est["blocked"] else int(est["score"])
     rest0 = [c for i, c in enumerate(hand_raw) if i not in chosen]
 
-    def play_hit(perm: list[int]) -> bool:
+    def play_hit(perm: list[int]) -> tuple[bool, int, int]:
         if s0 >= goal:
-            return True
+            return True, 1, 0
         if h <= 1:
-            return False
+            return False, 1, 0
         n = min(refill(len(rest0)), len(perm))
-        return run(rest0 + [deck[j] for j in perm[:n]], perm, n, h - 1, discards, goal - s0, (est["hand"],))
+        hit, nh, nd = run(rest0 + [deck[j] for j in perm[:n]], perm, n, h - 1, discards, goal - s0, (est["hand"],))
+        return hit, nh + 1, nd
 
-    def dig_hit(kept: list[dict[str, Any]], perm: list[int]) -> bool:
+    def dig_hit(kept: list[dict[str, Any]], perm: list[int]) -> tuple[bool, int, int]:
         n = min(refill(len(kept)), len(perm))
-        return run(kept + [deck[j] for j in perm[:n]], perm, n, h, discards - 1, goal, ())
+        hit, nh, nd = run(kept + [deck[j] for j in perm[:n]], perm, n, h, discards - 1, goal, ())
+        return hit, nh, nd + 1
 
-    play_hits = sum(play_hit(p) for p in perms)
+    def used(results: list[tuple[bool, int, int]]) -> dict[str, Any]:
+        """Pass 6 H2 (R4): mean hands / discards used on the CLEARING samples (None: no clear)."""
+        won = [r for r in results if r[0]]
+        if not won:
+            return {"hands_used": None, "discards_used": None}
+        return {"hands_used": sum(r[1] for r in won) / len(won), "discards_used": sum(r[2] for r in won) / len(won)}
+
+    play_res = [play_hit(p) for p in perms]
+    play_hits = sum(r[0] for r in play_res)
     stats = []
     for d in options:
         kept = [c for i, c in enumerate(hand_raw) if i not in d]
-        stats.append([d, kept, sum(dig_hit(kept, p) for p in perms[:screen]), screen])
+        res = [dig_hit(kept, p) for p in perms[:screen]]
+        stats.append([d, kept, sum(r[0] for r in res), screen, res])
     for k in sorted(range(len(stats)), key=lambda k: -stats[k][2])[:DIG_FINAL]:
-        d, kept, hits, _n = stats[k]
-        stats[k][2] = hits + sum(dig_hit(kept, p) for p in perms[screen:])
+        d, kept, hits, _n, res = stats[k]
+        more = [dig_hit(kept, p) for p in perms[screen:]]
+        stats[k][2] = hits + sum(r[0] for r in more)
         stats[k][3] = len(perms)
+        stats[k][4] = res + more
     done = [s for s in stats if s[3] == len(perms)]
     top = max(done, key=lambda s: s[2], default=None)
     if top is None:  # no discard option (nothing to discard): no line
@@ -2775,8 +2815,10 @@ def _dig_sample(
         "remaining": remaining,
         "samples": n,
         "options": len(options),
-        "play": {"cards": sorted(chosen), "hand": est["hand"], "hits": play_hits, "chance": play_hits / n},
-        "dig": {"discard": list(top[0]), "hits": dig_hits, "chance": dig_hits / n},
+        "play": {"cards": sorted(chosen), "hand": est["hand"], "hits": play_hits, "chance": play_hits / n,
+                 "floor": s0, **used(play_res)},
+        "dig": {"discard": list(top[0]), "hits": dig_hits, "chance": dig_hits / n,
+                "keep": [i for i in range(len(hand_raw)) if i not in top[0]], **used(top[4])},
         "x_pct": round(play_hits * 100 / n),
         "y_pct": round(dig_hits * 100 / n),
         # the owner's strict rule: dig only if it is better; ties -> play
@@ -2835,6 +2877,206 @@ def _best_play_action(
     if not _padding_holds(G, hand_raw, list(best["cards"]), cards, None):  # F2
         cards = list(best["cards"])
     return {"tool": "play", "cards": cards, "why": f"best play ({best['hand']})"}
+
+
+# ---------------------------------------------------------------------------
+# Pass 6 H2: the reworked dig-or-play FACT line (harness flag ``dig_line``,
+# strategy mastery-noadvice-line = arm F). Frozen rules R1-R7 (luna-notes
+# pass6_builders/brief_h2.md):
+#   R1 every SELECTING_HAND state with hands left: NEED, pace (rounded up)
+#      and the modeled play = the complete _best_play_action selection
+#      (padding included) scored by estimate_play against ITS held remainder
+#      (a floor estimate), or one clause saying there is none;
+#   R2 the sampled comparison only when dig_or_play returns one, on the SAME
+#      cards; else the concrete reason;
+#   R3 owner exceptions (held or copied) never get the dig trigger;
+#   R4 near-tie |Y - X| <= max(2, 2 SE) with what separates the branches;
+#   R5 the dig trigger; R6 "play 0 / dig > 0" NOTE; R7 facts only, <= 4 lines.
+# ---------------------------------------------------------------------------
+LINE_OWNER_JOKERS = {  # R3: key -> the joker and how it makes discards / hand order costly
+    "j_card_sharp": "Card Sharp: a repeated hand type scores X3",
+    "j_acrobat": "Acrobat: the last hand scores X3",
+    "j_banner": "Banner: +30 chips per discard left",
+    "j_blue_joker": "Blue Joker: +2 chips per card left in the deck",
+    "j_delayed_grat": "Delayed Gratification: $2 per discard if none used",
+}
+LINE_TIE_COSTS = ("j_banner", "j_blue_joker", "j_delayed_grat")  # R4: discard costs named on a near-tie
+LINE_MAX_LINES = 4
+
+
+def modeled_play(
+    G: dict[str, Any],
+    plays: list[dict[str, Any]],
+    hand: list[dict[str, Any]],
+    hand_raw: list[dict[str, Any]],
+    plan: dict[str, Any],
+    boss: str,
+    square: bool,
+) -> dict[str, Any]:
+    """R1: the complete modeled play (``_best_play_action``, padding included)
+    scored by estimate_play against its OWN held remainder, never a listed
+    play's score copied onto a padded selection (N65). {"none": reason} when
+    no action is knowable (face-down cards, no listed play, every play blocked)."""
+    if any(c["hidden"] for c in hand):
+        return {"none": "face-down cards in hand"}
+    if not plays:
+        return {"none": "no listed play"}
+    if all(p["blocked"] for p in plays):
+        return {"none": f"every listed play is blocked ({plays[0]['blocked']})"}
+    cards = sorted(_best_play_action(G, plays, hand, hand_raw, plan, boss, square)["cards"])
+    chosen = set(cards)
+    # the same call (card order, view) as the sampler's play-now floor ``s0``
+    est = estimate_play(G, [hand_raw[i] for i in cards], [c for i, c in enumerate(hand_raw) if i not in chosen])
+    return {
+        "cards": cards,
+        "hand": est["hand"],
+        "floor": 0 if est["blocked"] else int(est["score"]),
+        "unknown": list(est["unknown"]),
+        "blocked": est["blocked"],
+    }
+
+
+def line_near_tie(x: int, y: int, n: int) -> bool:
+    """R4 (frozen): near-tie iff |Y - X| <= max(2, 2 * SE), SE in counts."""
+    se = math.sqrt(x * (n - x) / n + y * (n - y) / n) if n > 0 else 0.0
+    return abs(y - x) <= max(2.0, 2 * se)
+
+
+def line_trigger(shown: bool, owner: bool, floor: int, hands_left: int, need: int, x: int, y: int, n: int) -> bool:
+    """R5 (frozen): (a) comparison shown, no owner-exception joker; (b) the
+    modeled play is below pace (floor * hands_left < NEED); (c) Y >= 1;
+    (d) Y > X and not a near-tie."""
+    return (
+        shown
+        and not owner
+        and floor * hands_left < need
+        and y >= 1
+        and y > x
+        and not line_near_tie(x, y, n)
+    )
+
+
+def _line_reason(G: dict[str, Any], progress: dict[str, Any], guard: tuple[str, Any] | None) -> str:
+    """R2: the concrete reason a sampled comparison is not shown."""
+    code, detail = guard if guard is not None else ("no_option", None)
+    if code == "boss":
+        effect = str(progress.get("effect") or "").strip().rstrip(".")
+        return f"{detail}: {effect}" if effect else str(detail)
+    if code == "joker":
+        out = []
+        for key in detail:
+            if key in LINE_OWNER_JOKERS:
+                out.append(LINE_OWNER_JOKERS[key])
+                continue
+            j = next((j for j in _area_cards(G, "jokers") if j.get("key") == key), {})
+            label = str(j.get("label") or key)
+            effect = str((j.get("value") or {}).get("effect") or "").strip().rstrip(".")
+            out.append(f"{label}: {effect}" if effect else f"{label}: changes with discards or played hands")
+        return "; ".join(out)
+    return {
+        "beaten": "NEED is 0",
+        "no_discard": "no discard left",
+        "no_hand": "no hand left",
+        "no_play": "no modeled play",
+        "empty_deck": "the deck is empty",
+        "no_hand_cards": "no cards in hand",
+        "face_down": "face-down cards in hand",
+        "no_option": "no discard option",
+    }.get(code, code)
+
+
+def dig_line_facts(
+    G: dict[str, Any],
+    progress: dict[str, Any],
+    play: dict[str, Any],
+    cmp: dict[str, Any] | None,
+    guard: tuple[str, Any] | None,
+) -> dict[str, Any]:
+    """The line's fields and its text (<= 4 lines, facts only: R7)."""
+    hand_raw = _area_cards(G, "hand")
+
+    def names(idx: list[int]) -> str:
+        return " ".join(card_name(hand_raw[i]) for i in idx)
+
+    need = int(progress.get("remaining") or 0)
+    h = int(progress.get("hands_left") or 0)
+    pace = -(-need // h) if h else need
+    keys = set(_joker_keys(G)) | set(copied_keys(G))
+    owner = [k for k in LINE_OWNER_JOKERS if k in keys]
+    out: dict[str, Any] = {"need": need, "hands_left": h, "pace": pace, "play": play, "owner_jokers": owner}
+    first = f"Dig or play: NEED {fmt_num(need)} with {h} hand{'s' if h != 1 else ''} left = about {fmt_num(pace)} per hand"
+    if "none" in play:
+        first += f"; no modeled play: {play['none']}"
+    else:
+        q = []
+        if play["blocked"]:
+            q.append(f"BLOCKED: {play['blocked']}")
+        if play["unknown"]:
+            q.append(f"not counted: {', '.join(play['unknown'])}")
+        first += (f"; modeled play {names(play['cards'])} ({play['hand']}) = {fmt_num(play['floor'])} floor estimate"
+                  + (f" ({'; '.join(q)})" if q else ""))
+    text = [first]
+    out.update(comparison=cmp is not None, sampled=cmp, near_tie=False, trigger=False, note_zero=False, suppressed=None)
+    if cmp is None:
+        no_play = guard is not None and guard[0] == "no_play" and "none" in play
+        out["suppressed"] = play["none"] if no_play else _line_reason(G, progress, guard)
+        text.append(f"No sampled comparison: {out['suppressed']}")
+    else:
+        x, y, n = cmp["play"]["hits"], cmp["dig"]["hits"], cmp["samples"]
+        dig = f"discard {names(cmp['dig']['discard'])}, keep {names(cmp['dig']['keep'])}"
+        if x == 0 and y > 0:  # R6
+            out["note_zero"] = True
+            text.append(f"NOTE: no sampled clear by playing now (0/{n}); digging: {y}/{n} ({dig})")
+        else:
+            text.append(f"Sampled: play now {x}/{n} sampled clears; dig ({dig}) {y}/{n}")
+        out["near_tie"] = line_near_tie(x, y, n)
+        out["trigger"] = line_trigger(True, bool(owner), play.get("floor", 0), h, need, x, y, n)
+        if out["near_tie"]:
+
+            def mean(b: dict[str, Any]) -> str:
+                return "no clearing sample" if b.get("hands_used") is None else f"{b['hands_used']:.1f}"
+
+            sep = [f"mean hands used on clearing samples: play now {mean(cmp['play'])}, dig {mean(cmp['dig'])}",
+                   f"the play's floor {fmt_num(play.get('floor', 0))}"]
+            costs = [DISCARD_COSTS[k] for k in LINE_TIE_COSTS if k in keys]
+            if costs:
+                sep.append(f"discard costs: {', '.join(costs)}")
+            sep.append("$1 per unused hand at cash-out")
+            text.append("near-tie -> play now; " + "; ".join(sep))
+        elif out["trigger"]:
+            text.append(f"A dig is worth considering: {dig}")
+    if owner:
+        named = out["suppressed"] or ""
+        rest = [LINE_OWNER_JOKERS[k] for k in owner if LINE_OWNER_JOKERS[k] not in named]
+        if rest:
+            text.append("No dig flag with " + "; ".join(rest))
+    assert len(text) <= LINE_MAX_LINES
+    out["text"] = text
+    return out
+
+
+def build_dig_line(
+    G: dict[str, Any],
+    plays: list[dict[str, Any]],
+    hand: list[dict[str, Any]],
+    hand_raw: list[dict[str, Any]],
+    plan: dict[str, Any],
+    boss: str,
+    square: bool,
+    progress: dict[str, Any],
+    discards: int,
+    margin: float,
+    suggested: list[int] | None,
+) -> dict[str, Any] | None:
+    """R1-R7: the line for a SELECTING_HAND state with hands left (None: no hand left).
+    The sampler gets the modeled play's cards (cache shared with G3's call)."""
+    if int(progress.get("hands_left") or 0) < 1:
+        return None
+    play = modeled_play(G, plays, hand, hand_raw, plan, boss, square)
+    cards = play.get("cards") or []
+    guard = _dig_guard(G, cards, progress, discards)
+    cmp = None if guard is not None else dig_or_play(G, plays, cards, progress, discards, margin, suggested)
+    return dig_line_facts(G, progress, play, cmp, guard)
 
 
 def play_advice(G: dict[str, Any], top: int = 5, dig: bool = False) -> dict[str, Any]:
@@ -3026,6 +3268,7 @@ def play_advice(G: dict[str, Any], top: int = 5, dig: bool = False) -> dict[str,
     # to beat the blind (sampled over the remaining deck)
     e3 = None
     dig_line = None
+    line_suggested = discard  # the sampler's dig option before G3 changes ``discard`` (same cache key)
     if dig and not winners and not mark and any(not p["blocked"] for p in plays):
         play_act = _best_play_action(G, plays, hand, hand_raw, plan, boss, square)
         dig_line = dig_or_play(G, plays, play_act["cards"], progress, discards, margin, discard)
@@ -3042,6 +3285,14 @@ def play_advice(G: dict[str, Any], top: int = 5, dig: bool = False) -> dict[str,
                 discard = list(action["cards"])
             elif kind == "play":
                 discard = []
+    # Pass 6 H2: the reworked fact line (own try: a line error never removes the rest)
+    line = None
+    if dig:
+        try:
+            line = build_dig_line(G, plays, hand, hand_raw, plan, boss, square, progress, discards, margin,
+                                   line_suggested)
+        except Exception as e:  # noqa: BLE001 - the line must never break a prompt
+            line = {"error": f"{type(e).__name__}: {e}", "text": []}
     # The House (P2, owner row 128): with jokers that lose value on every
     # discard, the suggestion is to play the face-down cards blind
     blind = house_blind_play(G)
@@ -3084,6 +3335,7 @@ def play_advice(G: dict[str, Any], top: int = 5, dig: bool = False) -> dict[str,
         "mark_unseen": bool(G.get("mark_unseen")),
         "win_chance": e3,
         "dig_line": dig_line,
+        "line": line,
     }
 
 

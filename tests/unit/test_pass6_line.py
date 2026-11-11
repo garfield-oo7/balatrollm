@@ -21,3 +21,83 @@ def test_line_strategy_is_a_byte_copy_of_noadvice() -> None:
     for k in ("name", "description"):
         me.pop(k), mf.pop(k)
     assert me == mf
+
+
+# --- R1: the modeled play is the complete selection, scored on its own remainder (N65)
+
+
+def test_padded_modeled_play_is_scored_on_its_own_remainder() -> None:
+    """N65 shape: Raised Fist; the padded Two Pair Q♥ Q♣ 4♣ 2♠ 2♣ moves the lowest held rank,
+    so its floor is NOT the listed Two Pair's (Q♥ Q♣ 2♠ 2♣) score."""
+    from balatrollm import analysis
+
+    from .test_analysis import joker, make_state
+
+    G = make_state("H_Q C_Q S_9 H_8 D_8 C_4 S_2 C_2", [joker("j_raised_fist", "Raised Fist")],
+                   hands_left=1, discards_left=1, chips=0)
+    A = analysis.play_advice(G, dig=True)
+    play = A["line"]["play"]
+    listed = next(p for p in A["plays"] if p["hand"] == "Two Pair")
+    hand = G["hand"]["cards"]
+    assert set(listed["cards"]) < set(play["cards"])  # padded
+    est = analysis.estimate_play(G, [hand[i] for i in play["cards"]],
+                                 [c for i, c in enumerate(hand) if i not in play["cards"]])
+    assert play["floor"] == int(est["score"]) != listed["score"]
+    assert A["line"]["sampled"]["play"]["cards"] == play["cards"]  # R2: the sampler plays the same cards
+    assert A["line"]["sampled"]["play"]["floor"] == play["floor"]
+    assert "Queen of Hearts Queen of Clubs 4 of Clubs 2 of Spades 2 of Clubs" in A["line"]["text"][0]
+    assert analysis.play_advice(G)["line"] is None  # flag off: nothing computed
+
+
+# --- R4 / R5 boundaries (frozen rules)
+
+
+def test_near_tie_boundary() -> None:
+    from balatrollm.analysis import line_near_tie
+
+    assert line_near_tie(0, 2, 2)  # SE 0: |2| == max(2, 0)
+    assert not line_near_tie(0, 3, 3)
+    assert line_near_tie(32, 42, 64)  # 2 SE = 11.0
+    assert not line_near_tie(32, 48, 64)  # 2 SE = 10.6
+
+
+def test_dig_trigger_boundary() -> None:
+    from balatrollm.analysis import line_trigger
+
+    # NEED 1,000, 2 hands: floor 499 is below pace, 500 is on pace
+    assert line_trigger(True, False, 499, 2, 1000, 10, 40, 64)
+    assert not line_trigger(True, False, 500, 2, 1000, 10, 40, 64)  # (b)
+    assert not line_trigger(True, True, 499, 2, 1000, 10, 40, 64)  # (a) owner exception
+    assert not line_trigger(False, False, 499, 2, 1000, 10, 40, 64)  # (a) no comparison
+    assert not line_trigger(True, False, 499, 2, 1000, 0, 0, 64)  # (c) Y = 0
+    assert not line_trigger(True, False, 499, 2, 1000, 0, 2, 64)  # (d) near-tie
+    assert line_trigger(True, False, 999, 1, 1000, 0, 3, 3)  # last hand: floor < NEED
+
+
+def test_owner_exception_suppresses_the_trigger_and_names_the_joker() -> None:
+    from balatrollm import analysis
+
+    from .test_analysis import joker, make_state
+
+    G = make_state("H_2 D_7 C_9 S_J H_4 D_K C_5 S_8", [joker("j_banner", "Banner")], hands_left=1, discards_left=3,
+                   chips=0)
+    G["blinds"]["small"]["score"] = 10**6
+    L = analysis.play_advice(G, dig=True)["line"]
+    assert not L["trigger"] and L["owner_jokers"] == ["j_banner"]
+    assert any("Banner: +30 chips per discard left" in t for t in L["text"]) and len(L["text"]) <= 4
+
+
+def test_a_line_error_keeps_advice_progress(monkeypatch) -> None:
+    from balatrollm import analysis, ledger
+
+    from .test_analysis import make_state
+
+    def boom(*a, **k):
+        raise RuntimeError("line")
+
+    monkeypatch.setattr(analysis, "build_dig_line", boom)
+    G = make_state("H_2 D_7 C_9 S_J H_4 D_K C_5 S_8", hands_left=3, discards_left=3, chips=0)
+    row = ledger.pre_row(G, [], [], {"dig_line": True})
+    assert row["advice"]["progress"]["remaining"] == 300
+    assert row["advice"]["dig_line"] == {"error": "RuntimeError: line"}
+    assert row["rendered"]["dig_line_text"]["rendered"] is False
