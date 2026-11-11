@@ -5,10 +5,12 @@ SHOP, SMODS_BOOSTER_OPENED) in the given gamestates.jsonl files with the
 strategy's own manifest flags, and prints one sha256 per state. Run it at two
 revisions and diff the output: identical lines = identical prompts.
 
-Usage: python3 -I scripts/render_hashes.py [--dig-line] <strategy> <gamestates.jsonl> [...] > hashes.txt
+Usage: python3 -I scripts/render_hashes.py [--dig-line] [--flag NAME=0|1 ...] <strategy> <gamestates.jsonl> [...] > hashes.txt
 
 ``--dig-line`` (pass 5 G3) adds the config flag ``dig_line`` to the manifest
 flags, as the bot does when the run config sets ``dig_line: true``.
+``--flag NAME=0|1`` (pass 6 H2) forces one manifest harness flag off / on, e.g.
+``--flag dig_line=0`` renders mastery-noadvice-line with its line off.
 
 Prints file index, line number, state and hash only (never the state's contents:
 logged states carry the real seed).
@@ -26,11 +28,18 @@ DECISION_STATES = ("SELECTING_HAND", "SHOP", "SMODS_BOOSTER_OPENED")
 def main(argv: list[str]) -> None:
     dig = "--dig-line" in argv
     argv = [a for a in argv if a != "--dig-line"]
+    forced: dict[str, bool] = {}
+    while "--flag" in argv:
+        i = argv.index("--flag")
+        k, v = argv[i + 1].split("=")
+        forced[k] = v == "1"
+        del argv[i : i + 2]
     name, files = argv[0], argv[1:]
     sm = StrategyManager(name)
     flags = StrategyManifest.from_file(name).harness
     if dig:
         flags = {**flags, "dig_line": True}
+    flags = {**flags, **forced}
     for fi, path in enumerate(files):
         with open(path) as f:
             for li, line in enumerate(f):
