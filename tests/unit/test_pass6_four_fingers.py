@@ -61,3 +61,16 @@ def test_without_four_fingers_unchanged():
         ["H_J", "D_T", "S_9", "S_8", "C_7"],
     )
     assert _cls("D_J H_T D_7 D_4 D_2")[0] == "High Card"
+
+
+def test_wild_cards_follow_the_installed_suit_order():
+    # Sol H1 blocker 1: 2♦ 5♣ 8♥ Wild + A♠ + 3♦ with Four Fingers: Diamonds qualify first (SMODS order D, C, H, S)
+    cards = [
+        analysis._norm(card("D_2", enhancement="WILD")),
+        analysis._norm(card("C_5", enhancement="WILD")),
+        analysis._norm(card("H_8", enhancement="WILD")),
+        analysis._norm(card("S_A")),
+        analysis._norm(card("D_3")),
+    ]
+    htype, scoring = analysis.classify(cards, four_fingers=True)
+    assert htype == "Flush" and scoring == [0, 1, 2, 4]

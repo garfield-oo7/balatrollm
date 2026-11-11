@@ -370,8 +370,9 @@ def _suit_groups(smeared: bool) -> dict[str, str]:
     return {s: s for s in "HDCS"}
 
 
-# The game's get_flush checks suits in this order and returns the first that qualifies.
-_FLUSH_ORDER = "SHCD"
+# The installed game's get_flush walks SMODS.Suit.obj_buffer (registration order: Diamonds, Clubs, Hearts,
+# Spades; smods game_object.lua) and returns the first suit that qualifies (Sol H1 review blocker 1).
+_FLUSH_ORDER = "DCHS"
 
 
 def _flush_cards(ranked: list[tuple[int, dict[str, Any]]], need: int, smeared: bool) -> list[int]:
@@ -3680,9 +3681,12 @@ def _verdant_sale(G: dict[str, Any], i: int) -> dict[str, Any]:
     Gs = json.loads(json.dumps(G))
     jk = Gs.get("jokers") or {}
     cards = list(jk.get("cards") or [])
-    del cards[i]
+    sold = cards.pop(i)
     jk["cards"] = cards
     jk["count"] = max(int(jk.get("count") or len(cards) + 1) - 1, 0)
+    if (sold.get("modifier") or {}).get("edition") == "NEGATIVE" and jk.get("limit") is not None:
+        # a Negative joker takes its extra slot with it (Joker Stencil reads limit - count; Sol H1 blocker 2)
+        jk["limit"] = max(int(jk["limit"]) - 1, 0)
     for area in ("hand", "cards"):
         for c in _area_cards(Gs, area):
             st = c.get("state")

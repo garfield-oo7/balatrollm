@@ -180,6 +180,7 @@ class Executor:
         found: dict[int, Path] = {}
         try:
             await self._launch_each(instances, log_dir, seen, tasks, found)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
         except BaseException:
             # cancelled while starting: do not leave started instances behind
             for t in tasks:
@@ -187,7 +188,6 @@ class Executor:
             await asyncio.gather(*tasks, return_exceptions=True)
             await asyncio.gather(*(i.stop() for _, i in instances), return_exceptions=True)
             raise
-        results = await asyncio.gather(*tasks, return_exceptions=True)
         if log_dir is not None:
             self._write_lovely_map(instances, found, _lovely_logs(log_dir) - before, session_dir)
         return list(results)
