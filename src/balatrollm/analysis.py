@@ -833,6 +833,7 @@ def estimate_play(
                     mult *= 1.5
             if c["rank"] == "Q":
                 mult += 13 * moons
+    raised_fist: dict[str, Any] | None = None
     if "j_raised_fist" in keyset:
         # The game's rule (card.lua Raised Fist): the lowest-ranked held card,
         # debuffed cards included (only Stone, no rank, is skipped), ties going
@@ -861,6 +862,13 @@ def estimate_play(
             low = [c for c in pool if RANK_VALUE[c["rank"]] == lo][-1]
             if not low.get("debuff"):
                 mult += 2 * CHIP_VALUE[low["rank"]]
+            # pass 6 H1c: the pick, as a fact (held index; None = a face-down stand-in)
+            raised_fist = {
+                "held": next((k for k, c in enumerate(held) if c is low), None),
+                "rank": low["rank"], "debuffed": bool(low.get("debuff")),
+            }
+        else:
+            raised_fist = {"held": None, "rank": None, "debuffed": False}
 
     # Independent joker effects, left to right (with Blueprint/Brainstorm)
     jokers = _area_cards(G, "jokers")  # F6: full list; debuffed jokers skipped in the loop
@@ -912,7 +920,7 @@ def estimate_play(
             mult *= 1.5**baseball
 
     score = 0 if blocked else int(chips * mult * x_total)
-    return {
+    out = {
         "hand": htype,
         "scoring": scoring,
         "score": score,
@@ -922,6 +930,18 @@ def estimate_play(
         "blocked": blocked,
         "unknown": sorted(set(unknown)),
     }
+    # pass 6 H1c: held-card joker facts (only when owned; the score is unchanged)
+    if raised_fist is not None:
+        out["raised_fist"] = raised_fist
+    if "j_blackboard" in keyset or "j_blackboard" in copied:
+        seen = ctx["held"]
+        ok = all(c["suit"] in ("S", "C") or c["enh"] == "WILD" for c in seen) and not ctx["held_masked"]
+        out["blackboard"] = {
+            "met": bool(seen) and ok,  # as scored (_joker_effect)
+            "red": [k for k, c in enumerate(held) if not c["hidden"] and not (c["suit"] in ("S", "C") or c["enh"] == "WILD")],
+            "masked": any(c["hidden"] for c in held),
+        }
+    return out
 
 
 ################################################################################
@@ -1944,7 +1964,74 @@ def _blackboard_pad(
     est = estimate_play(G, [hand_raw[i] for i in cards], [hand_raw[i] for i in range(len(hand)) if i not in cards])
     if int(est["score"]) <= int(p["score"]):
         return p
-    return {**p, "cards": cards, "score": int(est["score"]), "padded": "red cards added: every held card is black (Blackboard X3)"}
+    # pass 6 H1c: scoring positions of the padded selection (were stale)
+    return {**p, "cards": cards, "scoring": est["scoring"], "score": int(est["score"]),
+            "padded": "red cards added: every held card is black (Blackboard X3)"}
+
+
+def _fact_name(c: dict[str, Any]) -> str:
+    return card_name(c) + (" (debuffed)" if (c.get("state") or {}).get("debuff") else "")
+
+
+def _black_in_game(c: dict[str, Any]) -> bool:
+    """Blackboard's test in the game (card.lua: is_suit Clubs/Spades with
+    flush_calc): a Wild card (not debuffed) or a Spade / Club; Stone has no suit."""
+    n = _norm(c)
+    return (n["enh"] == "WILD" and not n["debuff"]) or (not n["stone"] and n["suit"] in ("S", "C"))
+
+
+def selection_facts(G: dict[str, Any], chosen: list[int]) -> dict[str, Any]:
+    """Pass 6 H1c (facts, no advice): for a selection of hand indices, which
+    cards score and, with Raised Fist / Blackboard owned, what the cards left
+    in hand give them. Card names, never indices. ``scoring`` / ``not_scoring``
+    are None when a face-down card is played (unknown)."""
+    seen = mark_view(G)
+    hand = _area_cards(seen, "hand")
+    pick = sorted({int(i) for i in chosen})
+    played = [hand[i] for i in pick]
+    held = [c for i, c in enumerate(hand) if i not in pick]
+    est = estimate_play(seen, played, held)
+    out: dict[str, Any] = {"scoring": None, "not_scoring": None, "held_lines": []}
+    if not est["blocked"] and not any((c.get("state") or {}).get("hidden") for c in played):
+        sc = set(est["scoring"])
+        out["scoring"] = [_fact_name(c) for k, c in enumerate(played) if k in sc]
+        out["not_scoring"] = [_fact_name(c) for k, c in enumerate(played) if k not in sc]
+    hidden_held = any((c.get("state") or {}).get("hidden") for c in held)
+    if (rf := est.get("raised_fist")) is not None:
+        if hidden_held:
+            line = "Raised Fist: lowest card held unknown (face-down cards held)"
+        elif rf["held"] is None:
+            line = "Raised Fist: no ranked card held (adds 0)"
+        else:
+            line = f"Raised Fist: lowest card held {card_name(held[rf['held']])}"
+            if rf["debuffed"]:
+                line += " (debuffed: adds 0)"
+        out["held_lines"].append(line)
+    if "blackboard" in est:
+        breakers = [c for c in held if not _black_in_game(c)]
+        if hidden_held:
+            line = "Blackboard: unknown (face-down cards held)"
+        elif not held:
+            line = "Blackboard: met (no cards held)"
+        elif not breakers:
+            line = "Blackboard: met (every card held is a Spade or Club)"
+        else:
+            line = "Blackboard: not met (held: " + ", ".join(card_name(c) for c in breakers) + ")"
+        out["held_lines"].append(line)
+    return out
+
+
+def play_facts_line(G: dict[str, Any], chosen: list[int]) -> str:
+    """The line added after an executed play (MEMORY; never in outcome.summary)."""
+    f = selection_facts(G, chosen)
+    parts = []
+    if f["scoring"] is not None:
+        txt = "scoring cards: " + (", ".join(f["scoring"]) or "none")
+        if f["not_scoring"]:
+            txt += "; not scoring: " + ", ".join(f["not_scoring"]) + " (add no chips or card triggers)"
+        parts.append(txt)
+    parts += f["held_lines"]
+    return "; ".join(parts)
 
 
 MARK = "The Mark"
@@ -5463,9 +5550,11 @@ def _consumable_full_veto(G: dict[str, Any], params: dict[str, Any]) -> str | No
     count = int(cons.get("count", len(_area_cards(G, "consumables"))) or 0)
     if count < int(cons.get("limit", 2) or 2):
         return None
+    # pass 6 H1e: procedural steps naming the item (Luna chooses what to use or sell)
+    i = int(params["card"])
     return (
         f"Your consumable slots are full ({count}/{int(cons.get('limit', 2) or 2)}). "
-        "To buy this card, use or sell one of your consumables first."
+        f"To buy {_offer_text(card, 'card', i)}: use or sell a consumable of your choice, then buy card {i}."
     )
 
 
@@ -5493,7 +5582,13 @@ def _legal_only_rest(
         except (IndexError, TypeError, ValueError):
             card = {}
         if card.get("set") == "JOKER" and _norm(card)["ed"] != "NEGATIVE":
-            return "Your joker slots are full. To buy a joker with full slots, sell one first."
+            # pass 6 H1e: procedural steps naming the item (Luna chooses the sale)
+            jk = G.get("jokers") or {}
+            i = int(params["card"])
+            return (
+                f"Your joker slots are full ({int(jk.get('count', 0))}/{int(jk.get('limit', 5))}). "
+                f"To buy {_offer_text(card, 'card', i)}: sell a joker of your choice with sell, then buy card {i}."
+            )
     if method == "pack":
         if params.get("skip") and params.get("card") is not None:
             return "Use either `card` or `skip`, not both."
@@ -5606,6 +5701,133 @@ def shop_wrong_item_veto(G: dict[str, Any], params: dict[str, Any], reasoning: s
     cards = _area_cards(G, "shop")
     offers = {i: str(c.get("label") or "") for i, c in enumerate(cards) if c.get("set") in WRONG_ITEM_SETS}
     return wrong_item_veto(offers, params.get("card"), reasoning)
+
+
+BUY_FIELDS = {"card": "shop", "voucher": "vouchers", "pack": "packs"}
+
+
+def _offer_text(card: dict[str, Any], field: str, index: int) -> str:
+    """'Venus (card 1, $3)'."""
+    label = str(card.get("label") or card.get("key") or "item")
+    return f"{label} ({field} {index}, ${int((card.get('cost') or {}).get('buy') or 0)})"
+
+
+def shop_offers(G: dict[str, Any]) -> list[dict[str, Any]]:
+    """Pass 6 H1e/H1d: every shop offer (shop cards, vouchers, packs) with its
+    buy field, index, label, price and id. ``name`` is the label used to match
+    Luna's reasoning: empty for playing cards, face-down cards and the bare
+    "Joker" (the word names any joker)."""
+    out = []
+    for field, area in BUY_FIELDS.items():
+        for i, c in enumerate(_area_cards(G, area)):
+            label = str(c.get("label") or "")
+            nameable = (field != "card" or c.get("set") in WRONG_ITEM_SETS) and not (c.get("state") or {}).get("hidden")
+            out.append({
+                "field": field, "index": i, "label": label or str(c.get("key") or "item"),
+                "name": label if nameable and _offer_core(label) != "joker" else "",
+                "price": int((c.get("cost") or {}).get("buy") or 0), "set": c.get("set"), "id": c.get("id"),
+            })
+    return out
+
+
+def offers_named(offers: list[dict[str, Any]], text: str, mask: tuple[str, ...] = ()) -> list[int]:
+    """Positions in ``offers`` whose name the text mentions (case-insensitive,
+    word boundaries, without a leading "The"; a longer offer name containing a
+    shorter one is taken out first; a pack is also named by its base name,
+    "Buffoon Pack" for Jumbo Buffoon Pack). ``mask``: names taken out of the
+    text first (e.g. the joker just sold)."""
+    low = str(text or "").lower().replace("\u2019", "'")  # curly apostrophe: "Director’s Cut"
+    for m in mask:
+        if core := _offer_core(m):
+            low = re.sub(r"\b" + re.escape(core) + r"\b", " ", low)
+    cores = {k: _offer_core(o["name"]) for k, o in enumerate(offers) if o.get("name")}
+
+    def alts(k: int) -> list[str]:
+        core = cores[k]
+        out = [core]
+        if offers[k]["field"] == "pack":
+            out += [core[len(p):] for p in ("jumbo ", "mega ") if core.startswith(p)]
+        return out
+
+    def names(k: int) -> bool:
+        txt = low
+        for m, other in cores.items():
+            if m != k and len(other) > len(cores[k]) and any(_named_in(a, other) for a in alts(k)):
+                txt = re.sub(r"\b" + re.escape(other) + r"\b", " ", txt)
+        return any(_named_in(a, txt) for a in alts(k))
+
+    return [k for k in sorted(cores) if names(k)]
+
+
+def _offer_where(o: dict[str, Any]) -> str:
+    return f"{o['label']} is {o['field']} {o['index']} (${o['price']})"
+
+
+def shop_buy_veto(G: dict[str, Any], params: dict[str, Any], reasoning: str, afford: bool = True) -> str | None:
+    """Pass 6 H1e (decision B2): a buy the game would reject or that buys
+    another item than the reasoning names, refused with the fix (right field,
+    index and price). Order: field -> wrong item -> index -> affordability;
+    full slots are validate_action's. Repairs Luna's own intent, never advice.
+    ``afford=False`` skips the money check (auto-swap sells first)."""
+    if G.get("state") != "SHOP":
+        return None
+    given = {k: v for k, v in params.items() if v is not None}
+    offers = shop_offers(G)
+    named = [offers[k] for k in offers_named(offers, reasoning)]
+    fields = [k for k in given if k in BUY_FIELDS]
+    extra = [k for k in given if k not in BUY_FIELDS]
+    if extra or len(fields) != 1:
+        # the shop card at the sent index when it is a joker or named, else the one named offer
+        target = None
+        sent = given.get("joker", given.get(extra[0])) if extra else None
+        try:
+            j = int(sent) if sent is not None else -1
+        except (TypeError, ValueError):
+            j = -1
+        at = next((o for o in offers if o["field"] == "card" and o["index"] == j), None)
+        if at is not None and (at["set"] == "JOKER" or at in named):
+            target = at
+        elif len(named) == 1:
+            target = named[0]
+        why = "buy takes exactly one of `card` (shop cards: jokers, Tarots, Planets, Spectrals, playing cards), `voucher` or `pack`"
+        if "joker" in extra:
+            why += "; `joker` is the sell field"
+        elif extra:
+            why += f"; `{extra[0]}` is not a buy field"
+        if target:
+            why += f". {_offer_where(target)}: buy with `{target['field']}` {target['index']}"
+        return why + "."
+    field = fields[0]
+    try:
+        i = int(given[field])
+    except (TypeError, ValueError):
+        return f"`{field}` must be an index number."
+    area = [o for o in offers if o["field"] == field]
+    chosen = next((o for o in area if o["index"] == i), None)
+    if chosen is None:
+        what = {"card": "shop cards", "voucher": "vouchers", "pack": "packs"}[field]
+        msg = (f"There is no {field} {i}: no {what} are left in this shop." if not area
+               else f"There is no {field} {i}: the {what} are {field} 0-{len(area) - 1}.")
+        if named:
+            msg += f" Your reasoning names {named[0]['label']}: {_offer_where(named[0])}."
+        return msg
+    if reasoning and chosen not in named and chosen.get("name") and named:
+        o = named[0]
+        return (
+            f"Wrong item? You chose {field} {i} ({chosen['label']}, ${chosen['price']}) but your reasoning names "
+            f"{o['label']}: {_offer_where(o)}. To buy {o['label']}, use buy with `{o['field']}` {o['index']}; "
+            f"to buy {chosen['label']}, name it in your reasoning."
+        )
+    money = int(G.get("money") or 0)
+    # the game allows debt down to -$20 with Credit Card (bankrupt_at)
+    debt = 20 if any(j.get("key") == "j_credit_card" and not _joker_debuffed(j) for j in _area_cards(G, "jokers")) else 0
+    if afford and chosen["price"] > 0 and chosen["price"] > money + debt:
+        msg = f"{chosen['label']} ({field} {i}) costs ${chosen['price']}; you have ${money}."
+        others = [o for o in named if o is not chosen]
+        if others:
+            msg += f" Your reasoning also names {others[0]['label']}: {_offer_where(others[0])}."
+        return msg
+    return None
 
 
 def validate_action(
@@ -5903,6 +6125,7 @@ def past_lessons(G: dict[str, Any], status: str | None, path: str | None = None)
 
 
 TEMPLATE_GLOBALS = {
+    "selection_facts": selection_facts,
     "suit_pays": suit_pays,
     "analyze_hand": analyze_hand,
     "blind_progress": blind_progress,

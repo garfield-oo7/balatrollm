@@ -57,6 +57,7 @@
 {% if G.state == "SELECTING_HAND" %}
 {%- set A = play_advice(G, dig=true) if flags and flags.dig_line else play_advice(G) -%}
 {%- set P = A.progress %}
+{%- set held_jokers = (G.jokers.cards or []) | selectattr("key", "in", ["j_raised_fist", "j_blackboard", "j_blueprint", "j_brainstorm"]) | list %}
 # ROUND
 - Blind: {{ P.name }}, target {{ P.target | fmt_num }}, scored {{ P.scored | fmt_num }}
 - NEED {{ P.remaining | fmt_num }} more | HANDS {{ P.hands_left }} | DISCARDS {{ P.discards_left }} | PER_HAND {{ P.per_hand | fmt_num }}
@@ -113,6 +114,7 @@
 {%- if p.repeat %} (Card Sharp X3: type already played this round){% endif %}
 {%- if p.padded %} ({{ p.padded }}){% endif %}
 {%- if p.unknown %} (not counted: {{ p.unknown | join(", ") }}){% endif %}
+{%- if held_jokers %}{% set hf = selection_facts(G, p.cards).held_lines %}{% if hf %} ({{ hf | join("; ") }}){% endif %}{% endif %}
 {% else -%}
 - none
 {% endfor %}
@@ -158,6 +160,10 @@
 - no cards left
 {%- endif %}
 - Reroll cost: ${{ G.round.reroll_cost }}
+{%- set si = (G.luna or {}).shop_intent %}
+{%- if si %}
+- Earlier this shop you said: sold {{ si.sold }} to buy {{ si.item }} ({{ si.field }} {{ si.index }}, ${{ si.price }}); money now ${{ si.money }}.
+{%- endif %}
 {%- if G.vouchers and G.vouchers.cards %}
 
 ## Vouchers (use buy with `voucher`)

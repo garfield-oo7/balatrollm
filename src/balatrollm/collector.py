@@ -137,6 +137,9 @@ class Stats:
     cost_avg: float
     cost_std: float
 
+    # Pass 6 H1e: times the harness left a shop for Luna
+    shop_forced_exits: int = 0
+
 
 @dataclass
 class ChatCompletionRequestInput:
@@ -197,6 +200,8 @@ class Collector:
 
     # Class constant for max failures (used by views overlay)
     MAX_CONSECUTIVE_FAILURES = 3
+    # Pass 6 H1e: set by the bot when the harness leaves a shop for Luna
+    shop_forced_exits: int = 0
 
     def __init__(self, task: Task, base_dir: Path) -> None:
         # Create save directories
@@ -508,4 +513,5 @@ class Collector:
             cost_total=sum(total_costs),
             cost_avg=sum(total_costs) / n,
             cost_std=statistics.stdev(total_costs),
+            shop_forced_exits=self.shop_forced_exits,
         )
