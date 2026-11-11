@@ -1,5 +1,6 @@
 """Unit tests for the LLM client module."""
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import openai
@@ -240,6 +241,12 @@ class TestLLMClientCall:
 # ============================================================================
 
 
+def _status_500() -> openai.APIStatusError:
+    return openai.APIStatusError(
+        message="Server error", response=MagicMock(status_code=500), body=None
+    )
+
+
 class TestLLMClientRetry:
     """Tests for retry behavior."""
 
@@ -303,7 +310,7 @@ class TestLLMClientRetry:
 
         mock_async_client = AsyncMock()
         mock_async_client.chat.completions.create = AsyncMock(
-            side_effect=openai.APIConnectionError(request=MagicMock())
+            side_effect=_status_500()
         )
 
         with patch("balatrollm.llm.openai.AsyncOpenAI", return_value=mock_async_client):
@@ -324,7 +331,7 @@ class TestLLMClientRetry:
 
         mock_async_client = AsyncMock()
         mock_async_client.chat.completions.create = AsyncMock(
-            side_effect=openai.APIConnectionError(request=MagicMock())
+            side_effect=_status_500()
         )
 
         sleep_delays: list[float] = []
@@ -343,6 +350,70 @@ class TestLLMClientRetry:
         # Exponential: 1.0, 2.0
         assert sleep_delays[0] == 1.0
         assert sleep_delays[1] == 2.0
+
+    async def _run_conn(self, side_effect: list, caplog) -> tuple[AsyncMock, list[float], object]:
+        """pass 6 H1f helper: run one call; return (mock, sleeps, result or raised)."""
+        client = LLMClient(base_url="https://api.test.com", api_key="test-key")
+        mock_async_client = AsyncMock()
+        mock_async_client.chat.completions.create = AsyncMock(side_effect=side_effect)
+        sleeps: list[float] = []
+
+        async def capture_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        out: object = None
+        with caplog.at_level(logging.DEBUG, logger="balatrollm.llm"):
+            with patch("balatrollm.llm.openai.AsyncOpenAI", return_value=mock_async_client):
+                with patch("asyncio.sleep", side_effect=capture_sleep):
+                    async with client:
+                        try:
+                            out = await client.call(model="gpt-4", messages=[], tools=[])
+                        except LLMRetryExhaustedError as e:
+                            out = e
+        return mock_async_client, sleeps, out
+
+    @staticmethod
+    def _fault_lines(caplog) -> list[str]:
+        return [r.getMessage() for r in caplog.records if "LLM connection fault" in r.getMessage()]
+
+    async def test_connection_x6_then_success(self, caplog) -> None:
+        """pass 6 H1f: 6 connection errors recover on the 7th attempt."""
+        ok = MagicMock()
+        conn = [openai.APIConnectionError(request=MagicMock()) for _ in range(6)]
+        mock, sleeps, out = await self._run_conn([*conn, ok], caplog)
+        assert out is ok
+        assert mock.chat.completions.create.call_count == 7
+        assert sleeps == [2, 4, 8, 15, 30, 30]
+        lines = self._fault_lines(caplog)
+        assert len(lines) == 1
+        assert "recovered" in lines[0] and "7 attempt" in lines[0] and "waited 89s" in lines[0]
+
+    async def test_connection_x7_exhausted(self, caplog) -> None:
+        """pass 6 H1f: a 7th connection error ends the call."""
+        conn = [openai.APIConnectionError(request=MagicMock()) for _ in range(8)]
+        mock, sleeps, out = await self._run_conn(conn, caplog)
+        assert isinstance(out, LLMRetryExhaustedError)
+        assert "retry attempts exhausted" in str(out)
+        assert mock.chat.completions.create.call_count == 7
+        assert sleeps == [2, 4, 8, 15, 30, 30]
+        lines = self._fault_lines(caplog)
+        assert len(lines) == 1
+        assert "exhausted" in lines[0] and "7 attempt" in lines[0]
+
+    async def test_connection_mixed_with_500_exhausted(self, caplog) -> None:
+        """pass 6 H1f: connection errors do not use the other budget (3 x 500)."""
+        conn = [openai.APIConnectionError(request=MagicMock()) for _ in range(2)]
+        mock, sleeps, out = await self._run_conn(
+            [conn[0], _status_500(), conn[1], _status_500(), _status_500(), MagicMock()],
+            caplog,
+        )
+        assert isinstance(out, LLMRetryExhaustedError)
+        assert "All 3 retry attempts exhausted" in str(out)
+        assert mock.chat.completions.create.call_count == 5
+        assert sleeps == [2, 1.0, 4, 2.0]
+        lines = self._fault_lines(caplog)
+        assert len(lines) == 1
+        assert "exhausted" in lines[0] and "2 connection error" in lines[0]
 
 
 # ============================================================================
