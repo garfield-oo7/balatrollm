@@ -1,0 +1,31 @@
+{
+  "$schema": "https://gist.githubusercontent.com/S1M0N38/5dc776cea0afa506ee7a4b20585558c6/raw/d2b92433fcc9d069c26958ff22b1f06777ecb91e/strategy.schema.json",
+  "name": "Mastery (no advice) + dig-or-play line",
+  "description": "Pass 6 arm F: mastery-noadvice (arm E) plus the reworked dig-or-play FACT line (NEED, pace, the named modeled play with its floor estimate, sampled play-now vs dig counts, near-tie, dig trigger, owner-exception jokers); advice stays off. Templates and TOOLS.json are byte copies of mastery-noadvice; only harness.dig_line differs.",
+  "author": "BalatroLLM",
+  "version": "1.0.0",
+  "tags": [
+    "analyser",
+    "small-model",
+    "ablation"
+  ],
+  "harness": {
+    "system_prompt": true,
+    "validate_actions": true,
+    "advice_vetoes": false,
+    "auto_reorder_jokers": false,
+    "max_consecutive_rearranges": 2,
+    "suggest_action": false,
+    "suggest_discard": false,
+    "auto_swap_jokers": false,
+    "skip_blind_tags": {},
+    "reroll_boss": false,
+    "luna_reroll_boss": true,
+    "joker_phase_order": false,
+    "sell_in_pack": false,
+    "deadline_commit": false,
+    "shop_lock": false,
+    "lessons": false,
+    "dig_line": true
+  }
+}
