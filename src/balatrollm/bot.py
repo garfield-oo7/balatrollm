@@ -15,12 +15,15 @@ from openai.types.chat import ChatCompletion
 
 from . import book, seeds
 from .analysis import (
+    _area_cards,
     BOSS_REROLL_MAX_PER_ANTE,
     current_blind,
     DEADLINE_ANTE,
     deadline_commit,
     luna_reroll_refusal,
     main_commit,
+    offers_named,
+    shop_offers,
     run_status,
     boss_reroll_reason,
     estimate_play,
@@ -111,6 +114,8 @@ class Bot:
     book_update_path: Path | None = None
     # Pass 6 H1e: item-choice misses in this shop visit
     _shop_item_misses: int = 0
+    # Pass 6 H1d: Luna's stated buy when she sold in this shop visit
+    _shop_intent: dict[str, Any] | None = None
 
     def __init__(self, task: Task, config: Config, port: int | None = None) -> None:
         self.task = task
@@ -1002,6 +1007,7 @@ class Bot:
             if facts:
                 self._ledger_out["play_facts"] = facts
             score: int | None = None
+            self._note_shop_intent(fn_name, params, str(fn_args.get("reasoning") or ""), before)
             if fn_name == "play":
                 chips_before = int((before.get("round") or {}).get("chips") or 0)
                 chips_after = int((gamestate.get("round") or {}).get("chips") or 0)
@@ -1092,11 +1098,50 @@ class Bot:
         if in_shop and not self._in_shop:
             self._shop_visits += 1
             self._shop_item_misses = 0
+            self._shop_intent = None
         if not in_shop:
             self._shop_rerolls = 0
             self._shop_locked = False
             self._shop_item_misses = 0
+            self._shop_intent = None
         self._in_shop = in_shop
+
+    def _note_shop_intent(self, method: str, params: dict[str, Any], reasoning: str, before: dict[str, Any]) -> None:
+        """Pass 6 H1d: a SHOP sale whose reasoning names exactly one current
+        shop offer stores it (Luna's earlier intention, a fact; never a
+        required buy). Buying that offer clears it; so do a reroll that
+        removes it and leaving the shop (_track_shop_visit, _annotate)."""
+        if before.get("state") != "SHOP":
+            return
+        if method == "sell":
+            area, idx = ("jokers", params.get("joker")) if "joker" in params else ("consumables", params.get("consumable"))
+            try:
+                sold = str(_area_cards(before, area)[int(idx)].get("label") or "")
+            except (IndexError, TypeError, ValueError):
+                return
+            offers = shop_offers(before)
+            named = offers_named(offers, reasoning, mask=(sold,))
+            if len(named) == 1:
+                o = offers[named[0]]
+                if sum(1 for x in offers if x["label"] == o["label"]) == 1 and o.get("id") is not None:
+                    self._shop_intent = {"sold": sold, "item": o["label"], "field": o["field"], "id": o["id"]}
+        elif method == "buy" and self._shop_intent:
+            field = next((k for k in ("card", "voucher", "pack") if params.get(k) is not None), None)
+            bought = next((o for o in shop_offers(before) if o["field"] == field and o["index"] == params.get(field)), None)
+            if bought and bought.get("id") == self._shop_intent["id"]:
+                self._shop_intent = None
+
+    def _shop_intent_fact(self, gamestate: dict[str, Any]) -> dict[str, Any] | None:
+        """The stored intention with the item's live index / price, or None
+        (and cleared) when the item is no longer offered."""
+        intent = self._shop_intent
+        if not intent or gamestate.get("state") != "SHOP":
+            return None
+        o = next((o for o in shop_offers(gamestate) if o["field"] == intent["field"] and o.get("id") == intent["id"]), None)
+        if o is None:
+            self._shop_intent = None
+            return None
+        return {**intent, "index": o["index"], "price": o["price"], "money": gamestate.get("money")}
 
     def _luna_reroll_on(self) -> bool:
         """Pass 4 A1: Luna's own reroll_boss requests (``luna_reroll_boss``;
@@ -1155,6 +1200,8 @@ class Bot:
         if not self._advice_vetoes_on():
             # pass 4 A1: only added when off, so G["luna"] is unchanged for mastery
             gamestate["luna"]["advice_vetoes"] = False
+        if intent := self._shop_intent_fact(gamestate):
+            gamestate["luna"]["shop_intent"] = intent  # pass 6 H1d (only when set)
         if gamestate.get("state") in SHOP_STATES:
             # The STATUS Luna sees (with the run's rounds: safety net, last
             # blind on its final hand); the validators use it too

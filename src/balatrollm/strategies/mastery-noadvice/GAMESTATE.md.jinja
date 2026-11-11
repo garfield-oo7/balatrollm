@@ -140,6 +140,10 @@
 - no cards left
 {%- endif %}
 - Reroll cost: ${{ G.round.reroll_cost }}
+{%- set si = (G.luna or {}).shop_intent %}
+{%- if si %}
+- Earlier this shop you said: sold {{ si.sold }} to buy {{ si.item }} ({{ si.field }} {{ si.index }}, ${{ si.price }}); money now ${{ si.money }}.
+{%- endif %}
 {%- if G.vouchers and G.vouchers.cards %}
 
 ## Vouchers (use buy with `voucher`)
