@@ -98,7 +98,9 @@ def _line_row(line: dict[str, Any] | None, G: dict[str, Any]) -> dict[str, Any] 
         "play_blocked": play.get("blocked"),
         "comparison": line.get("comparison"),
         "suppressed": line.get("suppressed"),
-        "near_tie": line.get("near_tie"),
+        "near_tie": line.get("near_tie"),  # the pass-6 R4 band (the trigger's)
+        "near_tie_narrow": line.get("near_tie_narrow"),  # pass 7 L1: the band behind the word "near-tie"
+        "wording": line.get("wording"),  # pass 7 L1-L4 wording class (None: no comparison)
         "trigger": line.get("trigger"),
         "note_zero": line.get("note_zero"),
         "owner_jokers": line.get("owner_jokers"),
