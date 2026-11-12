@@ -1088,6 +1088,71 @@ def _projected_score(
     return int(est["score"]) if est["hand"] == draw["kind"] else 0
 
 
+PSYCHIC_SHORT = "The Psychic: not enough cards for a legal five-card play"
+
+
+def _psychic_complete(
+    G: dict[str, Any],
+    hand_raw: list[dict[str, Any]],
+    hand: list[dict[str, Any]],
+    visible: list[int],
+    bases: list[tuple[int, ...]],
+    avoid: set[int],
+) -> dict[str, dict[str, Any]]:
+    """Pass 7 B1 (The Psychic): every minimal play ``bases`` completed to exactly
+    five cards, best entry per ACTUAL hand type.
+
+    Each five-card subset of the visible cards (without ``avoid``: the Blue Seal
+    alternative) is scored once by estimate_play against its own held remainder;
+    a base's completions are its supersets. The filler set is chosen like
+    ``_filler``: one that keeps the base's type if any exists (exhaustive, so
+    "none keeps it" is a fact), then the fewest cards ``_filler`` would not use
+    (Steel / Gold, Blue Seal, held-scoring ranks, MAIN suit), Blackboard red
+    cards first, the lowest chip value, the higher score. When no completion
+    keeps the type, the completed cards are listed under their actual type."""
+    plan = main_hand_plan(G)
+    suit = plan.get("suit")
+    keep_ranks = held_scoring_ranks(G)
+    board = "j_blackboard" in set(_joker_keys(G)) | set(copied_keys(G))
+    pool = [i for i in visible if i not in avoid]
+    fives: dict[tuple[int, ...], dict[str, Any]] = {}
+    for idx in combinations(pool, 5):
+        est = estimate_play(G, [hand_raw[i] for i in idx], [c for i, c in enumerate(hand_raw) if i not in idx])
+        fives[idx] = {"cards": list(idx), **est}
+
+    def avoided(i: int) -> bool:
+        c = hand[i]
+        return (c["enh"] in ("STEEL", "GOLD") or c["seal"] == "BLUE" or c["rank"] in keep_ranks
+                or bool(suit and (c["suit"] == suit or c["enh"] == "WILD")))
+
+    def cost(base: set[int], idx: tuple[int, ...]) -> tuple[Any, ...]:
+        fill = [i for i in idx if i not in base]
+        return (
+            sum(avoided(i) for i in fill),
+            sum(not (board and _red(hand[i])) for i in fill) if board else 0,
+            sum(CHIP_VALUE.get(hand[i]["rank"] or "", 0) for i in fill),
+            -int(fives[idx]["score"]),
+            idx,
+        )
+
+    best: dict[str, tuple[dict[str, Any], tuple[Any, ...]]] = {}
+    for b in bases:
+        base = set(b)
+        if base & avoid or len(base) > 5:
+            continue
+        sups = [idx for idx in fives if base <= set(idx)]
+        if not sups:
+            continue
+        btype = classify([hand[i] for i in b], **_classify_flags(G))[0]
+        kept = [idx for idx in sups if fives[idx]["hand"] == btype]
+        pick = min(kept or sups, key=lambda idx: cost(base, idx))
+        entry, key = fives[pick], cost(base, pick)
+        prev = best.get(entry["hand"])
+        if prev is None or (-entry["score"], key) < (-prev[0]["score"], prev[1]):
+            best[entry["hand"]] = (entry, key)
+    return {t: dict(e) for t, (e, _k) in best.items()}
+
+
 def analyze_hand(G: dict[str, Any], top: int = 6, real: dict[str, Any] | None = None) -> dict[str, Any]:
     """Enumerate the best play per hand type and the best draws.
 
@@ -1112,6 +1177,9 @@ def analyze_hand(G: dict[str, Any], top: int = 6, real: dict[str, Any] | None = 
     # play of its hand type (review round 4, codex R4-1)
     fills = _mark_held_fills(real) if real is not None else None
     cands: dict[str, list[dict[str, Any]]] = {}
+    # pass 7 B1: under The Psychic every minimal play is a base to complete to five cards
+    psychic = _active_boss(G) == "The Psychic" and fills is None
+    bases: list[tuple[int, ...]] = []
     for k in range(1, min(limit, len(visible)) + 1):
         for idx in combinations(visible, k):
             played = [hand_raw[i] for i in idx]
@@ -1119,6 +1187,8 @@ def analyze_hand(G: dict[str, Any], top: int = 6, real: dict[str, Any] | None = 
             est = estimate_play(G, played, held)
             if "j_splash" not in keyset and len(est["scoring"]) != k:
                 continue  # keep minimal plays: every selected card scores
+            if psychic:
+                bases.append(idx)
             if fills is not None:
                 cands.setdefault(est["hand"], []).append({"cards": list(idx), **est})
                 continue
@@ -1146,6 +1216,15 @@ def analyze_hand(G: dict[str, Any], top: int = 6, real: dict[str, Any] | None = 
             best[htype] = pick
             if blue and pick_nb is not None:
                 best_no_blue[htype] = pick_nb
+    if psychic:
+        # pass 7 B1: completion happens BEFORE the [:top] cut (blocked plays all score 0)
+        if min(limit, len(visible)) >= 5:
+            best = _psychic_complete(G, hand_raw, hand, visible, bases, set())
+            best_no_blue = _psychic_complete(G, hand_raw, hand, visible, bases, blue) if blue else {}
+        else:
+            for p in [*best.values(), *best_no_blue.values()]:
+                if p["blocked"]:
+                    p["blocked"] = PSYCHIC_SHORT
     for htype, play in best.items():
         alt = best_no_blue.get(htype)
         if alt is not None and blue & set(play["cards"]):
@@ -2697,8 +2776,10 @@ DIG_SCREEN = 16  # every dig option is first screened on this many shuffles
 DIG_FINAL = 2  # the best screened dig options get all shuffles
 DIG_MAX_OPTIONS = 6
 DIG_UNSUPPORTED = frozenset(
-    {"The Mark", "The House", "The Fish", "The Wheel", "The Hook", "Crimson Heart", "Cerulean Bell"}
+    {"The Mark", "The House", "The Fish", "The Wheel", "The Hook", "Crimson Heart", "Cerulean Bell",
+     "The Psychic"}  # pass 7 B1: the sampler's own padding is not B1's five-card completion
 )
+PSYCHIC_LINE_REASON = "The Psychic: sampled comparison not validated for five-card plays"
 # Jokers whose value changes with a discard or a played hand inside the round:
 # the sampler keeps every joker as it is now, so with these owned or copied the
 # two first actions are not on equal terms -> no line (Sol g3 #2)
@@ -3070,6 +3151,8 @@ def line_trigger(shown: bool, owner: bool, floor: int, hands_left: int, need: in
 def _line_reason(G: dict[str, Any], progress: dict[str, Any], guard: tuple[str, Any] | None) -> str:
     """R2: the concrete reason a sampled comparison is not shown."""
     code, detail = guard if guard is not None else ("no_option", None)
+    if code == "boss" and detail == "The Psychic":
+        return PSYCHIC_LINE_REASON
     if code == "boss":
         effect = str(progress.get("effect") or "").strip().rstrip(".")
         return f"{detail}: {effect}" if effect else str(detail)
@@ -5042,7 +5125,8 @@ def planets_per_round(G: dict[str, Any], history: list[dict[str, Any]] | None) -
     n = 0
     for h in history or []:
         res = str(h.get("result") or "")
-        m = re.match(r"(?:used|took) (.+?)(?: from pack)?$", res)
+        # pass 7 B2: "used X", "took X from pack" and "took X from pack (used at once)"
+        m = re.match(r"(?:used|took) (.+?)(?: from pack(?: \(used at once\))?)?$", res)
         if m and knowledge.planet_hand(m.group(1)):
             n += 1
     rounds = max(int(G.get("round_num") or 1), 1)
@@ -5802,6 +5886,29 @@ def reroll_veto(G: dict[str, Any], rerolls: int) -> str | None:
     return None
 
 
+def _full_slot_other_offer(G: dict[str, Any], chosen: int, reasoning: str) -> dict[str, Any] | None:
+    """Pass 7 B3 (F N121): the joker buy was refused for full joker slots, and
+    the reasoning also names another shop card that WOULD fit: a Tarot, Planet
+    or Spectral with a free consumable slot (or Negative), that Luna can afford.
+    Name matching only (``offers_named``), no language inference."""
+    if not reasoning:
+        return None
+    offers = shop_offers(G)
+    cons = G.get("consumables") or {}
+    free = int(cons.get("count", len(_area_cards(G, "consumables"))) or 0) < int(cons.get("limit", 2) or 2)
+    money = int(G.get("money") or 0)
+    debt = 20 if any(j.get("key") == "j_credit_card" and not _joker_debuffed(j) for j in _area_cards(G, "jokers")) else 0
+    shop = _area_cards(G, "shop")
+    for k in offers_named(offers, reasoning):
+        o = offers[k]
+        if o["field"] != "card" or o["index"] == chosen or o["set"] not in ("TAROT", "PLANET", "SPECTRAL"):
+            continue
+        negative = _norm(shop[o["index"]])["ed"] == "NEGATIVE"
+        if (free or negative) and o["price"] <= money + debt:
+            return o
+    return None
+
+
 def _consumable_full_veto(G: dict[str, Any], params: dict[str, Any]) -> str | None:
     """Pass 4 F4 (legality): the game rejects a shop consumable buy with full
     consumable slots ("Cannot purchase consumable card, consumable slots are
@@ -5834,7 +5941,7 @@ ANKH_FULL_USE = "Ankh needs a free joker slot: the game refuses it while your jo
 
 
 def _legal_only_rest(
-    G: dict[str, Any], method: str, params: dict[str, Any], shop_rerolls: int, full: bool
+    G: dict[str, Any], method: str, params: dict[str, Any], shop_rerolls: int, full: bool, reasoning: str = ""
 ) -> str | None:
     """Pass 4 A1 (advice_vetoes off): the legality / protection checks of
     validate_action after the card-count checks, with the same messages."""
@@ -5853,10 +5960,13 @@ def _legal_only_rest(
             # pass 6 H1e: procedural steps naming the item (Luna chooses the sale)
             jk = G.get("jokers") or {}
             i = int(params["card"])
-            return (
+            msg = (
                 f"Your joker slots are full ({int(jk.get('count', 0))}/{int(jk.get('limit', 5))}). "
                 f"To buy {_offer_text(card, 'card', i)}: sell a joker of your choice with sell, then buy card {i}."
             )
+            if alt := _full_slot_other_offer(G, i, reasoning):  # pass 7 B3
+                msg += f" Your reasoning also names {alt['label']} (card {alt['index']}); to buy it, use card {alt['index']}."
+            return msg
     if method == "pack":
         if params.get("skip") and params.get("card") is not None:
             return "Use either `card` or `skip`, not both."
@@ -6099,7 +6209,8 @@ def shop_buy_veto(G: dict[str, Any], params: dict[str, Any], reasoning: str, aff
 
 
 def validate_action(
-    G: dict[str, Any], method: str, params: dict[str, Any], shop_rerolls: int = 0, advice: bool = True
+    G: dict[str, Any], method: str, params: dict[str, Any], shop_rerolls: int = 0, advice: bool = True,
+    reasoning: str = "",
 ) -> str | None:
     """Return an error message for illegal or strictly bad actions, else None.
 
@@ -6111,6 +6222,8 @@ def validate_action(
     vetoes of legal choices (first-shop Buffoon, shop lock, reroll money lines,
     Joker Stencil, sell veto, Buffoon pack with full slots, second Blue Seal,
     reroll_boss advice rules, The Mark face-down targets).
+    ``reasoning`` (pass 7 B3): Luna's reasoning; the full-joker-slot refusal of
+    a joker buy then also names another offer it names that would fit.
     """
     jokers = G.get("jokers") or {}
     full = int(jokers.get("count", 0)) >= int(jokers.get("limit", 5))
@@ -6133,7 +6246,7 @@ def validate_action(
         else int(G.get("ante_num") or 1) == 1 and int(G.get("round_num") or 1) == 1
     )
     if not advice:
-        return _legal_only_rest(G, method, params, shop_rerolls, full)
+        return _legal_only_rest(G, method, params, shop_rerolls, full, reasoning)
     if (
         method == "buy"
         and "card" in params
@@ -6351,7 +6464,13 @@ def summarize_outcome(
         if method == "pack":
             if params.get("skip"):
                 return "skipped the pack"
-            return f"took {_label_at(before, 'pack', params.get('card'))} from pack"
+            # pass 7 B2: a consumable pick is applied at once (it never reaches the consumable slots)
+            label = _label_at(before, "pack", params.get("card"))
+            try:
+                kind = _area_cards(before, "pack")[int(params.get("card"))].get("set")
+            except (IndexError, TypeError, ValueError):
+                kind = None
+            return f"took {label} from pack" + (" (used at once)" if kind in ("PLANET", "TAROT", "SPECTRAL") else "")
         if method == "reroll":
             return f"rerolled shop (${after.get('money', '?')} left)"
         if method == "next_round":

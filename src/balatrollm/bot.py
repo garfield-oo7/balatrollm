@@ -901,7 +901,8 @@ class Bot:
                 )
             if veto is None:
                 veto = validate_action(
-                    before, fn_name, params, self._shop_rerolls, advice=self._advice_vetoes_on()
+                    before, fn_name, params, self._shop_rerolls, advice=self._advice_vetoes_on(),
+                    reasoning=str(fn_args.get("reasoning") or ""),  # pass 7 B3: the full-slot veto names another fitting offer
                 )
         max_rearranges = int(self.harness.get("max_consecutive_rearranges", 0) or 0)
         if fn_name == "rearrange":
