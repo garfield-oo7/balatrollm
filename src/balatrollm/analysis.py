@@ -14,6 +14,7 @@ never in draw order, and face-down cards are never revealed.
 
 import hashlib
 import json
+import logging
 import math
 import random
 import re
@@ -25,6 +26,8 @@ from pathlib import Path
 from typing import Any
 
 from . import knowledge
+
+logger = logging.getLogger(__name__)
 
 ################################################################################
 # Static game data
@@ -3187,8 +3190,12 @@ def build_dig_line(
     return dig_line_facts(G, progress, play, cmp, guard)
 
 
-def play_advice(G: dict[str, Any], top: int = 5, dig: bool = False) -> dict[str, Any]:
+def play_advice(G: dict[str, Any], top: int = 5, dig: bool = False, line_only: bool = False) -> dict[str, Any]:
     """Everything the PLAY phase needs: plays with WINS flags, discard, suggestion.
+
+    ``line_only`` (pass 7 B6, manifest ``dig_line_log``): compute ONLY the
+    pass-6 H2 fact line (``line``), never the legacy G3 path, so every other
+    field equals the flag-off advice (the ledger logs the line silently).
 
     ``dig`` (pass 5 G3, config ``dig_line``): compute the dig-or-play line
     (``dig_or_play``) and let it decide the suggested action / discard by the
@@ -3378,10 +3385,15 @@ def play_advice(G: dict[str, Any], top: int = 5, dig: bool = False) -> dict[str,
     dig_line = None
     line_suggested = discard  # the sampler's dig option before G3 changes ``discard`` (same cache key)
     if dig and not winners and not mark and any(not p["blocked"] for p in plays):
-        play_act = _best_play_action(G, plays, hand, hand_raw, plan, boss, square)
-        dig_line = dig_or_play(G, plays, play_act["cards"], progress, discards, margin, discard)
-        if dig_line is not None:
-            action, discard = _dig_action(G, dig_line, play_act)
+        # pass 7 B4: the legacy G3 call has its own guard (an error keeps the rest of the prompt)
+        try:
+            play_act = _best_play_action(G, plays, hand, hand_raw, plan, boss, square)
+            dig_line = dig_or_play(G, plays, play_act["cards"], progress, discards, margin, discard)
+            if dig_line is not None:
+                action, discard = _dig_action(G, dig_line, play_act)
+        except Exception as e:  # noqa: BLE001 - the legacy line must never break a prompt
+            logger.warning("legacy dig_or_play failed: %s: %s", type(e).__name__, e)  # no traceback (watcher INFRA)
+            dig_line = None
     if not winners and not mark and dig_line is None:
         e3 = _e3_choice(G, plays, progress, discards, margin, action, discard)
         if e3 is not None:
@@ -3395,7 +3407,7 @@ def play_advice(G: dict[str, Any], top: int = 5, dig: bool = False) -> dict[str,
                 discard = []
     # Pass 6 H2: the reworked fact line (own try: a line error never removes the rest)
     line = None
-    if dig:
+    if dig or line_only:
         try:
             line = build_dig_line(G, plays, hand, hand_raw, plan, boss, square, progress, discards, margin,
                                    line_suggested)

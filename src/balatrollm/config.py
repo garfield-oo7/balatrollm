@@ -144,11 +144,12 @@ def _load_from_yaml(path: Path) -> dict[str, Any]:
         result["interleave"] = data["interleave"]
     # pass 6: the dig-or-play fact line is per strategy only (manifest
     # harness.dig_line); a run-config key would switch it on for every strategy
-    if "dig_line" in data:
-        raise ValueError(
-            "dig_line is not a run-config key: set harness.dig_line in the strategy's "
-            "manifest.json (e.g. strategy mastery-noadvice-line) and remove it from the config"
-        )
+    for key in ("dig_line", "dig_line_log"):  # pass 7 B6: dig_line_log likewise
+        if key in data:
+            raise ValueError(
+                f"{key} is not a run-config key: set harness.{key} in the strategy's "
+                "manifest.json (e.g. strategy mastery-noadvice-line) and remove it from the config"
+            )
     # pass 5 G2: the write-only log book, strategy -> arm name (YAML only)
     if "book" in data and data["book"] is not None:
         if not isinstance(data["book"], dict):

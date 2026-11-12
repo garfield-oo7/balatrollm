@@ -1,7 +1,7 @@
 {
   "$schema": "https://gist.githubusercontent.com/S1M0N38/5dc776cea0afa506ee7a4b20585558c6/raw/d2b92433fcc9d069c26958ff22b1f06777ecb91e/strategy.schema.json",
   "name": "Mastery (no advice) + dig-or-play line",
-  "description": "Pass 6 arm F: mastery-noadvice (arm E) plus the reworked dig-or-play FACT line (NEED, pace, the named modeled play with its floor estimate, sampled play-now vs dig counts, near-tie, dig trigger, owner-exception jokers); advice stays off. Templates and TOOLS.json are byte copies of mastery-noadvice; only harness.dig_line differs.",
+  "description": "Pass 7 arm H (pass 6 arm F): mastery-noadvice (arm G) plus the reworked dig-or-play FACT line (NEED, pace, the named modeled play with its floor estimate, sampled play-now vs dig counts, near-tie, dig trigger, owner-exception jokers); advice stays off. Templates and TOOLS.json are byte copies of mastery-noadvice; only harness.dig_line differs.",
   "author": "BalatroLLM",
   "version": "1.0.0",
   "tags": [
@@ -26,6 +26,7 @@
     "deadline_commit": false,
     "shop_lock": false,
     "lessons": false,
+    "dig_line_log": true,
     "dig_line": true
   }
 }

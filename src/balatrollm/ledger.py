@@ -155,9 +155,13 @@ def pre_row(
         },
     }
     if state == "SELECTING_HAND":
-        adv = _safe(play_advice, G, dig=bool(flags.get("dig_line")))
+        shown = bool(flags.get("dig_line"))
+        # pass 7 B6: the line computed and logged silently (manifest dig_line_log, arm G); line_only never
+        # runs the legacy G3 path, so every other advice field equals the flag-off advice
+        silent = bool(flags.get("dig_line_log")) and not shown
+        adv = _safe(play_advice, G, dig=shown, line_only=silent)
         line_error = None
-        if "ledger_error" in adv and flags.get("dig_line"):
+        if "ledger_error" in adv and (shown or silent):
             # pass 6 H2: a line failure never removes advice.progress (F only)
             line_error, adv = adv["ledger_error"], _safe(play_advice, G)
         if "ledger_error" in adv:
@@ -169,19 +173,22 @@ def pre_row(
                 "suggested_action": _action(adv.get("action"), G),
                 "suggested_discard": _action({"cards": adv.get("discard")} if adv.get("discard") else None, G),
             }
-        if flags.get("dig_line"):
+        if shown or silent:
             # pass 6 H2: the reworked fact line (its own try: never touches advice.progress)
             try:
                 line = adv.get("line") if line_error is None else {"error": line_error, "text": []}
                 row["advice"]["dig_line"] = _line_row(line, G)
-                row["rendered"]["dig_line_text"] = {
-                    "rendered": bool(line and line.get("text")),
-                    "lines": len((line or {}).get("text") or []),
-                    "trigger": bool(line and line.get("trigger")),
-                    "near_tie": bool(line and line.get("near_tie")),
-                    "suppressed": (line or {}).get("suppressed"),
-                    "error": (line or {}).get("error"),
-                }
+                if silent:
+                    row["advice"]["dig_line_logged_only"] = True  # B6: computed, never rendered (G)
+                else:
+                    row["rendered"]["dig_line_text"] = {
+                        "rendered": bool(line and line.get("text")),
+                        "lines": len((line or {}).get("text") or []),
+                        "trigger": bool(line and line.get("trigger")),
+                        "near_tie": bool(line and line.get("near_tie")),
+                        "suppressed": (line or {}).get("suppressed"),
+                        "error": (line or {}).get("error"),
+                    }
             except Exception as e:  # the ledger must never break a game
                 row["advice"]["dig_line"] = {"ledger_error": f"{type(e).__name__}: {e}"}
     elif state in SHOP_STATES:
