@@ -550,6 +550,13 @@ def _joker_effect(
         return 0, 0, 3
     if key == "j_banner":
         return 30 * int(rnd.get("discards_left", 0)), 0, 1
+    if key == "j_blue_joker":
+        # pass 7 L5: inside the dig sampler's scoring view (G["luna"]["dig_deck_left"], set by
+        # _dig_sample) +2 chips per card left in the deck at that scoring step; elsewhere the
+        # exported "Currently +N Chips" below (the live deck count)
+        left = (G.get("luna") or {}).get("dig_deck_left")
+        if left is not None:
+            return 2 * max(int(left), 0), 0, 1
     if key == "j_mystic_summit":
         return (0, 15, 1) if int(rnd.get("discards_left", 0)) == 0 else (0, 0, 1)
     if key == "j_card_sharp":
@@ -2787,10 +2794,11 @@ DIG_UNSUPPORTED_JOKERS = frozenset({
     "j_ramen", "j_green_joker", "j_ride_the_bus", "j_obelisk", "j_ice_cream", "j_runner", "j_square",
     "j_trousers", "j_wee", "j_hiker", "j_castle", "j_hit_the_road", "j_yorick", "j_burnt", "j_selzer",
     "j_loyalty_card", "j_lucky_cat", "j_vampire", "j_midas_mask", "j_dna", "j_sixth_sense",
-    # Sol g3 re-check: deck size (Blue Joker), money read in score (Bull, Bootstraps: money paid or lost
+    # Sol g3 re-check: money read in score (Bull, Bootstraps: money paid or lost
     # inside the round only reaches a score through these), card destruction (Trading Card; also Canio,
-    # Glass Joker growth), hand levels on play (Space Joker)
-    "j_blue_joker", "j_bull", "j_bootstraps", "j_trading", "j_space", "j_glass", "j_caino",
+    # Glass Joker growth), hand levels on play (Space Joker). Blue Joker (deck size) is scored by
+    # _dig_sample from the deck left at each sampled scoring step since pass 7 L5.
+    "j_bull", "j_bootstraps", "j_trading", "j_space", "j_glass", "j_caino",
 })
 
 
@@ -2906,14 +2914,20 @@ def _dig_sample(
     perms = [rng.sample(range(len(deck)), len(deck)) for _ in range(n_samples)]
 
     Gs: dict[tuple[Any, ...], dict[str, Any]] = {}
+    # pass 7 L5: Blue Joker (held or copied) scores +2 chips per card left in the deck at each
+    # sampled scoring step, so the scoring view carries that count (and the cache keys on it)
+    blue = "j_blue_joker" in (set(keys) | set(copied_keys(G)))
 
-    def G_at(hl: int, dl: int, types: tuple[str, ...]) -> dict[str, Any]:
-        k = (hl, dl, types)
+    def with_deck(Gx: dict[str, Any], left: int) -> dict[str, Any]:
+        return {**Gx, "luna": {**(Gx.get("luna") or {}), "dig_deck_left": left}}
+
+    def G_at(hl: int, dl: int, types: tuple[str, ...], left: int) -> dict[str, Any]:
+        k = (hl, dl, types, left if blue else None)
         if k not in Gs:
             Gx = _e3_round(G, hl, dl)
             for t in types:
                 Gx = _dig_after_play(Gx, t, arm)
-            Gs[k] = Gx
+            Gs[k] = with_deck(Gx, left) if blue else Gx
         return Gs[k]
 
     def refill(n_held: int) -> int:
@@ -2928,7 +2942,8 @@ def _dig_sample(
             if not held:
                 return False, nh, nd  # deck and hand used up: the blind is lost on this draw (Sol g3 #3)
             memo = {"norm": [norms[id(c)] for c in held]}
-            s, t, play = _best_play(G_at(hl, dl, types), held, pad, memo=memo, ctx=ctx, expected=False, stop_at=need)
+            s, t, play = _best_play(G_at(hl, dl, types, len(perm) - ptr), held, pad, memo=memo, ctx=ctx,
+                                    expected=False, stop_at=need)
             if s >= need:
                 return True, nh + 1, nd
             if dl > 0 and ptr < len(perm) and s * hl < need:
@@ -2957,7 +2972,8 @@ def _dig_sample(
 
     # (i) play now: the exact suggested cards, floor score
     chosen = set(play_cards)
-    est = estimate_play(G, [hand_raw[i] for i in sorted(chosen)], [c for i, c in enumerate(hand_raw) if i not in chosen])
+    G0 = with_deck(G, len(deck)) if blue else G  # L5: play now scores at the current deck count
+    est = estimate_play(G0, [hand_raw[i] for i in sorted(chosen)], [c for i, c in enumerate(hand_raw) if i not in chosen])
     s0 = 0 if est["blocked"] else int(est["score"])
     rest0 = [c for i, c in enumerate(hand_raw) if i not in chosen]
 
@@ -3084,6 +3100,11 @@ def _best_play_action(
 #   R3 owner exceptions (held or copied) never get the dig trigger;
 #   R4 near-tie |Y - X| <= max(2, 2 SE) with what separates the branches;
 #   R5 the dig trigger; R6 "play 0 / dig > 0" NOTE; R7 facts only, <= 4 lines.
+# Pass 7 L1-L6 (pass7_plan.md section 2): the WORD "near-tie" uses the narrow
+# band line_near_tie_narrow (L1) with both counts beside it; L2 "-> play now"
+# only when both n/n or on pace; L3 0/0 has no action word; L4 Banner (held or
+# copied) removes every "play now"; L5 Blue Joker is scored in the sampler;
+# L6 R4/R5 (line_near_tie, line_trigger) stay frozen as in pass 6.
 # ---------------------------------------------------------------------------
 LINE_OWNER_JOKERS = {  # R3: key -> the joker and how it makes discards / hand order costly
     "j_card_sharp": "Card Sharp: a repeated hand type scores X3",
@@ -3148,6 +3169,31 @@ def line_trigger(shown: bool, owner: bool, floor: int, hands_left: int, need: in
     )
 
 
+def line_near_tie_narrow(x: int, y: int, n: int) -> bool:
+    """Pass 7 L1 (wording only; R5 keeps ``line_near_tie``): near-tie iff
+    |Y - X| <= max(2, min(2 * SE, n / 16)), SE in counts (n = 64: at most 4)."""
+    se = math.sqrt(x * (n - x) / n + y * (n - y) / n) if n > 0 else 0.0
+    return abs(y - x) <= max(2.0, min(2 * se, n / 16))
+
+
+LINE_BANNER = "Banner: +30 chips per discard left (already in both counts)"  # pass 7 L4
+
+
+def line_wording(x: int, y: int, n: int, floor: int, hands_left: int, need: int, banner: bool) -> str:
+    """Pass 7 L1-L4: the wording class of the comparison (logged as ``wording``).
+    ``zero_zero`` (L3) | ``near_tie_play`` / ``near_tie_no_edge`` (L1 + L2) |
+    ``counts`` (no near-tie word, no action word); ``banner_`` prefix (L4): no
+    "play now" anywhere, and no action label on a near-tie."""
+    if x == 0 and y == 0:
+        cls = "zero_zero"
+    elif line_near_tie_narrow(x, y, n):
+        on_pace = floor * hands_left >= need  # last hand (hands_left 1): floor >= NEED
+        cls = "near_tie_play" if (x == n and y == n) or on_pace else "near_tie_no_edge"
+    else:
+        cls = "counts"
+    return f"banner_{cls}" if banner else cls
+
+
 def _line_reason(G: dict[str, Any], progress: dict[str, Any], guard: tuple[str, Any] | None) -> str:
     """R2: the concrete reason a sampled comparison is not shown."""
     code, detail = guard if guard is not None else ("no_option", None)
@@ -3210,7 +3256,8 @@ def dig_line_facts(
         first += (f"; modeled play {names(play['cards'])} ({play['hand']}) = {fmt_num(play['floor'])} floor estimate"
                   + (f" ({'; '.join(q)})" if q else ""))
     text = [first]
-    out.update(comparison=cmp is not None, sampled=cmp, near_tie=False, trigger=False, note_zero=False, suppressed=None)
+    out.update(comparison=cmp is not None, sampled=cmp, near_tie=False, near_tie_narrow=False, wording=None,
+               trigger=False, note_zero=False, suppressed=None)
     if cmp is None:
         no_play = guard is not None and guard[0] == "no_play" and "none" in play
         out["suppressed"] = play["none"] if no_play else _line_reason(G, progress, guard)
@@ -3218,25 +3265,44 @@ def dig_line_facts(
     else:
         x, y, n = cmp["play"]["hits"], cmp["dig"]["hits"], cmp["samples"]
         dig = f"discard {names(cmp['dig']['discard'])}, keep {names(cmp['dig']['keep'])}"
-        if x == 0 and y > 0:  # R6
+        banner = "j_banner" in keys  # L4: held or copied
+        wording = line_wording(x, y, n, play.get("floor", 0), h, need, banner)
+        out["wording"] = wording
+        cls = wording.removeprefix("banner_")
+        tail = f"; {LINE_BANNER}" if banner else ""
+        if cls == "zero_zero":  # L3: no action word, no near-tie word
+            text.append(f"Sampled: no sampled clear either way (0/{n}): the modeled play, or digging ({dig}){tail}")
+        elif x == 0 and y > 0:  # R6
             out["note_zero"] = True
-            text.append(f"NOTE: no sampled clear by playing now (0/{n}); digging: {y}/{n} ({dig})")
+            what = "with the modeled play" if banner else "by playing now"
+            text.append(f"NOTE: no sampled clear {what} (0/{n}); digging: {y}/{n} ({dig}){tail}")
+        elif banner:
+            text.append(f"Sampled clears: playing the modeled play {x}/{n}; digging ({dig}) {y}/{n}{tail}")
         else:
             text.append(f"Sampled: play now {x}/{n} sampled clears; dig ({dig}) {y}/{n}")
-        out["near_tie"] = line_near_tie(x, y, n)
+        out["near_tie"] = line_near_tie(x, y, n)  # R4 frozen band (pass-6 field, the trigger's)
+        out["near_tie_narrow"] = line_near_tie_narrow(x, y, n)  # L1 band (the word: see ``wording``)
         out["trigger"] = line_trigger(True, bool(owner), play.get("floor", 0), h, need, x, y, n)
-        if out["near_tie"]:
+        if cls.startswith("near_tie"):
 
             def mean(b: dict[str, Any]) -> str:
                 return "no clearing sample" if b.get("hands_used") is None else f"{b['hands_used']:.1f}"
 
-            sep = [f"mean hands used on clearing samples: play now {mean(cmp['play'])}, dig {mean(cmp['dig'])}",
+            label = "the modeled play" if banner else "play now"
+            sep = [f"mean hands used on clearing samples: {label} {mean(cmp['play'])}, dig {mean(cmp['dig'])}",
                    f"the play's floor {fmt_num(play.get('floor', 0))}"]
             costs = [DISCARD_COSTS[k] for k in LINE_TIE_COSTS if k in keys]
             if costs:
                 sep.append(f"discard costs: {', '.join(costs)}")
             sep.append("$1 per unused hand at cash-out")
-            text.append("near-tie -> play now; " + "; ".join(sep))
+            word = f"near-tie {x}/{y} of {n}"
+            if banner:  # L4 beats every play-now label: counts and facts only
+                head = word
+            elif cls == "near_tie_play":  # L2: both n/n, or the modeled play is on pace
+                head = f"{word} -> play now"
+            else:
+                head = f"{word}: no clear edge; play now is below pace"
+            text.append(head + "; " + "; ".join(sep))
         elif out["trigger"]:
             text.append(f"A dig is worth considering: {dig}")
     if owner:
