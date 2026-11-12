@@ -3188,7 +3188,7 @@ def dig_line_facts(
         cls = wording.removeprefix("banner_")
         tail = f"; {LINE_BANNER}" if banner else ""
         if cls == "zero_zero":  # L3: no action word, no near-tie word
-            text.append(f"No sampled clear either way (0/{n}): the modeled play, or digging ({dig}){tail}")
+            text.append(f"Sampled: no sampled clear either way (0/{n}): the modeled play, or digging ({dig}){tail}")
         elif x == 0 and y > 0:  # R6
             out["note_zero"] = True
             what = "with the modeled play" if banner else "by playing now"
@@ -3198,7 +3198,7 @@ def dig_line_facts(
         else:
             text.append(f"Sampled: play now {x}/{n} sampled clears; dig ({dig}) {y}/{n}")
         out["near_tie"] = line_near_tie(x, y, n)  # R4 frozen band (pass-6 field, the trigger's)
-        out["near_tie_narrow"] = line_near_tie_narrow(x, y, n) and cls != "zero_zero"  # L1 band (the word)
+        out["near_tie_narrow"] = line_near_tie_narrow(x, y, n)  # L1 band (the word: see ``wording``)
         out["trigger"] = line_trigger(True, bool(owner), play.get("floor", 0), h, need, x, y, n)
         if cls.startswith("near_tie"):
 

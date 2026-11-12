@@ -50,8 +50,8 @@ def test_wording_classes_and_text() -> None:
     assert _facts([], 64, 64)["text"][2].startswith("near-tie 64/64 of 64 -> play now; ")
     # L3: 0/0 -> no action word, no near-tie word
     f = _facts([], 0, 0)
-    assert f["wording"] == "zero_zero" and not f["near_tie_narrow"] and len(f["text"]) == 2
-    assert f["text"][1].startswith("No sampled clear either way (0/64): the modeled play, or digging (")
+    assert f["wording"] == "zero_zero" and f["near_tie_narrow"] and len(f["text"]) == 2  # in the band, word not shown
+    assert f["text"][1].startswith("Sampled: no sampled clear either way (0/64): the modeled play, or digging (")
     assert "play now" not in " ".join(f["text"]) and "near-tie" not in " ".join(f["text"])
 
 
