@@ -586,6 +586,17 @@ def _joker_effect(
         free = int(jokers.get("limit", 5)) - int(jokers.get("count", 0))
         stencils = sum(1 for k in ctx["keys"] if k == "j_stencil")
         return 0, 0, float(max(1, free + stencils))
+    if key in DIG_STATE_JOKERS and "dig_value" in joker:
+        # pass 8 T1: inside the dig sampler's scoring view (_dig_sample sets "dig_value" on its own
+        # copies of the joker dicts) the value BEFORE this hand; Green Joker (+1) and Spare Trousers
+        # (+2 when the played cards contain a Two Pair) gain before scoring (card.lua context.before),
+        # Ice Cream loses its 5 chips after scoring (context.after). A copy reads the same dict.
+        v = float(joker["dig_value"])
+        if key == "j_ice_cream":
+            return v, 0, 1
+        if key == "j_green_joker":
+            return 0, v + 1, 1
+        return 0, v + (2 if _contains_two_pair(ctx.get("played") or []) else 0), 1
     if key in ("j_popcorn", "j_ice_cream", "j_swashbuckler", "j_bull", "j_bootstraps"):
         m = CURRENTLY.search(effect) or FIRST_PLUS.search(effect)
         if m:
@@ -891,6 +902,7 @@ def estimate_play(
         # The Mark: a held face-down card may be red, so Blackboard does not count (review r4 opus F2b)
         "held_masked": any(c["hidden"] and c["face"] for c in held),
         "scored": scored_cards,
+        "played": played,  # pass 8 T1: Spare Trousers in the dig sampler's view
         "keys": keys,
         "expected": expected,
     }
@@ -2775,7 +2787,8 @@ def _e3_action(G: dict[str, Any], e3: dict[str, Any], old: dict[str, Any]) -> di
 # The House, The Fish, The Wheel (face-down draws), The Hook (random discards
 # after each hand), Crimson Heart (random joker debuffs) and Cerulean Bell
 # (forced card): the estimator does not model them. Joker changes from
-# discards / plays (Green Joker, Ramen, Ride the Bus, ...) are not modelled.
+# discards / plays (Ramen, Ride the Bus, ...) are not modelled, except Green
+# Joker, Spare Trousers and Ice Cream (pass 8 T1, DIG_STATE_JOKERS).
 # Deterministic: seeded from the cards, cached per G.
 # ---------------------------------------------------------------------------
 DIG_SAMPLES = 64  # shuffles of the remaining deck per finished first action
@@ -2791,8 +2804,8 @@ PSYCHIC_LINE_REASON = "The Psychic: sampled comparison not validated for five-ca
 # the sampler keeps every joker as it is now, so with these owned or copied the
 # two first actions are not on equal terms -> no line (Sol g3 #2)
 DIG_UNSUPPORTED_JOKERS = frozenset({
-    "j_ramen", "j_green_joker", "j_ride_the_bus", "j_obelisk", "j_ice_cream", "j_runner", "j_square",
-    "j_trousers", "j_wee", "j_hiker", "j_castle", "j_hit_the_road", "j_yorick", "j_burnt", "j_selzer",
+    "j_ramen", "j_ride_the_bus", "j_obelisk", "j_runner", "j_square",
+    "j_wee", "j_hiker", "j_castle", "j_hit_the_road", "j_yorick", "j_burnt", "j_selzer",
     "j_loyalty_card", "j_lucky_cat", "j_vampire", "j_midas_mask", "j_dna", "j_sixth_sense",
     # Sol g3 re-check: money read in score (Bull, Bootstraps: money paid or lost
     # inside the round only reaches a score through these), card destruction (Trading Card; also Canio,
@@ -2800,6 +2813,44 @@ DIG_UNSUPPORTED_JOKERS = frozenset({
     # _dig_sample from the deck left at each sampled scoring step since pass 7 L5.
     "j_bull", "j_bootstraps", "j_trading", "j_space", "j_glass", "j_caino",
 })
+# Pass 8 T1: jokers whose value the sampler carries per sampled hand played / discard (installed
+# card.lua; amounts game.lua config): Green Joker +1 Mult before each unblocked hand scores
+# (context.before), -1 per discard clamped at 0 (context.discard, once per discard); Spare Trousers
+# +2 Mult before an unblocked hand whose played cards contain a Two Pair scores (poker_hands['Two Pair']
+# or ['Full House']); Ice Cream -5 Chips after EVERY hand (context.after runs for a blocked hand too),
+# melting (removed) when that leaves it at 0 or less. Only the source changes (not context.blueprint):
+# Blueprint / Brainstorm score the source's current value.
+DIG_STATE_JOKERS = {"j_green_joker": "Mult", "j_trousers": "Mult", "j_ice_cream": "Chips"}
+ICE_CREAM_DECAY = 5
+GREEN_HAND_ADD = 1
+GREEN_DISCARD_SUB = 1
+TROUSERS_ADD = 2
+
+
+def _contains_two_pair(played: list[dict[str, Any]]) -> bool:
+    """misc_functions.lua evaluate_poker_hand: 'Two Pair' (or 'Full House') is non-empty when the
+    played cards (all of them, debuffed too; Stone cards have no rank) hold exactly two ranks twice,
+    or one rank three times and one twice (get_X_same counts EXACT multiplicities). A Flush or a
+    Flush House with two pairs qualifies; Four of a Kind does not."""
+    counts = Counter(c["rank"] for c in played if c.get("rank"))
+    twos = sum(1 for v in counts.values() if v == 2)
+    threes = sum(1 for v in counts.values() if v == 3)
+    return twos == 2 or (threes == 1 and twos == 1)
+
+
+def _dig_joker_value(j: dict[str, Any]) -> float | None:
+    """The current value of a DIG_STATE_JOKERS joker from its exported effect (None: unreadable).
+    Green Joker / Spare Trousers: "(Currently +N Mult)"; Ice Cream: "+N Chips -5 Chips ..."."""
+    key = j.get("key", "")
+    effect = str((j.get("value") or {}).get("effect", "") or "")
+    m = CURRENTLY.search(effect)
+    if m and m.group(1) not in ("X", "x", "×") and m.group(3).lower() == DIG_STATE_JOKERS[key].lower():
+        return float(m.group(2))
+    if key == "j_ice_cream":
+        m2 = FIRST_PLUS.search(effect)
+        if m2 and m2.group(2).lower() == "chips":
+            return float(m2.group(1))
+    return None
 
 
 def _dig_after_play(G: dict[str, Any], htype: str, arm: bool) -> dict[str, Any]:
@@ -2839,6 +2890,9 @@ def _dig_guard(
     if _active_boss(G) in DIG_UNSUPPORTED:
         return ("boss", _active_boss(G))
     bad = (set(_joker_keys(G)) | set(copied_keys(G))) & DIG_UNSUPPORTED_JOKERS
+    # pass 8 T1: a modelled joker whose current value cannot be read is not modelled
+    bad |= {j.get("key", "") for j in _area_cards(G, "jokers")
+            if j.get("key") in DIG_STATE_JOKERS and not _joker_debuffed(j) and _dig_joker_value(j) is None}
     if bad:
         return ("joker", sorted(bad))
     return None
@@ -2921,33 +2975,95 @@ def _dig_sample(
     def with_deck(Gx: dict[str, Any], left: int) -> dict[str, Any]:
         return {**Gx, "luna": {**(Gx.get("luna") or {}), "dig_deck_left": left}}
 
-    def G_at(hl: int, dl: int, types: tuple[str, ...], left: int) -> dict[str, Any]:
-        k = (hl, dl, types, left if blue else None)
+    # pass 8 T1: Green Joker / Spare Trousers / Ice Cream (active, by position on the full joker list)
+    # carry their value per sampled step: ``st`` = one value per such joker (None: Ice Cream melted),
+    # set on the view's own copies of the joker dicts ("dig_value", read by _joker_effect; a Blueprint /
+    # Brainstorm copy reads the same dict). Without one, ``st`` is None and G / ctx / keys / cache keys
+    # are exactly as before.
+    jokers_raw = _area_cards(G, "jokers")
+    t1 = [(i, str(j.get("key", ""))) for i, j in enumerate(jokers_raw)
+          if j.get("key") in DIG_STATE_JOKERS and not _joker_debuffed(j)]
+    st0 = tuple(_dig_joker_value(jokers_raw[i]) for i, _k in t1) if t1 else None
+    ctxs: dict[tuple[bool, ...], dict[str, Any]] = {}
+
+    def with_jokers(Gx: dict[str, Any], st: tuple[float | None, ...]) -> dict[str, Any]:
+        vals = {i: v for (i, _k), v in zip(t1, st)}
+        cards, gone = [], 0
+        for i, j in enumerate(jokers_raw):
+            if i not in vals:
+                cards.append(j)
+            elif vals[i] is None:  # melted: removed (copy targets, Abstract / Stencil counts follow)
+                gone += 1
+            else:
+                cards.append({**j, "dig_value": vals[i]})
+        area = dict(Gx.get("jokers") or {})
+        area["cards"] = cards
+        if gone and "count" in area:
+            area["count"] = max(int(area.get("count") or 0) - gone, 0)
+        return {**Gx, "jokers": area}
+
+    def ctx_at(st: tuple[float | None, ...] | None) -> dict[str, Any]:
+        """The shared ctx, or (after a melt) one for the view without the melted joker."""
+        if st is None or all(v is not None for v in st):
+            return ctx
+        gone = tuple(v is None for v in st)
+        if gone not in ctxs:
+            ctxs[gone] = _estimate_ctx(with_jokers(G, st))
+        return ctxs[gone]
+
+    def after_play(st: tuple[float | None, ...] | None, played: list[dict[str, Any]],
+                   blocked: bool) -> tuple[float | None, ...] | None:
+        if st is None:
+            return None
+        out: list[float | None] = []
+        for (_i, key), v in zip(t1, st):
+            if v is not None and key == "j_green_joker" and not blocked:
+                v += GREEN_HAND_ADD
+            elif v is not None and key == "j_trousers" and not blocked and _contains_two_pair(played):
+                v += TROUSERS_ADD
+            elif v is not None and key == "j_ice_cream":
+                v = None if v - ICE_CREAM_DECAY <= 0 else v - ICE_CREAM_DECAY
+            out.append(v)
+        return tuple(out)
+
+    def after_discard(st: tuple[float | None, ...] | None) -> tuple[float | None, ...] | None:
+        if st is None:
+            return None
+        return tuple(max(0.0, v - GREEN_DISCARD_SUB) if v is not None and key == "j_green_joker" else v
+                     for (_i, key), v in zip(t1, st))
+
+    def G_at(hl: int, dl: int, types: tuple[str, ...], left: int,
+             st: tuple[float | None, ...] | None = None) -> dict[str, Any]:
+        k = (hl, dl, types, left if blue else None) if st is None else (hl, dl, types, left if blue else None, st)
         if k not in Gs:
             Gx = _e3_round(G, hl, dl)
             for t in types:
                 Gx = _dig_after_play(Gx, t, arm)
-            Gs[k] = with_deck(Gx, left) if blue else Gx
+            Gx = with_deck(Gx, left) if blue else Gx
+            Gs[k] = Gx if st is None else with_jokers(Gx, st)
         return Gs[k]
 
     def refill(n_held: int) -> int:
         return 3 if serpent else max(size - n_held, 0)
 
     def run(held: list[dict[str, Any]], perm: list[int], ptr: int, hl: int, dl: int, need: float,
-            types: tuple[str, ...]) -> tuple[bool, int, int]:
+            types: tuple[str, ...], st: tuple[float | None, ...] | None = None) -> tuple[bool, int, int]:
         """The continuation policy from a hand held (``ptr``: next card of ``perm``).
-        Returns (blind beaten, hands played, discards used) - pass 6 H2 (R4)."""
+        Returns (blind beaten, hands played, discards used) - pass 6 H2 (R4).
+        ``st``: the T1 joker values before this step (None: no T1 joker)."""
         nh = nd = 0
         while True:
             if not held:
                 return False, nh, nd  # deck and hand used up: the blind is lost on this draw (Sol g3 #3)
             memo = {"norm": [norms[id(c)] for c in held]}
-            s, t, play = _best_play(G_at(hl, dl, types, len(perm) - ptr), held, pad, memo=memo, ctx=ctx,
-                                    expected=False, stop_at=need)
+            cx = ctx_at(st)
+            Gv = G_at(hl, dl, types, len(perm) - ptr, st)
+            s, t, play = _best_play(Gv, held, pad, memo=memo, ctx=cx, expected=False, stop_at=need)
             if s >= need:
                 return True, nh + 1, nd
             if dl > 0 and ptr < len(perm) and s * hl < need:
-                disc = set(_discard_choice(memo["norm"], set(play), min(limit, len(perm) - ptr), keys=keys))
+                disc = set(_discard_choice(memo["norm"], set(play), min(limit, len(perm) - ptr),
+                                           keys=keys if cx is ctx else cx["keys"]))
                 if disc:
                     kept = [c for i, c in enumerate(held) if i not in disc]
                     n = min(refill(len(kept)), len(perm) - ptr)
@@ -2955,6 +3071,7 @@ def _dig_sample(
                     ptr += n
                     dl -= 1
                     nd += 1
+                    st = after_discard(st)
                     continue
             hl -= 1
             nh += 1
@@ -2963,8 +3080,12 @@ def _dig_sample(
             if play:
                 need -= s
                 types = (*types, t)
+                st = after_play(st, [memo["norm"][i] for i in play], False)  # _best_play skips blocked plays
             else:  # every play is blocked: one lowest card is played for 0 and the hand turns over
                 play = [min(range(len(held)), key=lambda i: CHIP_VALUE.get(memo["norm"][i]["rank"] or "", 0))]
+                if st is not None:  # T1: blocked (no before-scoring gain) or merely scoring 0
+                    fb = estimate_play(Gv, [held[i] for i in play], [c for i, c in enumerate(held) if i not in play])
+                    st = after_play(st, [memo["norm"][i] for i in play], bool(fb["blocked"]))
             rest = [c for i, c in enumerate(held) if i not in set(play)]
             n = min(refill(len(rest)), len(perm) - ptr)
             held = rest + [deck[j] for j in perm[ptr:ptr + n]]
@@ -2973,9 +3094,13 @@ def _dig_sample(
     # (i) play now: the exact suggested cards, floor score
     chosen = set(play_cards)
     G0 = with_deck(G, len(deck)) if blue else G  # L5: play now scores at the current deck count
+    if st0 is not None:  # T1: play now scores with the before-scoring gains
+        G0 = with_jokers(G0, st0)
     est = estimate_play(G0, [hand_raw[i] for i in sorted(chosen)], [c for i, c in enumerate(hand_raw) if i not in chosen])
     s0 = 0 if est["blocked"] else int(est["score"])
     rest0 = [c for i, c in enumerate(hand_raw) if i not in chosen]
+    st_play = after_play(st0, [norms[id(hand_raw[i])] for i in sorted(chosen)], bool(est["blocked"]))
+    st_dig = after_discard(st0)
 
     def play_hit(perm: list[int]) -> tuple[bool, int, int]:
         if s0 >= goal:
@@ -2983,12 +3108,13 @@ def _dig_sample(
         if h <= 1:
             return False, 1, 0
         n = min(refill(len(rest0)), len(perm))
-        hit, nh, nd = run(rest0 + [deck[j] for j in perm[:n]], perm, n, h - 1, discards, goal - s0, (est["hand"],))
+        hit, nh, nd = run(rest0 + [deck[j] for j in perm[:n]], perm, n, h - 1, discards, goal - s0, (est["hand"],),
+                          st_play)
         return hit, nh + 1, nd
 
     def dig_hit(kept: list[dict[str, Any]], perm: list[int]) -> tuple[bool, int, int]:
         n = min(refill(len(kept)), len(perm))
-        hit, nh, nd = run(kept + [deck[j] for j in perm[:n]], perm, n, h, discards - 1, goal, ())
+        hit, nh, nd = run(kept + [deck[j] for j in perm[:n]], perm, n, h, discards - 1, goal, (), st_dig)
         return hit, nh, nd + 1
 
     def used(results: list[tuple[bool, int, int]]) -> dict[str, Any]:
@@ -3112,8 +3238,9 @@ LINE_OWNER_JOKERS = {  # R3: key -> the joker and how it makes discards / hand o
     "j_banner": "Banner: +30 chips per discard left",
     "j_blue_joker": "Blue Joker: +2 chips per card left in the deck",
     "j_delayed_grat": "Delayed Gratification: $2 per discard if none used",
+    "j_green_joker": "Green Joker: -1 Mult per discard",  # pass 8 T1, owner Q12 (a): as Blue Joker
 }
-LINE_TIE_COSTS = ("j_banner", "j_blue_joker", "j_delayed_grat")  # R4: discard costs named on a near-tie
+LINE_TIE_COSTS = ("j_banner", "j_blue_joker", "j_delayed_grat", "j_green_joker")  # R4: discard costs named on a near-tie
 LINE_MAX_LINES = 4
 
 
