@@ -90,6 +90,10 @@
 {%- if A.acrobat %}
 - Acrobat: X3 on the LAST hand of the blind only{% if P.hands_left == 1 %} (this hand: listed scores include it){% endif %}
 {%- endif %}
+{%- set bgf = burglar_fact(G) %}
+{%- if bgf %}
+- {{ bgf }}
+{%- endif %}
 {%- if A.discard_costs %}
 - Discard costs: {{ A.discard_costs | join("; ") }}
 {%- endif %}
@@ -140,6 +144,7 @@
 {% endif %}
 {%- if G.state == "SHOP" %}
 # SHOP
+{%- set MF = shop_money_facts(G) if flags and flags.shop_facts else none %}
 {%- if I and I.score %}
 - TYPICAL: your best play scores about {{ I.score | fmt_num }} per hand now ({{ I.plays }} hands dealt from your deck, mostly {{ I.mix | join(", ") }}).{% set nb0 = next_blind(G) %}{% if nb0 and nb0.score %} Next blind {{ nb0.score | fmt_num }} = about {{ ((nb0.score + I.score - 1) // I.score) | int }} such hands.{% endif %}
 - SCORE = change per hand if you buy the item (growing jokers show now and in 3 rounds).{% if not S.slots_free %} Slots are full: each shop joker also shows its best swap (sell that joker first, then buy).{% endif %}
@@ -147,19 +152,23 @@
 {%- if G.shop and G.shop.cards %}
 {%- for card in G.shop.cards -%}
 {%- if card.state and card.state.hidden %}
-- {{ loop.index0 }}: face-down card
+- {{ loop.index0 }}: face-down card{% if MF %} {{ MF.shop[loop.index0] }}{% endif %}
 {%- elif card.set == "JOKER" %}
-- {{ loop.index0 }}: {{ card.label }} ${{ card.cost.buy }}{% if card.modifier and card.modifier.edition %} ({{ card.modifier.edition }}){% endif %}{% if I and I.shop[loop.index0] %} | SCORE {{ I.shop[loop.index0] }}{% endif %}{% if I and I.swaps[loop.index0] %} | {{ I.swaps[loop.index0].text }}{% endif %} | effect: {{ card.value.effect }}
+- {{ loop.index0 }}: {{ card.label }} ${{ card.cost.buy }}{% if card.modifier and card.modifier.edition %} ({{ card.modifier.edition }}){% endif %}{% if I and I.shop[loop.index0] %} | SCORE {{ I.shop[loop.index0] }}{% endif %}{% if I and I.swaps[loop.index0] %} | {{ I.swaps[loop.index0].text }}{% endif %} | effect: {{ card.value.effect }}{% if MF %} {{ MF.shop[loop.index0] }}{% endif %}
 {%- elif card.set in ["TAROT", "PLANET", "SPECTRAL"] %}
-- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) ${{ card.cost.buy }}{% if I and I.shop[loop.index0] %} | SCORE {{ I.shop[loop.index0] }}{% endif %}{{ effect(card) }}
+- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) ${{ card.cost.buy }}{% if I and I.shop[loop.index0] %} | SCORE {{ I.shop[loop.index0] }}{% endif %}{{ effect(card) }}{% if MF %} {{ MF.shop[loop.index0] }}{% endif %}
 {%- else %}
-- {{ loop.index0 }}: {{ card_line(card) }} (playing card) ${{ card.cost.buy }}
+- {{ loop.index0 }}: {{ card_line(card) }} (playing card) ${{ card.cost.buy }}{% if MF %} {{ MF.shop[loop.index0] }}{% endif %}
 {%- endif %}
 {%- endfor %}
 {%- else %}
 - no cards left
 {%- endif %}
-- Reroll cost: ${{ G.round.reroll_cost }}
+- Reroll cost: ${{ G.round.reroll_cost }}{% if MF %} {{ MF.reroll }}{% endif %}
+{%- set stl = shop_tally_text(G) if flags and flags.shop_facts else "" %}
+{%- if stl %}
+- {{ stl }}
+{%- endif %}
 {%- set si = (G.luna or {}).shop_intent %}
 {%- if si %}
 - Earlier this shop, when you sold {{ si.sold }}, your reasoning mentioned {{ si.item }} ({{ si.field }} {{ si.index }}, ${{ si.price }}); money now ${{ si.money }}.
@@ -168,13 +177,13 @@
 
 ## Vouchers (use buy with `voucher`)
 {% for v in G.vouchers.cards -%}
-- {{ loop.index0 }}: {{ v.label }} ${{ v.cost.buy }}{{ effect(v) }}
+- {{ loop.index0 }}: {{ v.label }} ${{ v.cost.buy }}{{ effect(v) }}{% if MF %} {{ MF.vouchers[loop.index0] }}{% endif %}
 {% endfor %}
 {%- endif %}
 {%- if G.packs and G.packs.cards %}
 ## Packs (use buy with `pack`)
 {% for p in G.packs.cards -%}
-- {{ loop.index0 }}: {{ p.label }} ${{ p.cost.buy }}{% if p.value and p.value.effect %} | {{ p.value.effect }}{% endif %}
+- {{ loop.index0 }}: {{ p.label }} ${{ p.cost.buy }}{% if p.value and p.value.effect %} | {{ p.value.effect }}{% endif %}{% if MF %} {{ MF.packs[loop.index0] }}{% endif %}
 {% endfor %}
 {%- endif %}
 {%- set nb = next_blind(G) %}

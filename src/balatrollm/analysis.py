@@ -1402,9 +1402,60 @@ def reserve(G: dict[str, Any], status: str | None = None, boss_short: bool = Fal
     return RESERVE
 
 
-def interest(money: int) -> int:
-    """Interest earned at end of next round (vanilla cap $5)."""
-    return max(0, min(int(money) // 5, 5))
+# B1 (pass 8): the game's interest (functions/state_events.lua:1191-1202) is
+# interest_amount * min(floor(dollars / 5), interest_cap / 5) when dollars >= 5.
+# interest_cap: 25 (game.lua:1909), set to 50 by Seed Money and 100 by Money Tree
+# when redeemed (card.lua:1931-1934; game.lua v_seed_money / v_money_tree extra).
+# interest_amount: 1 (game.lua:1910) + 1 per To the Moon in the joker area, added
+# in add_to_deck and taken off in remove_from_deck (card.lua:613-615, 670-672);
+# a debuff calls remove_from_deck (card.lua:526-537), so a debuffed To the Moon
+# adds nothing, and Blueprint / Brainstorm do not copy it (blueprint_compat false:
+# it is not a calculate effect).
+INTEREST_STEP_CAPS = {"v_seed_money": 10, "v_money_tree": 20}  # interest_cap / 5
+
+
+def interest_cap(G: dict[str, Any] | None) -> int:
+    """Interest steps ($5 each) the game pays at most: 5, 10 with Seed Money,
+    20 with Money Tree (from G.used_vouchers; any read error -> 5)."""
+    try:
+        used = (G or {}).get("used_vouchers") or {}
+        keys = set(used) if isinstance(used, (dict, list, tuple, set)) else set()
+        return max([5] + [INTEREST_STEP_CAPS[k] for k in keys if k in INTEREST_STEP_CAPS])
+    except Exception:  # noqa: BLE001 - a fact never breaks the prompt
+        return 5
+
+
+def interest_multiplier(G: dict[str, Any] | None) -> int:
+    """The game's interest_amount: 1 + 1 per held, not debuffed To the Moon."""
+    try:
+        return 1 + sum(
+            1 for j in _area_cards(G or {}, "jokers") if j.get("key") == "j_to_the_moon" and not _joker_debuffed(j)
+        )
+    except Exception:  # noqa: BLE001
+        return 1
+
+
+def interest_steps(money: int, cap: int = 5) -> int:
+    """Whole $5 steps of ``money`` the interest counts (0 for money < $5)."""
+    return max(0, min(int(money) // 5, int(cap)))
+
+
+def interest(money: int, G: dict[str, Any] | None = None, *, cap: int | None = None, mult: int | None = None) -> int:
+    """Interest earned at the end of the next round on ``money`` (B1): the
+    voucher cap and To the Moon from ``G`` (no G: vanilla, cap 5, x1).
+    ``cap`` / ``mult`` override G's (S1: holdings after a buy)."""
+    if cap is None:
+        cap = interest_cap(G) if G is not None else 5
+    if mult is None:
+        mult = interest_multiplier(G) if G is not None else 1
+    return int(mult) * interest_steps(money, cap)
+
+
+def interest_spare(money: int, G: dict[str, Any] | None = None) -> int:
+    """INTEREST_SPARE: money above the $5 steps that keep this round's
+    interest (step $5, voucher cap; To the Moon does not change it)."""
+    money = int(money)
+    return max(money - 5 * interest_steps(money, interest_cap(G) if G is not None else 5), 0)
 
 
 def shop_context(
@@ -1422,7 +1473,7 @@ def shop_context(
     effective_floor = 0 if weak else floor
     return {
         "money": money,
-        "interest": interest(money),
+        "interest": interest(money, G),
         "floor": floor,
         "effective_floor": effective_floor,
         "spendable": max(money - effective_floor, 0),
@@ -1438,6 +1489,75 @@ def shop_context(
         "last_round": last,
         "weak": weak,
     }
+
+
+def _money_text(m: int) -> str:
+    return f"${m}" if m >= 0 else f"-${-m}"
+
+
+def credit_debt(G: dict[str, Any]) -> int:
+    """Debt the game allows: $20 with a not debuffed Credit Card (bankrupt_at;
+    card.lua:655-656 / set_debuff), else 0 (the buy / reroll rule of
+    shop_buy_veto and the mod's buy.lua / reroll.lua)."""
+    return 20 if any(j.get("key") == "j_credit_card" and not _joker_debuffed(j) for j in _area_cards(G, "jokers")) else 0
+
+
+def money_after_text(G: dict[str, Any], price: int, cap: int | None = None, mult: int | None = None) -> str:
+    """S1: "-> money $M, interest next round $I" after paying ``price`` (0 =
+    free), or "-> cannot afford (need $D more)" when the game would refuse it
+    (price > 0 and price > money + Credit Card debt). ``cap`` / ``mult``: the
+    interest holdings after the buy (default: G's)."""
+    money = int(G.get("money") or 0)
+    price = int(price or 0)
+    if price > 0 and price > money + credit_debt(G):
+        return f"-> cannot afford (need ${price - money - credit_debt(G)} more)"
+    m = money - price
+    return f"-> money {_money_text(m)}, interest next round ${interest(m, G, cap=cap, mult=mult)}"
+
+
+def shop_money_facts(G: dict[str, Any]) -> dict[str, Any] | None:
+    """S1 (pass 8, arm J, harness.shop_facts): per shop item / voucher / pack and
+    the reroll, the money and next round's interest after paying for it, with
+    the holdings after the buy (buying To the Moon adds to the interest
+    multiplier at once, Seed Money / Money Tree raise the cap at once: card.lua
+    613-615, 1931-1934). A pack's contents are unknown: current holdings.
+    Facts only. None on any error (no extra text)."""
+    try:
+        cap, mult = interest_cap(G), interest_multiplier(G)
+
+        def price(c: dict[str, Any]) -> int:
+            return int((c.get("cost") or {}).get("buy") or 0)
+
+        shop = {}
+        for i, c in enumerate(_area_cards(G, "shop")):
+            moon = c.get("key") == "j_to_the_moon"
+            shop[i] = money_after_text(G, price(c), cap, mult + (1 if moon else 0))
+        vouchers = {}
+        for i, c in enumerate(_area_cards(G, "vouchers")):
+            vcap = max(cap, INTEREST_STEP_CAPS.get(str(c.get("key") or ""), 0))
+            vouchers[i] = money_after_text(G, price(c), vcap, mult)
+        packs = {i: money_after_text(G, price(c), cap, mult) for i, c in enumerate(_area_cards(G, "packs"))}
+        reroll = money_after_text(G, int((G.get("round") or {}).get("reroll_cost") or 0), cap, mult)
+        return {"shop": shop, "vouchers": vouchers, "packs": packs, "reroll": reroll}
+    except Exception as e:  # noqa: BLE001 - a fact line never breaks the prompt
+        logger.warning(f"Shop money facts failed: {type(e).__name__}: {e}")
+        return None
+
+
+def shop_tally_text(G: dict[str, Any]) -> str:
+    """S2 (arm J): "Rerolls this ante: N ($X); this run: $Y on rerolls, $Z
+    earned in interest" from the bot's counters (G.luna.shop_tally); "" when
+    absent or on any error."""
+    try:
+        t = (G.get("luna") or {}).get("shop_tally")
+        if not isinstance(t, dict):
+            return ""
+        return (
+            f"Rerolls this ante: {int(t['ante_rerolls'])} (${int(t['ante_reroll_spend'])}); "
+            f"this run: ${int(t['run_reroll_spend'])} on rerolls, ${int(t['run_interest'])} earned in interest"
+        )
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def deck_summary(G: dict[str, Any], area: str = "cards") -> dict[str, Any]:
@@ -1984,6 +2104,36 @@ def discard_costs(G: dict[str, Any]) -> list[str]:
     if "j_mystic_summit" in keys:
         out.append("Mystic Summit +15 Mult once DISCARDS reach 0 (a gain)")
     return out
+
+
+def burglar_fact(G: dict[str, Any]) -> str:
+    """F2 (pass 8, both arms): with Burglar held or copied, the game rule of
+    the hand view as one fact line ("" otherwise or on any error). Burglar
+    (card.lua:2522-2527, game.lua j_burglar extra 3, blueprint_compat): when a
+    blind is selected, +3 hands and discards set to 0. After a play the game
+    draws up to hand size while the deck has cards; with The Serpent active
+    it draws min(deck, 3) after each play or discard (state_events.lua:355-368).
+    "no discards" only when DISCARDS is 0 now (Burglar bought mid-blind or
+    debuffed at blind select leaves the discards)."""
+    try:
+        keys = set(_joker_keys(G)) | set(copied_keys(G))
+        if "j_burglar" not in keys:
+            return ""
+        left = int((G.get("round") or {}).get("discards_left", 0) or 0)
+        head = (
+            "Burglar: no discards"
+            if left <= 0
+            else f"Burglar: all discards are lost when a blind is selected (this blind still has {left})"
+        )
+        if _active_boss(G) == "The Serpent":
+            tail = ("cards you play leave your hand; The Serpent refills only 3 cards from the deck after each play "
+                    "(fewer if the deck has fewer)")
+        else:
+            tail = ("cards you play leave your hand and are refilled from the deck while it has cards, "
+                    "so a five-card play draws up to 5 new ones")
+        return f"{head}; {tail}"
+    except Exception:  # noqa: BLE001 - a fact line never breaks the prompt
+        return ""
 
 
 def _discard_hurts(G: dict[str, Any]) -> bool:
@@ -4230,15 +4380,15 @@ def shop_investment(G: dict[str, Any], sit: dict[str, Any], score_spendable: int
     sell = f", selling {best['swap']['label']}" if best["swap"] else ""
     why = sit.get("status")
     line = (
-        f"buy {best['label']} (${best['cost']}{sell}): ${after} left, interest next round ${interest(after)}"
-        f" (loses ${interest(money) - interest(after)}), next blind win chance about {chance(then)}"
-        f" | save: ${money} left, interest ${interest(money)}, win chance about {chance(now)}"
+        f"buy {best['label']} (${best['cost']}{sell}): ${after} left, interest next round ${interest(after, G_buy)}"
+        f" (loses ${interest(money, G) - interest(after, G_buy)}), next blind win chance about {chance(then)}"
+        f" | save: ${money} left, interest ${interest(money, G)}, win chance about {chance(now)}"
         f" | reroll (${reroll}): ${money - reroll} left, the joker it finds is not known"
     )
     return {
         **best,
         "money_after": after,
-        "interest_lost": interest(money) - interest(after),
+        "interest_lost": interest(money, G) - interest(after, G_buy),
         "win_now": now,
         "win_with": then,
         "line": line,
@@ -4319,7 +4469,7 @@ def run_status(
         "floor": floor,
         "effective_floor": effective_floor,
         "spendable": max(money - effective_floor, 0),
-        "interest": interest(money),
+        "interest": interest(money, G),
         "jokers": count,
         "joker_limit": limit,
         "slots_free": max(limit - count, 0),
@@ -4389,7 +4539,7 @@ def run_status(
         "square": owns_joker(G, "j_square"),
         "deck_total": len(_area_cards(G, "cards")) + len(_area_cards(G, "hand")),
         # most you can spend without lowering next round's interest
-        "interest_spare": max(money - 5 * interest(money), 0),
+        "interest_spare": interest_spare(money, G),
         "consumable_slots_free": max(
             int(cons.get("limit", 2)) - int(cons.get("count", 0)), 0
         ),
@@ -6006,6 +6156,34 @@ ANKH_FULL_PACK = ("Ankh needs a free joker slot: the game refuses it while your 
 ANKH_FULL_USE = "Ankh needs a free joker slot: the game refuses it while your joker slots are full. Sell a joker first."
 
 
+def use_index_veto(G: dict[str, Any], params: dict[str, Any]) -> str | None:
+    """F1 (pass 8, legality, both arms): `use` with a consumable index the
+    player does not hold (past the end, or negative: Python's cons[-1] would
+    pick the last card) is refused with what is held, instead of the game's
+    "Consumable index out of range". Only in the states the game accepts `use`
+    (SELECTING_HAND, SHOP; mod use.lua requires_state); a missing or non-number
+    index is left to the game's own check. Pack picks are the `pack` tool."""
+    if G.get("state") not in ("SELECTING_HAND", "SHOP"):
+        return None
+    raw = params.get("consumable")
+    if isinstance(raw, bool):
+        return None
+    try:
+        k = int(raw)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if isinstance(raw, float) and raw != k:
+        return None
+    cons = _area_cards(G, "consumables")
+    if 0 <= k < len(cons):
+        return None
+    if not cons:
+        return "You hold no consumables."
+    held = ", ".join(f"{i}: {c.get('label') or c.get('key') or '?'}" for i, c in enumerate(cons))
+    rng = "consumable 0" if len(cons) == 1 else f"consumable 0..{len(cons) - 1}"
+    return f"You hold no consumable at index {k}. You hold: {held} (use {rng})."
+
+
 def _legal_only_rest(
     G: dict[str, Any], method: str, params: dict[str, Any], shop_rerolls: int, full: bool, reasoning: str = ""
 ) -> str | None:
@@ -6071,6 +6249,8 @@ def _legal_only_rest(
                 f"Retcon and ${BOSS_REROLL_COST}."
             )
     if method == "use":
+        if veto := use_index_veto(G, params):  # F1 (pass 8): a consumable not held
+            return veto
         cons = _area_cards(G, "consumables")
         try:
             chosen = cons[int(params.get("consumable", -1))]
@@ -6424,6 +6604,8 @@ def validate_action(
             return ("The Mark: you cannot see face-down cards, so do not target them. "
                     "Target face-up cards, or keep the card for later.")
     if method == "use":
+        if veto := use_index_veto(G, params):  # F1 (pass 8): a consumable not held
+            return veto
         cons = _area_cards(G, "consumables")
         try:
             chosen = cons[int(params.get("consumable", -1))]
@@ -6588,6 +6770,9 @@ TEMPLATE_GLOBALS = {
     "main_hand": main_hand,
     "money_floor": money_floor,
     "interest": interest,
+    "shop_money_facts": shop_money_facts,
+    "shop_tally_text": shop_tally_text,
+    "burglar_fact": burglar_fact,
     "consumable_targets": consumable_targets,
     "current_blind": current_blind,
     "next_blind": next_blind,

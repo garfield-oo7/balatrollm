@@ -147,6 +147,7 @@ def pre_row(
             "suggest_action": bool(flags.get("suggest_action")),
             "suggest_discard": bool(flags.get("suggest_discard", True)),
             "dig_line": bool(flags.get("dig_line")),
+            "shop_facts": bool(flags.get("shop_facts")),  # pass 8 S1 / S2 (arm J); the tally itself is G.luna.shop_tally
         },
         "status": status if "ledger_error" in status else {
             k: status.get(k)
