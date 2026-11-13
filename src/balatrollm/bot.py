@@ -174,6 +174,7 @@ class Bot:
         self._reroll_tally: dict[int, list[int]] = {}
         self._run_interest: int = 0
         self._interest_rounds: set[tuple[Any, Any]] = set()
+        self._tally_invalid: bool = False  # S2 fail closed: an uncounted event omits the tally for the run
 
         # Pass 5 G2: write-only log book (config ``book``: strategy -> arm).
         # Read only at game end, never by the game prompts.
@@ -414,7 +415,6 @@ class Bot:
                     try:
                         gamestate = await self._balatro.call("cash_out")
                         self._cash_out_misses = 0
-                        self._accrue_interest(owed)
                     except BalatroError as e:
                         # pass 5 (C-on N64): after a slow call the state read can
                         # lag the game; re-read and go on instead of ending the run
@@ -425,6 +425,8 @@ class Bot:
                         logger.warning(f"cash_out refused ({e}); re-reading the state ({misses}/3)")
                         await asyncio.sleep(2)
                         gamestate = await self._balatro.call("gamestate")
+                    else:
+                        self._accrue_interest(owed)  # S2: only after cash_out succeeded; never raises
                 case "BLIND_SELECT":
                     # Rerolls a bad boss first (harness ``reroll_boss``), then
                     # selects every blind, except a skip for a tag the strategy
@@ -1196,10 +1198,10 @@ class Bot:
             "boss_rerolls": getattr(self, "_boss_rerolls", {}).get(ante, 0),
             "boss_reroll_request": getattr(self, "_boss_reroll_request", None),
         }
-        try:  # S2 (pass 8): kept and logged in both arms, rendered only with harness.shop_facts
-            gamestate["luna"]["shop_tally"] = self._shop_tally(ante)
-        except Exception as e:  # noqa: BLE001 - a counter never breaks a game (no key = no S2 line)
-            logger.warning(f"Shop tally failed: {type(e).__name__}: {e}")
+        # S2 (pass 8): kept and logged in both arms, rendered only with harness.shop_facts;
+        # omitted for the rest of the run once any event could not be counted (fail closed)
+        if (tally := self._shop_tally(ante)) is not None:
+            gamestate["luna"]["shop_tally"] = tally
         cur = current_blind(gamestate)
         if cur and cur.get("name") == "The Mouth":
             # pass 5 G1d: the game locks the first hand type played this round;
@@ -1222,52 +1224,75 @@ class Bot:
             status = run_status(gamestate, self._rounds, self._history)["status"]
             gamestate["luna"]["status"] = status
 
+    def _tally_fail(self, where: str, e: BaseException | None = None) -> None:
+        """S2 fail closed: an event the tally could not count marks it invalid for
+        the rest of the run (G.luna.shop_tally is omitted from then on). One
+        warning line, never a traceback."""
+        self._tally_invalid = True
+        why = f": {type(e).__name__}: {e}" if e is not None else ""
+        logger.warning(f"Shop tally stopped ({where}{why}); G.luna.shop_tally is omitted for the rest of the run")
+
     def _note_reroll(self, before: dict[str, Any], after: dict[str, Any]) -> None:
-        """S2: one successful shop reroll, its $ = the money change (free = 0)."""
+        """S2: one successful shop reroll, its $ = the money change (free = 0).
+        The new [count, $] is computed first, then stored in one assignment."""
         try:
             ante = int(before.get("ante_num") or 1)
             spent = int(before.get("money") or 0) - int(after.get("money") or 0)
             tally = self.__dict__.setdefault("_reroll_tally", {})
-            row = tally.setdefault(ante, [0, 0])
-            row[0] += 1
-            row[1] += spent
+            n, total = tally.get(ante, [0, 0])
+            new = [int(n) + 1, int(total) + spent]
+            tally[ante] = new
         except Exception as e:  # noqa: BLE001 - a counter never breaks a game
-            logger.warning(f"Reroll tally failed: {type(e).__name__}: {e}")
+            self._tally_fail("reroll", e)
 
     def _interest_owed(self, gamestate: dict[str, Any]) -> tuple[tuple[Any, Any], int] | None:
         """S2: the interest the game pays at this cash-out (B1 on the ROUND_EVAL
-        money and holdings), keyed by (ante, round)."""
+        money and holdings), keyed by (ante, round); None = not computable (the
+        tally is marked invalid if that cash-out then succeeds)."""
         try:
             key = (gamestate.get("ante_num"), gamestate.get("round_num"))
-            return key, interest(int(gamestate.get("money") or 0), gamestate)
+            return key, int(interest(int(gamestate.get("money") or 0), gamestate))
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"Interest tally failed: {type(e).__name__}: {e}")
+            logger.warning(f"Interest tally: owed interest not computable: {type(e).__name__}: {e}")
             return None
 
     def _accrue_interest(self, owed: tuple[tuple[Any, Any], int] | None) -> None:
         """S2: add a round's interest once, after its cash_out succeeded
-        (ROUND_EVAL can be retried)."""
-        if owed is None:
-            return
-        key, amount = owed
-        done = self.__dict__.setdefault("_interest_rounds", set())
-        if key in done:
-            return
-        done.add(key)
-        self._run_interest = getattr(self, "_run_interest", 0) + amount
+        (ROUND_EVAL can be retried). The new set and sum are computed first,
+        then stored together; never raises."""
+        try:
+            if owed is None:
+                self._tally_fail("interest not computable for a cashed-out round")
+                return
+            key, amount = owed
+            done = getattr(self, "_interest_rounds", set())
+            if key in done:
+                return
+            new_done = done | {key}
+            new_total = int(getattr(self, "_run_interest", 0)) + int(amount)
+            self._interest_rounds, self._run_interest = new_done, new_total
+        except Exception as e:  # noqa: BLE001 - a counter never breaks a game
+            self._tally_fail("interest", e)
 
-    def _shop_tally(self, ante: int) -> dict[str, int]:
-        """S2: G.luna.shop_tally, the counters before this decision."""
-        tally = getattr(self, "_reroll_tally", {})
-        n, spend = tally.get(ante, [0, 0])
-        return {
-            "ante": ante,
-            "ante_rerolls": n,
-            "ante_reroll_spend": spend,
-            "run_rerolls": sum(r[0] for r in tally.values()),
-            "run_reroll_spend": sum(r[1] for r in tally.values()),
-            "run_interest": getattr(self, "_run_interest", 0),
-        }
+    def _shop_tally(self, ante: int) -> dict[str, int] | None:
+        """S2: G.luna.shop_tally, the counters before this decision; None once
+        the tally is invalid (or on any error, which invalidates it)."""
+        if getattr(self, "_tally_invalid", False):
+            return None
+        try:
+            tally = getattr(self, "_reroll_tally", {})
+            n, spend = tally.get(ante, [0, 0])
+            return {
+                "ante": int(ante),
+                "ante_rerolls": int(n),
+                "ante_reroll_spend": int(spend),
+                "run_rerolls": sum(int(r[0]) for r in tally.values()),
+                "run_reroll_spend": sum(int(r[1]) for r in tally.values()),
+                "run_interest": int(getattr(self, "_run_interest", 0)),
+            }
+        except Exception as e:  # noqa: BLE001
+            self._tally_fail("publish", e)
+            return None
 
     async def _handle_veto(
         self, msg: str, before: dict[str, Any] | None = None

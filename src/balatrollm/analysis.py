@@ -1496,10 +1496,13 @@ def _money_text(m: int) -> str:
 
 
 def credit_debt(G: dict[str, Any]) -> int:
-    """Debt the game allows: $20 with a not debuffed Credit Card (bankrupt_at;
-    card.lua:655-656 / set_debuff), else 0 (the buy / reroll rule of
-    shop_buy_veto and the mod's buy.lua / reroll.lua)."""
-    return 20 if any(j.get("key") == "j_credit_card" and not _joker_debuffed(j) for j in _area_cards(G, "jokers")) else 0
+    """S1: debt the game allows = $20 per held, not debuffed Credit Card: each
+    one lowers bankrupt_at by 20 in add_to_deck and gives it back in
+    remove_from_deck / on debuff (card.lua:593-595, 655-656, 526-537); a
+    Blueprint / Brainstorm copy adds nothing. The mod's buy.lua / reroll.lua
+    allow cost <= money - bankrupt_at. (The older buy validator keeps its
+    single-card rule.)"""
+    return 20 * sum(1 for j in _area_cards(G, "jokers") if j.get("key") == "j_credit_card" and not _joker_debuffed(j))
 
 
 def money_after_text(G: dict[str, Any], price: int, cap: int | None = None, mult: int | None = None) -> str:
