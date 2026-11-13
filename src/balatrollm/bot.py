@@ -28,6 +28,7 @@ from .analysis import (
     boss_reroll_reason,
     estimate_play,
     discard_phase_order,
+    interest,
     joker_order,
     mark_view,
     play_facts_line,
@@ -168,6 +169,11 @@ class Bot:
         self._phase_moved: bool = False
         # Tags the harness skipped for that have not paid yet (M1)
         self._pending_tags: list[dict[str, Any]] = []
+        # S2 (pass 8): successful shop rerolls per ante [count, $] and per run,
+        # and the interest the game paid (computed, B1) per cashed-out round
+        self._reroll_tally: dict[int, list[int]] = {}
+        self._run_interest: int = 0
+        self._interest_rounds: set[tuple[Any, Any]] = set()
 
         # Pass 5 G2: write-only log book (config ``book``: strategy -> arm).
         # Read only at game end, never by the game prompts.
@@ -404,9 +410,11 @@ class Bot:
                             round_record(self._last_hand_state, gamestate)
                         )
                         self._last_hand_state = None
+                    owed = self._interest_owed(gamestate)  # S2: pre-payout ROUND_EVAL balance and holdings
                     try:
                         gamestate = await self._balatro.call("cash_out")
                         self._cash_out_misses = 0
+                        self._accrue_interest(owed)
                     except BalatroError as e:
                         # pass 5 (C-on N64): after a slow call the state read can
                         # lag the game; re-read and go on instead of ending the run
@@ -997,6 +1005,8 @@ class Bot:
             self._last_failed_msg = None
             self._collector.record_call("successful")
             self._collector.write_gamestate(gamestate)
+            if fn_name == "reroll":
+                self._note_reroll(before, gamestate)  # S2: successful rerolls only
             self._consecutive_vetoes = 0
             self._shop_misses = 0
             if self.harness.get("shop_lock", True) and shop_lock_after(before, fn_name, gamestate):
@@ -1185,6 +1195,8 @@ class Bot:
             "luna_reroll": self._luna_reroll_on(),
             "boss_rerolls": getattr(self, "_boss_rerolls", {}).get(ante, 0),
             "boss_reroll_request": getattr(self, "_boss_reroll_request", None),
+            # S2 (pass 8): kept and logged in both arms, rendered only with harness.shop_facts
+            "shop_tally": self._shop_tally(ante),
         }
         cur = current_blind(gamestate)
         if cur and cur.get("name") == "The Mouth":
@@ -1207,6 +1219,53 @@ class Bot:
             # blind on its final hand); the validators use it too
             status = run_status(gamestate, self._rounds, self._history)["status"]
             gamestate["luna"]["status"] = status
+
+    def _note_reroll(self, before: dict[str, Any], after: dict[str, Any]) -> None:
+        """S2: one successful shop reroll, its $ = the money change (free = 0)."""
+        try:
+            ante = int(before.get("ante_num") or 1)
+            spent = int(before.get("money") or 0) - int(after.get("money") or 0)
+            tally = self.__dict__.setdefault("_reroll_tally", {})
+            row = tally.setdefault(ante, [0, 0])
+            row[0] += 1
+            row[1] += spent
+        except Exception as e:  # noqa: BLE001 - a counter never breaks a game
+            logger.warning(f"Reroll tally failed: {type(e).__name__}: {e}")
+
+    def _interest_owed(self, gamestate: dict[str, Any]) -> tuple[tuple[Any, Any], int] | None:
+        """S2: the interest the game pays at this cash-out (B1 on the ROUND_EVAL
+        money and holdings), keyed by (ante, round)."""
+        try:
+            key = (gamestate.get("ante_num"), gamestate.get("round_num"))
+            return key, interest(int(gamestate.get("money") or 0), gamestate)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Interest tally failed: {type(e).__name__}: {e}")
+            return None
+
+    def _accrue_interest(self, owed: tuple[tuple[Any, Any], int] | None) -> None:
+        """S2: add a round's interest once, after its cash_out succeeded
+        (ROUND_EVAL can be retried)."""
+        if owed is None:
+            return
+        key, amount = owed
+        done = self.__dict__.setdefault("_interest_rounds", set())
+        if key in done:
+            return
+        done.add(key)
+        self._run_interest = getattr(self, "_run_interest", 0) + amount
+
+    def _shop_tally(self, ante: int) -> dict[str, int]:
+        """S2: G.luna.shop_tally, the counters before this decision."""
+        tally = getattr(self, "_reroll_tally", {})
+        n, spend = tally.get(ante, [0, 0])
+        return {
+            "ante": ante,
+            "ante_rerolls": n,
+            "ante_reroll_spend": spend,
+            "run_rerolls": sum(r[0] for r in tally.values()),
+            "run_reroll_spend": sum(r[1] for r in tally.values()),
+            "run_interest": getattr(self, "_run_interest", 0),
+        }
 
     async def _handle_veto(
         self, msg: str, before: dict[str, Any] | None = None
