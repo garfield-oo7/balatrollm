@@ -3309,13 +3309,18 @@ LINE_BANNER = "Banner: +30 chips per discard left (already in both counts)"  # p
 def line_wording(x: int, y: int, n: int, floor: int, hands_left: int, need: int, banner: bool) -> str:
     """Pass 7 L1-L4: the wording class of the comparison (logged as ``wording``).
     ``zero_zero`` (L3) | ``near_tie_play`` / ``near_tie_no_edge`` (L1 + L2) |
-    ``counts`` (no near-tie word, no action word); ``banner_`` prefix (L4): no
-    "play now" anywhere, and no action label on a near-tie."""
+    ``counts`` (no near-tie word, no action word) | ``counts_below_pace`` (pass 8
+    T2: counts with "; play now is below pace"); ``banner_`` prefix (L4): no
+    "play now" anywhere, and no action label on a near-tie (``banner_counts``
+    never gets the pace text). T2 excludes the R6 NOTE rows (X = 0 < Y): they
+    have no "Sampled: play now" line to append to and say 0/n already."""
+    on_pace = floor * hands_left >= need  # last hand (hands_left 1): floor >= NEED
     if x == 0 and y == 0:
         cls = "zero_zero"
     elif line_near_tie_narrow(x, y, n):
-        on_pace = floor * hands_left >= need  # last hand (hands_left 1): floor >= NEED
         cls = "near_tie_play" if (x == n and y == n) or on_pace else "near_tie_no_edge"
+    elif not banner and not on_pace and not (x == n and y == n) and not (x == 0 and y > 0):
+        cls = "counts_below_pace"
     else:
         cls = "counts"
     return f"banner_{cls}" if banner else cls
@@ -3406,7 +3411,8 @@ def dig_line_facts(
         elif banner:
             text.append(f"Sampled clears: playing the modeled play {x}/{n}; digging ({dig}) {y}/{n}{tail}")
         else:
-            text.append(f"Sampled: play now {x}/{n} sampled clears; dig ({dig}) {y}/{n}")
+            pace_tail = "; play now is below pace" if cls == "counts_below_pace" else ""  # pass 8 T2
+            text.append(f"Sampled: play now {x}/{n} sampled clears; dig ({dig}) {y}/{n}{pace_tail}")
         out["near_tie"] = line_near_tie(x, y, n)  # R4 frozen band (pass-6 field, the trigger's)
         out["near_tie_narrow"] = line_near_tie_narrow(x, y, n)  # L1 band (the word: see ``wording``)
         out["trigger"] = line_trigger(True, bool(owner), play.get("floor", 0), h, need, x, y, n)

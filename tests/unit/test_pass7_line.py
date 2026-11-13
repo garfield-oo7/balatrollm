@@ -33,9 +33,12 @@ def test_narrow_band_boundaries() -> None:
 
 def test_wording_classes_and_text() -> None:
     # old band, not the new one: counts only, no near-tie word, no action word
+    # (pass 8 T2: below pace, 300 * 2 < 1,000 -> "; play now is below pace" appended, class counts_below_pace)
     f = _facts([], 52, 57)
-    assert f["wording"] == "counts" and f["near_tie"] and not f["near_tie_narrow"] and not f["trigger"]
+    assert f["wording"] == "counts_below_pace" and f["near_tie"] and not f["near_tie_narrow"] and not f["trigger"]
     assert f["text"][1].startswith("Sampled: play now 52/64 sampled clears; dig (")
+    assert f["text"][1].endswith(" 57/64; play now is below pace")
+    assert _facts([], 52, 57, floor=500)["wording"] == "counts"  # on pace: unchanged
     assert len(f["text"]) == 2 and "near-tie" not in " ".join(f["text"])
     # L2: below pace (300 * 2 < 1,000) -> no clear edge
     f = _facts([], 52, 55)
