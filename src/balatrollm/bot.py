@@ -1195,9 +1195,11 @@ class Bot:
             "luna_reroll": self._luna_reroll_on(),
             "boss_rerolls": getattr(self, "_boss_rerolls", {}).get(ante, 0),
             "boss_reroll_request": getattr(self, "_boss_reroll_request", None),
-            # S2 (pass 8): kept and logged in both arms, rendered only with harness.shop_facts
-            "shop_tally": self._shop_tally(ante),
         }
+        try:  # S2 (pass 8): kept and logged in both arms, rendered only with harness.shop_facts
+            gamestate["luna"]["shop_tally"] = self._shop_tally(ante)
+        except Exception as e:  # noqa: BLE001 - a counter never breaks a game (no key = no S2 line)
+            logger.warning(f"Shop tally failed: {type(e).__name__}: {e}")
         cur = current_blind(gamestate)
         if cur and cur.get("name") == "The Mouth":
             # pass 5 G1d: the game locks the first hand type played this round;
