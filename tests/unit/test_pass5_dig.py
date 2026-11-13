@@ -76,9 +76,9 @@ def test_a_used_up_deck_does_not_raise() -> None:
 
 
 def test_no_line_with_a_joker_the_sampler_cannot_follow() -> None:
-    """Sol g3 #2: e.g. Green Joker changes with each discard: no line rather than a biased one
-    (pass 7 L5: Blue Joker is now scored by the sampler, so this uses Green Joker)."""
+    """Sol g3 #2: e.g. Ride the Bus changes with each played hand: no line rather than a biased one
+    (pass 7 L5: Blue Joker, pass 8 T1: Green Joker are now scored by the sampler, so this uses Ride the Bus)."""
     from .test_analysis import joker
 
-    G = make_state("H_2 D_7 C_9 S_J H_4 D_K C_5 S_8", [joker("j_green_joker", "Green Joker")], hands_left=3, discards_left=3, chips=0)
+    G = make_state("H_2 D_7 C_9 S_J H_4 D_K C_5 S_8", [joker("j_ride_the_bus", "Ride the Bus")], hands_left=3, discards_left=3, chips=0)
     assert analysis.play_advice(G, dig=True)["dig_line"] is None
