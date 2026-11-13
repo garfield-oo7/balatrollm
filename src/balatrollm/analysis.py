@@ -597,6 +597,9 @@ def _joker_effect(
         if key == "j_green_joker":
             return 0, v + 1, 1
         return 0, v + (2 if _contains_two_pair(ctx.get("played") or []) else 0), 1
+    if key == "j_swashbuckler" and "dig_value" in joker:
+        # pass 8 T1 (Sol g2 r1 #1): the sampler's post-melt view, without the melted Ice Cream's sell value
+        return 0, float(joker["dig_value"]), 1
     if key in ("j_popcorn", "j_ice_cream", "j_swashbuckler", "j_bull", "j_bootstraps"):
         m = CURRENTLY.search(effect) or FIRST_PLUS.search(effect)
         if m:
@@ -2853,6 +2856,18 @@ def _dig_joker_value(j: dict[str, Any]) -> float | None:
     return None
 
 
+def _dig_sell_value(j: dict[str, Any]) -> int | None:
+    """A joker's sell value as exported (``cost.sell``; None: unreadable)."""
+    v = (j.get("cost") or {}).get("sell")
+    return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
+
+
+def _swash_value(j: dict[str, Any]) -> float | None:
+    """Swashbuckler's current Mult ("(Currently +N Mult)"; None: unreadable)."""
+    m = CURRENTLY.search(str((j.get("value") or {}).get("effect", "") or ""))
+    return float(m.group(2)) if m and m.group(1) not in ("X", "x", "×") and m.group(3).lower() == "mult" else None
+
+
 def _dig_after_play(G: dict[str, Any], htype: str, arm: bool) -> dict[str, Any]:
     """``_e3_after_play`` plus The Arm: the played type loses one level."""
     G2 = _e3_after_play(G, htype)
@@ -2895,6 +2910,14 @@ def _dig_guard(
             if j.get("key") in DIG_STATE_JOKERS and not _joker_debuffed(j) and _dig_joker_value(j) is None}
     if bad:
         return ("joker", sorted(bad))
+    # Sol g2 r1 #1: Swashbuckler (held or copied) loses a melted Ice Cream's sell value (card.lua:4240-4247);
+    # the sampler needs both numbers
+    jokers = _area_cards(G, "jokers")
+    ices = [j for j in jokers if j.get("key") == "j_ice_cream" and not _joker_debuffed(j)]
+    if ices and "j_swashbuckler" in (set(_joker_keys(G)) | set(copied_keys(G))):
+        swash = [j for j in jokers if j.get("key") == "j_swashbuckler" and not _joker_debuffed(j)]
+        if any(_dig_sell_value(j) is None for j in ices) or any(_swash_value(j) is None for j in swash):
+            return ("ice_swash", None)
     return None
 
 
@@ -2988,18 +3011,25 @@ def _dig_sample(
 
     def with_jokers(Gx: dict[str, Any], st: tuple[float | None, ...]) -> dict[str, Any]:
         vals = {i: v for (i, _k), v in zip(t1, st)}
-        cards, gone = [], 0
+        cards, gone, sold, neg = [], 0, 0, 0
         for i, j in enumerate(jokers_raw):
             if i not in vals:
                 cards.append(j)
             elif vals[i] is None:  # melted: removed (copy targets, Abstract / Stencil counts follow)
                 gone += 1
+                sold += _dig_sell_value(j) or 0  # readable whenever Swashbuckler is in play (_dig_guard)
+                neg += (j.get("modifier") or {}).get("edition") == "NEGATIVE"
             else:
                 cards.append({**j, "dig_value": vals[i]})
+        if sold:  # Sol g2 r1 #1: Swashbuckler (a copy reads the same dict) drops the melted sell value
+            cards = [{**j, "dig_value": max((_swash_value(j) or 0.0) - sold, 0.0)}
+                     if j.get("key") == "j_swashbuckler" and _swash_value(j) is not None else j for j in cards]
         area = dict(Gx.get("jokers") or {})
         area["cards"] = cards
         if gone and "count" in area:
             area["count"] = max(int(area.get("count") or 0) - gone, 0)
+        if neg and area.get("limit") is not None:  # Sol g2 r1 #2: a Negative joker takes its slot (card.lua:687-695)
+            area["limit"] = max(int(area["limit"]) - neg, 0)
         return {**Gx, "jokers": area}
 
     def ctx_at(st: tuple[float | None, ...] | None) -> dict[str, Any]:
@@ -3354,6 +3384,7 @@ def _line_reason(G: dict[str, Any], progress: dict[str, Any], guard: tuple[str, 
         "no_hand_cards": "no cards in hand",
         "face_down": "face-down cards in hand",
         "no_option": "no discard option",
+        "ice_swash": "Ice Cream with Swashbuckler: a sell value is not readable",
     }.get(code, code)
 
 
