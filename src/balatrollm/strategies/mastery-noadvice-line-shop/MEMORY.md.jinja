@@ -1,0 +1,29 @@
+{#- Memory (pass 4 A1 mastery-noadvice: no "decide now" checklist). -#}
+# MEMORY
+{%- if rounds %}
+## Blinds so far (most recent last)
+{% for r in rounds[-4:] -%}
+- Ante {{ r.ante }} {{ r.blind }}: scored {{ r.scored | fmt_num }} / {{ r.target | fmt_num }}, {{ r.hands_left }} hands left{% if r.main_hand %}, most played {{ r.main_hand }}{% endif %}
+{% endfor %}
+{%- endif %}
+{%- if history %}
+## Your last actions (oldest first)
+{% for e in history[-8:] -%}
+- {{ e.method }} {{ e.params | tojson }} -> {{ e.result or "ok" }}
+{% if e.facts %}  ({{ e.facts }})
+{% endif %}{% endfor %}
+{%- else %}
+- First decision of the run.
+{%- endif %}
+{%- if last_error_call_msg %}
+
+**Your last answer was invalid**: {{ last_error_call_msg }}
+Answer with exactly one tool call with valid JSON arguments.
+{%- endif %}
+{%- if last_failed_call_msg %}
+
+**Your last action FAILED**: {{ last_failed_call_msg }}
+Do not repeat it. Choose a different action.
+{%- endif %}
+
+Reply with exactly one tool call. Put your short reasoning first.

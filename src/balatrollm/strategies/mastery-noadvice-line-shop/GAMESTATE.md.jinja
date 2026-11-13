@@ -1,0 +1,232 @@
+{#- Live game state for "mastery-noadvice" (pass 4 arm A1): the facts the
+    mastery harness computes (balatrollm.analysis), without its advice
+    (suggested actions, tags, tiers, goals, counters, budgets). -#}
+{%- set S = run_status(G, rounds, history) -%}
+{%- set boss = boss_impact(G) -%}
+{%- set I = shop_impact(G) if G.state in ["SHOP", "SMODS_BOOSTER_OPENED"] else none -%}
+{%- macro card_line(c) -%}
+{%- if c.state and c.state.hidden -%}face-down card
+{%- else -%}{{ c | card_name }} ({{ c | card_chips }} chips)
+{%- if c.modifier and c.modifier.enhancement %} {{ c.modifier.enhancement }}{% endif %}
+{%- if c.modifier and c.modifier.edition %} {{ c.modifier.edition }}{% endif %}
+{%- if c.modifier and c.modifier.seal %} {{ c.modifier.seal }}-seal{% endif %}
+{%- if c.state and c.state.debuff %} DEBUFFED (scores 0){% endif %}
+{%- endif -%}
+{%- endmacro -%}
+{%- macro joker_line(j) -%}
+{%- if j.state and j.state.hidden -%}face-down joker
+{%- else -%}{{ j.label }}{% if j.modifier and j.modifier.edition %} ({{ j.modifier.edition }}){% endif %}
+{%- if j.value and j.value.effect %} | effect: {{ j.value.effect }}{% endif %}
+{%- if j.state and j.state.debuff %} | DEBUFFED{% endif %}
+{%- endif -%}
+{%- endmacro -%}
+{%- macro effect(c) -%}{% if c.value and c.value.effect %} | effect: {{ c.value.effect }}{% endif %}{%- endmacro -%}
+# STATUS
+- Ante {{ S.ante }}/8, round {{ G.round_num }}, money ${{ S.money }}
+- Jokers {{ S.jokers }}/{{ S.joker_limit }}, SLOTS_FREE {{ S.slots_free }}, XMULT_OWNED {{ S.xmult_owned }}
+- Interest next round ${{ S.interest }} | INTEREST_SPARE ${{ S.interest_spare }} | Blue Seal cards owned {{ S.blue_seals }}
+{% for t in S.pending_tags %}- PENDING TAG: {{ t }}
+{% endfor %}- STATUS: {{ S.status }} for the next blind ({{ S.next_name }}){% if S.win_pct is not none %}, win chance about {{ S.win_pct }}%{% endif %}{% if S.hands_needed %}: {{ S.sit_target | fmt_num }} needs about {{ S.hands_needed }} of {{ S.next_hands }} hands at about {{ S.sit_per | fmt_num }} per hand (your best plays: {{ S.best_types | join(", ") }}){% endif %}{% if S.safety_net %}; your last 2 blinds were each won with 2+ hands left{% endif %}
+{%- if S.last_spare is not none and G.state != "SELECTING_HAND" %}
+- LAST BLIND: won with {{ S.last_spare }} hand{{ "s" if S.last_spare != 1 }} spare
+{%- endif %}
+{%- set bc = S.boss_check %}
+{%- if bc and (not bc.ok or bc.name == "The Needle") %}
+- BOSS CHECK: {{ bc.name }} ({{ bc.target | fmt_num }}{% if bc.allowed == 1 %}, ONE hand only{% endif %}): about {{ bc.per_hand | fmt_num }} per hand{% if bc.grown_blinds %} once your growing jokers grow over the {{ bc.grown_blinds }} blind{{ "s" if bc.grown_blinds != 1 }} before it{% endif %} -> {% if bc.ok %}beatable in {{ bc.hands }} of {{ bc.allowed }} hand{{ "s" if bc.allowed != 1 }}{% else %}BOSS NEEDS about +{{ bc.needs | fmt_num }} per hand{% if bc.allowed == 1 %} in ONE play{% endif %}{% endif %}
+{%- elif bc %}
+- BOSS CHECK: {{ bc.name }}: beatable with your current build (about {{ bc.hands }} of {{ bc.allowed }} hands)
+{%- endif %}
+{%- if S.boss_reroll_request %}
+- BOSS REROLL queued: {{ S.boss_reroll_request.boss }} is rerolled at the next blind select ($10 then)
+{%- elif S.boss_reroll_ok %}
+- BOSS REROLL available ($10 at the next blind select): call reroll_boss and {{ boss.name }} is rerolled at the next blind select
+{%- endif %}
+{%- if S.observatory %}
+- Observatory owned: each Planet held in your consumable slots gives X1.5 Mult to its hand type
+{%- endif %}
+{%- if boss.name %}
+{%- if G.state == "SELECTING_HAND" and ((G.blinds or {}).boss or {}).status != "CURRENT" %}
+- Boss this ante (a LATER blind, NOT this one: its rules do not apply now): {{ boss.name }} ({{ boss.score | fmt_num }}): {{ boss.effect }}
+{%- else %}
+- Boss this ante: {{ boss.name }} ({{ boss.score | fmt_num }}): {{ boss.effect }}{% set bf = boss_fact(boss.name) if not boss.disabled else "" %}{% if bf %} ({{ bf }}){% endif %}
+{%- endif %}
+{%- if G.state in ["SHOP", "SMODS_BOOSTER_OPENED"] and boss.name == "Verdant Leaf" and ((G.blinds or {}).boss or {}).status in ["SELECT", "UPCOMING"] %}
+- Joker sales before the Verdant Leaf blind do not count; only a joker sold during that blind turns it off.
+{%- endif %}
+{%- endif %}
+{% if G.state == "SELECTING_HAND" %}
+{%- set A = play_advice(G, dig=true) if flags and flags.dig_line else play_advice(G) -%}
+{%- set P = A.progress %}
+{%- set held_jokers = (G.jokers.cards or []) | selectattr("key", "in", ["j_raised_fist", "j_blackboard", "j_blueprint", "j_brainstorm"]) | list %}
+# ROUND
+- Blind: {{ P.name }}, target {{ P.target | fmt_num }}, scored {{ P.scored | fmt_num }}
+- NEED {{ P.remaining | fmt_num }} more | HANDS {{ P.hands_left }} | DISCARDS {{ P.discards_left }} | PER_HAND {{ P.per_hand | fmt_num }}
+{%- if P.kind == "boss" and boss.disabled %}
+- {{ boss.effect }}
+{%- elif P.kind == "boss" and boss_fact(boss.name) %}
+- Boss rule now: {{ boss_fact(boss.name) }}
+{%- endif %}
+{%- set V = verdant_options(G) %}
+{%- if V %}
+{%- if V.hidden %}
+- Verdant Leaf sale comparison not shown: {{ V.hidden }}
+{%- else %}
+- keep all jokers: cards debuffed, best play {{ V.keep.names }} = {{ V.keep.score | fmt_num }} (floor)
+{%- for s in V.sells %}
+- sell {{ s.joker }}: best play {{ s.names }} = {{ s.score | fmt_num }} (floor)
+{%- endfor %}
+{%- if V.not_shown %}
+- ({{ V.not_shown }} more joker{{ "s" if V.not_shown != 1 }} not shown)
+{%- endif %}
+{%- endif %}
+- Selling is optional; you may win on jokers alone.
+{%- endif %}
+{%- for sp in A.suit_pays %}
+- {{ sp.label }}: {{ {"H": "Hearts", "D": "Diamonds", "C": "Clubs", "S": "Spades"}[sp.suit] }}{% if sp.label == "Ancient Joker" %} this round{% endif %}, {{ sp.gain }} per {{ {"H": "Heart", "D": "Diamond", "C": "Club", "S": "Spade"}[sp.suit] }} scored
+{%- endfor %}
+{%- if A.mail_rank %}
+- Mail-In Rebate: each {{ A.mail_rank }} you discard pays $5 this round
+{%- endif %}
+{%- if A.acrobat %}
+- Acrobat: X3 on the LAST hand of the blind only{% if P.hands_left == 1 %} (this hand: listed scores include it){% endif %}
+{%- endif %}
+{%- if A.discard_costs %}
+- Discard costs: {{ A.discard_costs | join("; ") }}
+{%- endif %}
+{%- if A.blind_play %}
+- The House: every card is face down. Playing {{ A.blind_play.n }} face-down card{% if A.blind_play.n > 1 %}s{% endif %} blind (they still score) typically scores about {{ A.blind_play.typical | fmt_num }}; discarding face-down cards shows new ones (each discard is gone for later hands).
+{%- endif %}
+{%- if A.blue_in_hand %}
+- Blue Seal card in hand at {{ A.blue_in_hand }}: if it is held in hand when the blind is beaten it makes the Planet of your last played hand{% if S.consumable_slots_free %}{% else %}, but your consumable slots are FULL{% endif %}
+{%- endif %}
+
+## Your hand (index: card)
+{% for c in G.hand.cards -%}
+- {{ loop.index0 }}: {{ card_line(c) }}
+{% endfor %}
+## Listed plays (best per hand type, FLOOR score estimates)
+{% for p in A.plays -%}
+- {{ p.hand }} {{ p.cards }} = {% for i in p.cards %}{{ G.hand.cards[i] | card_name }}{% if not loop.last %}, {% endif %}{% endfor %} -> {% if p.floor is defined and p.floor < p.score %}about {{ p.score | fmt_num }}, at worst {{ p.floor | fmt_num }}{% else %}{{ p.score | fmt_num }}{% endif %}
+{%- if p.blocked %} BLOCKED: {{ p.blocked }}
+{%- elif p.wins %} WINS
+{%- elif p.reaches_pace %} (reaches PER_HAND)
+{%- else %} (below PER_HAND){% endif %}
+{%- if p.repeat %} (Card Sharp X3: type already played this round){% endif %}
+{%- if p.padded %} ({{ p.padded }}){% endif %}
+{%- if p.unknown %} (not counted: {{ p.unknown | join(", ") }}){% endif %}
+{%- if held_jokers %}{% set hf = selection_facts(G, p.cards).held_lines %}{% if hf %} ({{ hf | join("; ") }}){% endif %}{% endif %}
+{% else -%}
+- none
+{% endfor %}
+{%- if A.mark_play %}{% set mp = A.mark_play -%}
+- Face-down play {{ mp.cards }} = {{ mp.n }} face-down card{{ "s" if mp.n != 1 }} (The Mark: {% if mp.any_rank %}with Pareidolia any card can come face down; it{% else %}each is a J, Q or K and{% endif %} still scores) -> about {{ mp.expected | fmt_num }}, {% if mp.floor is not none %}at worst {{ mp.floor | fmt_num }}{% else %}lowest of 300 tries {{ mp.low | fmt_num }}{% endif %}; {% if mp.minimum %}at least {{ mp.minimum }}{% else %}no sure hand{% endif %}, most often {{ mp.likely }}
+{%- if mp.wins %} WINS{% elif mp.reaches_pace %} (reaches PER_HAND){% else %} (below PER_HAND){% endif %}
+{% endif %}
+{%- if A.draws %}
+## Draws (chance to complete with one discard)
+{% for d in A.draws -%}
+- {{ d.text }}: discard {{ d.discard }} -> {{ d.chance | pct }}{% if d.within is defined %} ({{ d.within | pct }} within your {{ P.discards_left }} discard{{ "s" if P.discards_left != 1 }}){% endif %}{% if d.if_complete %}, if it hits scores {{ d.if_complete | fmt_num }}{% endif %}{% if d.one_shot %} (wins the blind in one hand){% endif %}
+{% endfor %}
+{%- endif %}{%- if flags and flags.dig_line and A.line and A.line.text %}{% for t in A.line.text %}
+- {{ t }}
+{%- endfor %}{%- endif %}
+{%- if flags and flags.suggest_discard %}
+- Suggested discard: {% if A.discard %}{{ A.discard }} = {% for i in A.discard %}{{ G.hand.cards[i] | card_name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none: play instead{% endif %}
+{%- endif %}
+{%- if flags and flags.suggest_action %}
+- Suggested action: {% if A.action.tool == "use" %}use consumable {{ A.action.consumable }} with cards {{ A.action.cards }}{% else %}{{ A.action.tool }} {{ A.action.cards }}{% endif %} ({{ A.action.why }})
+{%- endif %}
+- Suits in hand: {% for s, n in A.hand_suits.items() %}{{ s }} {{ n }}{% if not loop.last %}, {% endif %}{% endfor %} | {% if A.mark_unseen %}Unseen cards (deck + your face-down cards) {{ A.deck_size }}{% else %}Deck left {{ A.deck_size }}{% endif %}: {% for s, n in A.deck_suits.items() %}{{ s }} {{ n }}{% if not loop.last %}, {% endif %}{% endfor %}
+{% endif %}
+{%- if G.state == "SHOP" %}
+# SHOP
+{%- if I and I.score %}
+- TYPICAL: your best play scores about {{ I.score | fmt_num }} per hand now ({{ I.plays }} hands dealt from your deck, mostly {{ I.mix | join(", ") }}).{% set nb0 = next_blind(G) %}{% if nb0 and nb0.score %} Next blind {{ nb0.score | fmt_num }} = about {{ ((nb0.score + I.score - 1) // I.score) | int }} such hands.{% endif %}
+- SCORE = change per hand if you buy the item (growing jokers show now and in 3 rounds).{% if not S.slots_free %} Slots are full: each shop joker also shows its best swap (sell that joker first, then buy).{% endif %}
+{%- endif %}
+{%- if G.shop and G.shop.cards %}
+{%- for card in G.shop.cards -%}
+{%- if card.state and card.state.hidden %}
+- {{ loop.index0 }}: face-down card
+{%- elif card.set == "JOKER" %}
+- {{ loop.index0 }}: {{ card.label }} ${{ card.cost.buy }}{% if card.modifier and card.modifier.edition %} ({{ card.modifier.edition }}){% endif %}{% if I and I.shop[loop.index0] %} | SCORE {{ I.shop[loop.index0] }}{% endif %}{% if I and I.swaps[loop.index0] %} | {{ I.swaps[loop.index0].text }}{% endif %} | effect: {{ card.value.effect }}
+{%- elif card.set in ["TAROT", "PLANET", "SPECTRAL"] %}
+- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}) ${{ card.cost.buy }}{% if I and I.shop[loop.index0] %} | SCORE {{ I.shop[loop.index0] }}{% endif %}{{ effect(card) }}
+{%- else %}
+- {{ loop.index0 }}: {{ card_line(card) }} (playing card) ${{ card.cost.buy }}
+{%- endif %}
+{%- endfor %}
+{%- else %}
+- no cards left
+{%- endif %}
+- Reroll cost: ${{ G.round.reroll_cost }}
+{%- set si = (G.luna or {}).shop_intent %}
+{%- if si %}
+- Earlier this shop, when you sold {{ si.sold }}, your reasoning mentioned {{ si.item }} ({{ si.field }} {{ si.index }}, ${{ si.price }}); money now ${{ si.money }}.
+{%- endif %}
+{%- if G.vouchers and G.vouchers.cards %}
+
+## Vouchers (use buy with `voucher`)
+{% for v in G.vouchers.cards -%}
+- {{ loop.index0 }}: {{ v.label }} ${{ v.cost.buy }}{{ effect(v) }}
+{% endfor %}
+{%- endif %}
+{%- if G.packs and G.packs.cards %}
+## Packs (use buy with `pack`)
+{% for p in G.packs.cards -%}
+- {{ loop.index0 }}: {{ p.label }} ${{ p.cost.buy }}{% if p.value and p.value.effect %} | {{ p.value.effect }}{% endif %}
+{% endfor %}
+{%- endif %}
+{%- set nb = next_blind(G) %}
+{%- if nb %}
+- Next blind: {{ nb.name or nb.kind }} ({{ nb.score | fmt_num }} chips)
+{%- endif %}
+{%- endif %}
+{%- if G.state == "SMODS_BOOSTER_OPENED" %}
+# OPEN PACK (pick 1 card or skip)
+{% for card in G.pack.cards -%}
+{%- if card.set == "JOKER" -%}
+- {{ loop.index0 }}: {{ card.label }} (Joker){% if card.modifier and card.modifier.edition %} ({{ card.modifier.edition }}){% endif %}{% if I and I.pack[loop.index0] %} | SCORE {{ I.pack[loop.index0] }}{% endif %} | effect: {{ card.value.effect }} | sells for ${{ card.cost.sell }}
+{%- elif card.set in ["TAROT", "PLANET", "SPECTRAL"] -%}
+{%- set tg = consumable_targets(card.key) -%}
+- {{ loop.index0 }}: {{ card.label }} ({{ card.set | title }}){% if I and I.pack[loop.index0] %} | SCORE {{ I.pack[loop.index0] }}{% endif %}{{ effect(card) }}{% if tg %} | needs {{ tg[0] }}-{{ tg[1] }} target cards{% endif %}
+{%- else -%}
+- {{ loop.index0 }}: {{ card_line(card) }} (playing card)
+{%- endif %}
+{% endfor %}
+{%- if G.hand and G.hand.cards %}
+## Cards in hand (for targets)
+{% for c in G.hand.cards -%}
+- {{ loop.index0 }}: {{ card_line(c) }}
+{% endfor %}
+{%- endif %}
+{%- endif %}
+
+# JOKERS (left to right){% if I and I.weakest and not S.slots_free %}. WEAKEST: {{ I.weakest.index }} {{ I.weakest.label }} (adds {{ I.weakest.gain | fmt_num }} per hand){% endif %}
+{% for j in G.jokers.cards -%}
+- {{ loop.index0 }}: {{ joker_line(j) }}{% if I and I.owned[loop.index0] %} | {{ I.owned[loop.index0] }}{% endif %} | sells for ${{ j.cost.sell }}
+{% else -%}
+- none
+{% endfor %}
+# CONSUMABLES ({{ G.consumables.count }}/{{ G.consumables.limit }})
+{% for c in G.consumables.cards -%}
+- {{ loop.index0 }}: {{ c.label }}{% if c.set %} ({{ c.set | title }}){% endif %}{{ effect(c) }}{% if consumable_targets(c.key) %}{% set tg = consumable_targets(c.key) %} | needs {{ tg[0] }}-{{ tg[1] }} target cards in hand{% if G.state != "SELECTING_HAND" %}: use it during a round{% endif %}{% endif %}
+{% else -%}
+- none
+{% endfor %}
+# POKER HANDS (level: chips x mult, times played)
+{% for h in hands_table(G) -%}
+- {{ h.name }}: Lv{{ h.level }} {{ h.chips }} x {{ h.mult }}, played {{ h.played }}
+{% endfor %}
+{%- if G.state == "SHOP" %}
+{%- set D = deck_summary(G) %}
+# DECK ({{ D.size }} cards)
+- Suits: {% for s, n in D.suits.items() %}{{ s }} {{ n }}{% if not loop.last %}, {% endif %}{% endfor %}
+{%- if D.enhancements %} | Enhanced: {% for k, n in D.enhancements.items() %}{{ k }} {{ n }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
+{%- endif %}
+{%- if G.used_vouchers %}
+- Vouchers owned: {{ G.used_vouchers.keys() | join(", ") }}
+{%- if "v_retcon" in G.used_vouchers or "v_directors_cut" in G.used_vouchers %}
+- Boss reroll: {% if "v_retcon" in G.used_vouchers %}Retcon, as often as needed{% elif (G.round or {}).boss_rerolled %}Director's Cut already used this ante{% else %}Director's Cut, 1 left this ante{% endif %} ($10 each; in a shop you may ask for one with reroll_boss: it runs at the next blind select)
+{%- endif %}
+{%- endif %}

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://gist.githubusercontent.com/S1M0N38/5dc776cea0afa506ee7a4b20585558c6/raw/d2b92433fcc9d069c26958ff22b1f06777ecb91e/strategy.schema.json",
+  "name": "Mastery (no advice) + dig-or-play line + shop facts",
+  "description": "Pass 8 arm J: mastery-noadvice-line (arm I) plus the shop fact lines S1 (money and interest next round after each buy / reroll) and S2 (reroll tally, interest earned), rendered only when harness.shop_facts is true; advice stays off. Templates and TOOLS.json are byte copies of mastery-noadvice-line; only harness.shop_facts differs.",
+  "author": "BalatroLLM",
+  "version": "1.0.0",
+  "tags": [
+    "analyser",
+    "small-model",
+    "ablation"
+  ],
+  "harness": {
+    "system_prompt": true,
+    "validate_actions": true,
+    "advice_vetoes": false,
+    "auto_reorder_jokers": false,
+    "max_consecutive_rearranges": 2,
+    "suggest_action": false,
+    "suggest_discard": false,
+    "auto_swap_jokers": false,
+    "skip_blind_tags": {},
+    "reroll_boss": false,
+    "luna_reroll_boss": true,
+    "joker_phase_order": false,
+    "sell_in_pack": false,
+    "deadline_commit": false,
+    "shop_lock": false,
+    "lessons": false,
+    "dig_line_log": true,
+    "dig_line": true,
+    "shop_facts": true
+  }
+}

@@ -144,7 +144,7 @@ def _load_from_yaml(path: Path) -> dict[str, Any]:
         result["interleave"] = data["interleave"]
     # pass 6: the dig-or-play fact line is per strategy only (manifest
     # harness.dig_line); a run-config key would switch it on for every strategy
-    for key in ("dig_line", "dig_line_log"):  # pass 7 B6: dig_line_log likewise
+    for key in ("dig_line", "dig_line_log", "shop_facts"):  # pass 7 B6: dig_line_log likewise; pass 8 shop_facts
         if key in data:
             raise ValueError(
                 f"{key} is not a run-config key: set harness.{key} in the strategy's "
